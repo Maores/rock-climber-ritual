@@ -555,11 +555,10 @@ export function createHud(root) {
         '<p><span class="n">1</span><span class="tx"><em>Push a stick</em> — that hand reaches for a hold.</span></p>' +
         '<p><span class="n">2</span><span class="tx"><em>Tap GRIP</em> to grab it. Tap again to let go.</span></p>' +
         '<p><span class="n">3</span><span class="tx">Climb hand over hand and <em>rest on the glowing runes</em>.</span></p>' +
-        '<p><span class="n">4</span><span class="tx"><em>Drag the screen</em> to look around.</span></p>' +
         '</div>' +
         '<div class="mini"><span class="mini-pill lit">Holding</span>' + ring(false, 58) + '<b>Right</b></div>' +
         '</div>' +
-        '<p class="hint">Hanging drains a hand — the arc around its stick shows how much is left. <b>Nothing catches you</b>, and not every rock holds.</p>'
+        '<p class="hint">Hanging drains a hand — the arc around its stick shows how much is left. <b>Nothing catches you</b>, and not every rock holds. <b>Drag to look around.</b></p>'
       );
     }
     return (

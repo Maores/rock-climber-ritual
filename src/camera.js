@@ -69,35 +69,28 @@ function noise(t, seed) {
 
 // --- looking around ---------------------------------------------------------------------
 // The view is dragged on the screen itself (B47), and it is allowed whatever your hands are
-// doing. What your hands change is how far you can turn — the limits of what you can really see.
+// doing. `lookIn.x` and `lookIn.y` arrive from input.js as DEGREES of yaw and pitch, already
+// clamped to how far you can really see right now — which is what your hands change:
 //
 //   both hands on the rock  the neck alone: 60 deg either way, 40 up, 55 down
 //   one hand free           the body turns with the free arm: 180 deg across (35 in, 145 out),
 //                           62 up, 85 down — hanging off your right you can crane left (B22)
-//   no hands (fall, swing)  nothing holds you: the same wide arc, symmetric
+//   no hands (fall, swing)  nothing holds you: the same 180 across, symmetric
 //
-// Straight down is allowed on purpose — the drop is the point. The input is normalised to the
-// arc, so when the arc narrows under you (the free hand takes rock) the head eases into the
-// smaller arc at LOOK.settle instead of snapping to its edge.
+// Those numbers live in input.js, next to the accumulator that has to clamp itself to them, so
+// there is exactly one copy of them. This file only decides how fast the head follows, and
+// straight down is allowed on purpose — the drop is the point.
 const LOOK = {
-  yawInward: THREE.MathUtils.degToRad(35),    // toward the gripping arm
-  yawOutward: THREE.MathUtils.degToRad(145),  // toward the free arm: 180 deg of arc together
-  yawLoose: THREE.MathUtils.degToRad(90),     // nothing held: the same 180 deg, with no arm to follow
-  pitchUp: THREE.MathUtils.degToRad(62),
-  pitchDown: THREE.MathUtils.degToRad(85),    // nearly straight down into the pit
-  neckYaw: THREE.MathUtils.degToRad(60),      // both hands on the rock: only the neck turns
-  neckUp: THREE.MathUtils.degToRad(40),
-  neckDown: THREE.MathUtils.degToRad(55),
-  rate: 8,                                    // how fast the head follows a finger on the screen
-  settle: 5,                                  // ...and how fast it eases when nothing is dragging
-  vertigoFov: 9,                              // the lens creeps wider the longer you stare down
+  rate: 8,          // how fast the head follows a finger on the screen
+  settle: 5,        // ...and how fast it eases when nothing is dragging
+  hurry: 25,        // ...while the input is easing home: it is already smooth, so do not ease twice
+  vertigoFov: 9,    // the lens creeps wider the longer you stare down
   vertigoRate: 0.5,
 };
 
 export function createCameraRig(camera) {
   let portrait = null;                      // null until setPortrait is called → inferred from aspect
   let lookYaw = 0, lookPitch = 0, vertigo = 0;
-  const clamp1 = (v) => (v > 1 ? 1 : v < -1 ? -1 : (+v || 0));
   camera.near = 0.05;
   camera.far = Math.max(camera.far || 0, 900);
   camera.fov = FOV_PORTRAIT;
@@ -336,32 +329,20 @@ export function createCameraRig(camera) {
       camera.position.z += s * 0.5 * noise(t, 8.0);
     }
     // --- look around ------------------------------------------------------------------------
-    // The drag lives in input.js and arrives here already accumulated in -1..1; all this decides
-    // is what -1..1 is worth right now, which is how many hands are free (see LOOK above).
-    const freeSide = (L && !L.gripping && R && R.gripping) ? 'L' : (R && !R.gripping && L && L.gripping) ? 'R' : null;
-    const wantX = lookIn ? clamp1(lookIn.x) : 0;
-    const wantY = lookIn ? clamp1(lookIn.y) : 0;
-    let yawPos, yawNeg, pitchUp, pitchDown;
-    if (nFree === 0) {                                         // both hands on: the neck alone
-      yawPos = yawNeg = LOOK.neckYaw;
-      pitchUp = LOOK.neckUp; pitchDown = LOOK.neckDown;
-    } else {
-      pitchUp = LOOK.pitchUp; pitchDown = LOOK.pitchDown;
-      if (freeSide) {                                          // the arc follows the free arm
-        const outSign = freeSide === 'L' ? -1 : 1;             // free left arm turns you left
-        yawPos = outSign > 0 ? LOOK.yawOutward : LOOK.yawInward;
-        yawNeg = outSign > 0 ? LOOK.yawInward : LOOK.yawOutward;
-      } else {                                                 // nothing held: no arm to follow
-        yawPos = yawNeg = LOOK.yawLoose;
-      }
-    }
-    const yawWant = wantX >= 0 ? wantX * yawPos : wantX * yawNeg;
-    const pitchWant = wantY >= 0 ? wantY * pitchUp : wantY * pitchDown;
-    const k = lookIn && lookIn.active ? LOOK.rate : LOOK.settle;
+    // The drag lives in input.js and arrives already clamped to what the hands allow, in degrees;
+    // all this does is follow it. While the input is easing itself home the rig hurries, because
+    // that value is already smooth and easing it a second time doubled the time home (0.8 s
+    // against the 0.4 s the ease is written for).
+    const yawWant = THREE.MathUtils.degToRad(lookIn ? (+lookIn.x || 0) : 0);
+    const pitchWant = THREE.MathUtils.degToRad(lookIn ? (+lookIn.y || 0) : 0);
+    const k = lookIn && lookIn.active ? LOOK.rate : (lookIn && lookIn.homing ? LOOK.hurry : LOOK.settle);
     lookYaw = approach(lookYaw, yawWant, k, dt);
     lookPitch = approach(lookPitch, pitchWant, k, dt);
-    // staring down widens the lens a little, so the drop opens up under you
-    const down = Math.max(0, -lookPitch / LOOK.pitchDown);
+    // Staring down widens the lens a little, so the drop opens up under you. Measured against the
+    // arc that is live: with both hands on the rock the whole arc is 55 degrees down, and dividing
+    // by the 85 of the loose arc capped the common case at 42% of the effect.
+    const downLimit = THREE.MathUtils.degToRad(lookIn && lookIn.down > 1 ? lookIn.down : 85);
+    const down = Math.max(0, -lookPitch / downLimit);
     vertigo = approach(vertigo, down * down, LOOK.vertigoRate, dt);
 
     // The turn goes into a separate vector. It used to be written back into `look`, which is the

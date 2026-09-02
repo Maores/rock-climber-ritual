@@ -64,12 +64,19 @@ Event = { type, hand?: 'L'|'R', holdId?: number, ...extras }
   the zip:  'aim' | 'webshot' | 'webhit' (+yank) | 'webmiss' | 'webcut'
 Anything reading events must ignore types it does not know: the list grows.
 Input = { L:{x,y,active}, R:{x,y,active}, tapL:boolean, tapR:boolean,
-          look:{ x, y, active },                           // ACCUMULATED look, each axis -1..1 of whatever arc the hands allow (B47). It is not
-                                                           // a stick: a drag on the play surface adds to it and lifting the finger changes
-                                                           // nothing, so the view stays where you leave it. input.js eases it back to 0 over
-                                                           // ~0.4 s when a hand takes the rock or the last hand leaves it (it watches getHands).
+          look:{ x, y, active, homing, down },             // the head, in DEGREES of yaw and pitch (B47), already clamped to how far you can
+                                                           // really see: both hands on the rock is the neck alone (60 either way, 40 up, 55
+                                                           // down), one hand free is 180 across following the free arm (35 in / 145 out, 62 up,
+                                                           // 85 down), no hands is the same 180 symmetric. Those numbers live in input.js, next
+                                                           // to the accumulator that clamps itself to them. Absolute degrees, not a fraction of
+                                                           // the arc, so a hand letting go widens what you can reach without moving the view.
+                                                           // It is not a stick: a drag on the play surface adds to it and lifting the finger
+                                                           // changes nothing, so the view stays where you leave it. input.js eases it to 0 over
+                                                           // ~0.4 s when a hand takes the rock or the last hand leaves it (it watches getHands),
+                                                           // and says so with `homing` so the rig follows instead of easing a second time.
                                                            // `active` = a look gesture is in progress; it does NOT gate whether looking is
-                                                           // allowed. The sim ignores all of it; the camera rig consumes it
+                                                           // allowed. `down` is the live arc's downward limit, for the vertigo lens.
+                                                           // The sim ignores all of it; the camera rig consumes it
           holdL:boolean, holdR:boolean }                   // grip currently HELD; the spider hand aims on a held right grip (true for one frame)
   // stick `active`: something is on that stick this frame — a finger, the mouse driving that hand, a movement key, or a
   // recenter (Escape / a grip key, for one read). It is how the sim tells a stick nobody is touching from one reading
@@ -120,9 +127,9 @@ export async function createArms({ scene, tier, shoulder, holdZ }) → arms     
 arms.update(dt, state, wallZ, camera)
 export function createCameraRig(camera) → rig                                           // camera.js — follows body, breathing, roll toward loaded arm, look-up bias toward the hands, fall/catch shake, fov kick on grab
 rig.update(dt, state, wallZ, events, lookIn, aim)     // lookIn = Input.look, aim = aimPoint(state) while aiming (else null): aiming pulls the eye back and turns the view to the anchor
-                                                      // lookIn is normalised, so camera.js decides what -1..1 is worth: with BOTH hands on the rock the neck alone (LOOK.neckYaw 60 deg
-                                                      // either way, neckUp 40, neckDown 55), with one hand free the arc follows the free arm (yawInward 35 / yawOutward 145, 62 up, 85 down),
-                                                      // with no hands the same 180 across but symmetric (yawLoose 90). Narrowing the arc eases the head into it at LOOK.settle; it never gates looking
+                                                      // lookIn arrives in DEGREES, already clamped to the arc the hands allow (the table is in input.js), so the rig only decides how fast the
+                                                      // head follows: LOOK.rate 8 under a finger, settle 5 when nothing is dragging, hurry 25 while lookIn.homing (the value is already eased,
+                                                      // and easing it twice took the view 0.82 s home instead of 0.47). Looking is never gated: with both hands on the rock it is the neck
 rig.setPortrait(isPortrait); rig.kick(...)
 export function createWebLine({ variant, segments }) → line                              // webLine.js — the line as real geometry, lashing as it flies
 export function applySpiderSkin(root, { variant }) ; spiderUnlocked() / unlockSpider() / spiderSkin() / setSpiderSkin(v)   // spiderHand.js — the egg, remembered per device
