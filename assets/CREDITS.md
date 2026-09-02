@@ -16,7 +16,7 @@ All textures and HDRIs here are CC0 from Poly Haven (https://polyhaven.com):
   - Shipped as `assets/audio/theme.mp3`: re-encoded from the 320 kbps original to 160 kbps MP3 (5.3 MB) so the file
     fits the 6 MB budget; no other change (no cuts, no level or dynamics processing, no added parts). Played in-game at
     about 0.35 gain under the synthesised wind bed.
-  - Attribution is shown in-game on the title screen footer and on the end-screen credits (`src/hud.js`).
+  - Attribution is shown in-game on the title screen footer (`src/hud.js`, footHtml()).
 
 ## Hand model
 
