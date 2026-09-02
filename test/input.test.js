@@ -22,20 +22,25 @@ class FakeEl {
 }
 const ring = (left, top, size = 120) => new FakeEl({ left, top, width: size, height: size });
 
-function rig({ keyboard = true } = {}) {
+function rig({ keyboard = true, look = false, hands = null, title = false } = {}) {
   const calls = [];
   const hud = {
     sticks: { L: ring(20, 600), R: ring(250, 600) },
     setStick(side, x, y) { calls.push([side, x, y]); },
   };
+  if (title) hud.elements = { title: Object.assign(new FakeEl({}), { hidden: true }) };
   const win = new FakeEl({});
+  // The play surface is the canvas: a 390x844 phone, the size B34 was measured at.
+  const canvas = look ? new FakeEl({ left: 0, top: 0, width: 390, height: 844 }) : null;
   let t = 0;
   const clock = { now: () => t };
-  const input = createInput({ hud, keyboard, win, now: clock.now });
+  const input = createInput({ hud, keyboard, win, now: clock.now, surface: canvas, getHands: hands });
   // Let `ms` pass in 20 ms frames, reading every frame like the game loop; returns the last read.
   clock.advance = (ms) => { let r; for (let done = 0; done < ms; done += 20) { t += 20; r = input.read(); } return r; };
-  return { hud, win, clock, input, calls };
+  return { hud, win, canvas, clock, input, calls };
 }
+// The idle web gesture: no thumb on the pad, aiming straight up, no tap.
+const WEB0 = { x: 0, y: 1, active: false, tap: false, cancel: false };
 const near = (a, b, tol = 1e-9) => assert.ok(Math.abs(a - b) <= tol, `expected ${b}, got ${a}`);
 const pt = (el, fx, fy, pointerId = 1) => {
   const r = el.rect;
@@ -45,7 +50,7 @@ const pt = (el, fx, fy, pointerId = 1) => {
 test('input: an idle read is two zero sticks, and feeds the HUD knobs', () => {
   const { input, calls } = rig();
   // B51: no taps and no holdL — there are no grip buttons for either of them to come from.
-  assert.deepEqual(input.read(), { L: { x: 0, y: 0, active: false }, R: { x: 0, y: 0, active: false }, look: { x: 0, y: 0, active: false }, holdR: false });
+  assert.deepEqual(input.read(), { L: { x: 0, y: 0, active: false }, R: { x: 0, y: 0, active: false, web: WEB0 }, look: { x: 0, y: 0, active: false, homing: false, down: 85 }, holdR: false, web: WEB0 });
   assert.deepEqual(calls, [['L', 0, 0], ['R', 0, 0]]);
 });
 
@@ -57,7 +62,7 @@ test('input: touch sticks map pointer position to the unit disc with y up, and d
   assert.equal(el.captured, 1);
   let r = input.read();
   near(r.L.x, 0.5); near(r.L.y, 0.5);
-  assert.deepEqual(r.R, { x: 0, y: 0, active: false });
+  assert.deepEqual(r.R, { x: 0, y: 0, active: false, web: WEB0 });
   el.fire('pointermove', pt(el, 2, 2));                          // far outside the ring → clamped
   r = input.read();
   near(Math.hypot(r.L.x, r.L.y), 1);
@@ -85,7 +90,7 @@ test('input: one pointer per stick; other pointers and other ids are ignored', (
   near(r.R.y, 1);
   el.fire('pointercancel', pt(el, 0, 0, 7));
   r = input.read();
-  assert.deepEqual(r.R, { x: 0, y: 0, active: false });
+  assert.deepEqual(r.R, { x: 0, y: 0, active: false, web: WEB0 });
 });
 
 test('input: nothing reports a tap any more — the sticks are the whole of it (B51)', () => {
@@ -100,7 +105,7 @@ test('input: nothing reports a tap any more — the sticks are the whole of it (
   assert.equal(r.tapR, undefined);
   assert.equal(r.holdL, undefined);
   near(r.L.y, 1, 1e-9);
-  assert.deepEqual(r.R, { x: 0, y: 0, active: false }, 'the old grip keys steer nothing and drop nothing');
+  assert.deepEqual(r.R, { x: 0, y: 0, active: false, web: WEB0 }, 'the old grip keys steer nothing and drop nothing');
 });
 
 test('input: keyboard integrates a virtual stick at 2.5 units/s and holds its value', () => {
@@ -160,7 +165,7 @@ test('input: Escape centres both keyboard sticks, and claims nothing else (B51)'
   // it is how the keyboard re-arms a release. It is NOT an `active` steer: the hand stays parked,
   // because nothing may quietly move a hand the player put somewhere (B45).
   assert.deepEqual(r.L, { x: 0, y: 0, active: false });
-  assert.deepEqual(r.R, { x: 0, y: 0, active: false });
+  assert.deepEqual(r.R, { x: 0, y: 0, active: false, web: WEB0 });
   win.fire('keydown', { code: 'KeyW', key: 'w' });
   clock.advance(200);
   r = input.read();
@@ -205,7 +210,208 @@ test('input: long-press menus are suppressed on the sticks; losing pointer captu
   el.fire('lostpointercapture', { pointerId: 9 });                // someone else's pointer: ignored
   near(input.read().R.y, 1);
   el.fire('lostpointercapture', { pointerId: 4 });
-  assert.deepEqual(input.read().R, { x: 0, y: 0, active: false });
+  assert.deepEqual(input.read().R, { x: 0, y: 0, active: false, web: WEB0 });
+});
+
+// ---- looking around: a drag on the play surface (B47) --------------------------------------
+// The surface is the canvas, 390x844 here, and `look` holds DEGREES of yaw and pitch clamped to
+// the arc the hands allow: loose 90 either way / 62 up / 85 down with no hands known, the neck's
+// 60 / 60 / 40 / 55 with both hands on the rock. A drag across the whole viewport sweeps the whole
+// arc, so a quarter of the width is a quarter of 180 = 45 degrees on the loose arc.
+const drag = (el, from, to, pointerId = 1, extra = {}) => {
+  el.fire('pointerdown', { pointerId, clientX: from[0], clientY: from[1], ...extra });
+  el.fire('pointermove', { pointerId, clientX: to[0], clientY: to[1], ...extra });
+};
+const bothOn = () => ({ L: { gripping: true }, R: { gripping: true } });
+
+test('look: dragging the screen turns the head in degrees of the live arc, and the view stays', () => {
+  const { canvas, input } = rig({ look: true });
+  drag(canvas, [100, 400], [197.5, 400]);                // a quarter of the width: a quarter of 180
+  let r = input.read();
+  near(r.look.x, 45);
+  near(r.look.y, 0);
+  assert.equal(r.look.active, true);
+  canvas.fire('pointermove', { pointerId: 1, clientX: 197.5, clientY: 189 });   // 211 px UP
+  r = input.read();
+  near(r.look.y, 147 * 211 / 844);                       // 62 up + 85 down over the full height
+  canvas.fire('pointerup', { pointerId: 1 });
+  r = input.read();
+  assert.equal(r.look.active, false);
+  near(r.look.x, 45);                                    // the view stays where it was left
+  near(r.look.y, 147 * 211 / 844);
+});
+
+test('look: the arc is the neck when both hands are on the rock', () => {
+  const { canvas, input } = rig({ look: true, hands: bothOn });
+  input.read();
+  drag(canvas, [100, 400], [197.5, 400]);                // the same quarter width, a 120 deg arc
+  near(input.read().look.x, 30);
+  assert.equal(input.read().look.down, 55);              // and the rig scales its vertigo by this
+});
+
+test('look: a thumb inside a stick never starts a look, and the two run side by side', () => {
+  const { hud, canvas, input } = rig({ look: true });
+  const el = hud.sticks.L;
+  el.fire('pointerdown', pt(el, 0, -1, 1));              // thumb on the left stick
+  el.fire('pointermove', pt(el, 0, -1, 1));
+  // the same pointer moving over the canvas is not a look: it never came down there
+  canvas.fire('pointermove', { pointerId: 1, clientX: 300, clientY: 400 });
+  let r = input.read();
+  near(r.L.y, 1);
+  assert.deepEqual({ x: r.look.x, y: r.look.y, active: r.look.active }, { x: 0, y: 0, active: false });
+  // a SECOND finger on the bare screen looks, while the first keeps steering the hand
+  drag(canvas, [300, 400], [397.5, 400], 2);
+  r = input.read();
+  near(r.L.y, 1);
+  assert.equal(r.L.active, true);
+  near(r.look.x, 45);
+});
+
+test('look: the accumulator survives the lift, a second drag adds to it, and it clamps to the arc', () => {
+  const { canvas, input } = rig({ look: true });
+  drag(canvas, [100, 400], [178, 400]);                  // +36
+  canvas.fire('pointerup', { pointerId: 1 });
+  near(input.read().look.x, 36);
+  drag(canvas, [50, 400], [128, 400], 2);                // +36 again, from wherever it was
+  near(input.read().look.x, 72);
+  canvas.fire('pointerup', { pointerId: 2 });
+  drag(canvas, [0, 844], [390, 0], 3);                   // a whole screen: past both ends
+  let r = input.read();
+  near(r.look.x, 90);                                    // the loose arc: 90 across, 62 up
+  near(r.look.y, 62);
+  canvas.fire('pointerup', { pointerId: 3 });
+  drag(canvas, [390, 0], [0, 844], 4);
+  r = input.read();
+  near(r.look.x, -90);
+  near(r.look.y, -85);                                   // ...and 85 down, which is further
+});
+
+test('look: letting a hand go does not move the view, it only widens what you can reach', () => {
+  const hands = { L: { gripping: true }, R: { gripping: true } };
+  const { canvas, clock, input } = rig({ look: true, hands: () => hands });
+  input.read();
+  drag(canvas, [100, 400], [262.5, 400]);                // +50, inside the neck's 60
+  canvas.fire('pointerup', { pointerId: 1 });
+  const before = input.read().look.x;
+  assert.ok(Math.abs(before - 50) < 0.1, `dragged to ${before}`);
+  hands.R.gripping = false;                              // a hand lets go: the arc widens to 180
+  const after = clock.advance(500).look.x;
+  assert.ok(Math.abs(after - before) < 1, `a release must not pan the view: ${before} -> ${after}`);
+  // ...and the head can now go further than the neck ever could
+  drag(canvas, [100, 400], [297.5, 400], 2);
+  assert.ok(input.read().look.x > 60, 'the wider arc is reachable');
+});
+
+test('look: taking the rock eases the view home over ~0.4 s, and a fall does too', () => {
+  const hands = { L: { gripping: false }, R: { gripping: true } };
+  const { canvas, clock, input } = rig({ look: true, hands: () => hands });
+  input.read();
+  // the left hand is the free one, so the 145 of arc is to the LEFT; dragging the other way would
+  // stop at the 35 you can crane over your own gripping shoulder
+  drag(canvas, [300, 400], [222, 400]);                  // -36 of the 180 deg one-hand arc
+  canvas.fire('pointerup', { pointerId: 1 });
+  const start = -input.read().look.x;
+  near(start, 36);
+  clock.advance(400);
+  near(input.read().look.x, -36, 1e-9);                  // nothing moved: the view stays put
+  hands.L.gripping = true;                               // a grab: a new place to be
+  let r = clock.advance(100);
+  assert.ok(-r.look.x > 0.35 * start && -r.look.x < 0.55 * start, `eased, not snapped: ${r.look.x}`);
+  assert.equal(r.look.homing, true, 'and it tells the rig, which must not ease it a second time');
+  r = clock.advance(320);
+  assert.ok(Math.abs(r.look.x) < 0.07 * start, `~home after 0.4 s: ${r.look.x}`);
+  r = clock.advance(600);
+  near(r.look.x, 0);
+  assert.equal(r.look.homing, false);
+  // and the moment the last hand leaves the rock (the fall) does the same
+  drag(canvas, [300, 400], [222, 400], 5);              // both hands are on now: the neck's 120
+  canvas.fire('pointerup', { pointerId: 5 });
+  near(input.read().look.x, -24);
+  hands.L.gripping = hands.R.gripping = false;
+  r = clock.advance(1000);
+  near(r.look.x, 0);
+});
+
+test('look: on a desktop the cursor only looks with Shift, or on the middle button', () => {
+  const { canvas, input } = rig({ look: true });
+  drag(canvas, [100, 400], [197.5, 400], 1, { pointerType: 'mouse', button: 0 });
+  near(input.read().look.x, 0);                          // a plain left drag turns nothing: B51 left it with no job
+  drag(canvas, [100, 400], [197.5, 400], 2, { pointerType: 'mouse', button: 0, shiftKey: true });
+  near(input.read().look.x, 45);
+  canvas.fire('pointerup', { pointerId: 2 });
+  const mid = canvas.fire('pointerdown', { pointerType: 'mouse', pointerId: 3, button: 1, clientX: 100, clientY: 400 });
+  assert.equal(mid.defaultPrevented, true, 'no autoscroll widget under the drag');
+  canvas.fire('pointermove', { pointerType: 'mouse', pointerId: 3, button: 1, clientX: 148.75, clientY: 400 });
+  near(input.read().look.x, 67.5);
+});
+
+test('look: a mouse look never drags the hand, and the hand keeps its target when it ends', () => {
+  const hud = { sticks: { L: ring(20, 600), R: ring(250, 600) } };
+  const view = ring(0, 0, 800);
+  const input = createInput({
+    hud, keyboard: false, win: new FakeEl({}), now: () => 0, mouse: view,
+    getHands: () => ({ L: { gripping: true }, R: { gripping: false } }),
+  });
+  view.fire('pointermove', { pointerType: 'mouse', clientX: 500, clientY: 300 });
+  let r = input.read();
+  const parked = { x: r.R.x, y: r.R.y };
+  assert.ok(Math.abs(parked.x) > 0.1 && r.R.active === true);
+  // the middle button turns the head; the cursor moving with it must not drag the hand along
+  view.fire('pointerdown', { pointerType: 'mouse', pointerId: 9, button: 1, clientX: 500, clientY: 300 });
+  view.fire('pointermove', { pointerType: 'mouse', pointerId: 9, button: 1, clientX: 700, clientY: 300 });
+  r = input.read();
+  assert.ok(r.look.x > 0, 'the head turned');
+  assert.deepEqual(r.R, { x: 0, y: 0, active: false, web: WEB0 }, 'the hand parks where it was, and is not steered');
+  view.fire('pointerup', { pointerType: 'mouse', pointerId: 9, button: 1, clientX: 700, clientY: 300 });
+  r = input.read();
+  near(r.R.x, parked.x); near(r.R.y, parked.y);          // ...and does not jump when the drag ends
+  assert.equal(r.R.active, true);
+  input.dispose();
+});
+
+test('look: pointercancel ends a look, and the newest finger takes it over', () => {
+  const { canvas, input } = rig({ look: true });
+  drag(canvas, [100, 400], [178, 400], 1);               // +36
+  canvas.fire('pointerdown', { pointerId: 2, clientX: 300, clientY: 400 });   // a second finger waits
+  canvas.fire('pointermove', { pointerId: 2, clientX: 350, clientY: 400 });   // ...and does nothing yet
+  let r = input.read();
+  near(r.look.x, 36);
+  canvas.fire('pointercancel', { pointerId: 1 });        // the browser takes the first finger away
+  r = input.read();
+  assert.equal(r.look.active, true, 'the waiting finger takes the drag over');
+  canvas.fire('pointermove', { pointerId: 2, clientX: 428, clientY: 400 });   // +36 more, from 350
+  near(input.read().look.x, 72);
+  canvas.fire('pointercancel', { pointerId: 2 });
+  assert.equal(input.read().look.active, false);
+  near(input.read().look.x, 72);                         // and the view still stays where it was
+});
+
+test('look: a drag is ignored while the title screen is still on the glass', () => {
+  const { canvas, hud, input } = rig({ look: true, title: true });
+  hud.elements.title.hidden = false;                     // the title, or its 0.9 s fade
+  drag(canvas, [100, 400], [197.5, 400]);
+  near(input.read().look.x, 0);
+  canvas.fire('pointerup', { pointerId: 1 });
+  hud.elements.title.hidden = true;                      // gone: the climb owns the screen now
+  drag(canvas, [100, 400], [197.5, 400], 2);
+  near(input.read().look.x, 45);
+});
+
+test('look: Shift and a stick still turn the head, and the hand stays where it is', () => {
+  const { hud, win, clock, input } = rig({ look: true });
+  const el = hud.sticks.R;
+  el.fire('pointerdown', pt(el, 1, 0));                  // right stick pushed fully right
+  near(input.read().R.x, 1);
+  win.fire('keydown', { key: 'Shift' });
+  const r = clock.advance(500);
+  assert.equal(r.look.active, true);
+  const turned = r.look.x;
+  assert.ok(turned > 30 && turned < 42, `0.42 arcs/s over half a second of a 180 deg arc: ${turned}`);
+  assert.deepEqual(r.R, { x: 0, y: 0, active: false, web: WEB0 });  // the hand is not steered; it parks (B45)
+  win.fire('keyup', { key: 'Shift' });
+  const after = clock.advance(500);
+  near(after.look.x, turned, 1e-9);                      // and the view stays where Shift left it
+  near(after.R.x, 1);
 });
 
 test('input: keyboard can be disabled, hud can be missing, dispose removes every listener', () => {
@@ -225,7 +431,7 @@ test('input: keyboard can be disabled, hud can be missing, dispose removes every
   assert.equal(b.win.count(), 0);
 
   const bare = createInput({ hud: null, keyboard: true, win: null });
-  assert.deepEqual(bare.read(), { L: { x: 0, y: 0, active: false }, R: { x: 0, y: 0, active: false }, look: { x: 0, y: 0, active: false }, holdR: false });
+  assert.deepEqual(bare.read(), { L: { x: 0, y: 0, active: false }, R: { x: 0, y: 0, active: false, web: WEB0 }, look: { x: 0, y: 0, active: false, homing: false, down: 85 }, holdR: false, web: WEB0 });
   bare.dispose();
 });
 
@@ -258,42 +464,76 @@ test('input: active tells a stick nobody is touching from a stick reading zero (
   assert.equal(r.R.active, false, 'no key down: a held value is a parked hand, not a live steer');
 });
 
-test('input: the WEB pad is the right grip and its drag is the aim that reaches the sim (B48)', () => {
+test('input: the WEB pad is the right grip, and its drag is the aim — in its own field (B48, B50)', () => {
   const knob = { L: null, R: null };
   const hud = {
     sticks: { L: ring(20, 600), R: ring(250, 600) },
     webButton: ring(250, 400, 60),
     setStick(side, x, y) { knob[side] = { x, y }; },
   };
-  const input = createInput({ hud, keyboard: false, win: new FakeEl({}), now: () => 0 });
+  let t = 0;
+  const input = createInput({ hud, keyboard: false, win: new FakeEl({}), now: () => t });
   const b = hud.webButton;
   const cx = 280, cy = 430;                                        // the pad's centre; PAD_RADIUS is 84 px
   assert.equal(input.read().holdR, false);
   b.fire('pointerdown', { pointerId: 5, clientX: cx, clientY: cy });
   let r = input.read();
-  assert.equal(r.holdR, true, 'holding the pad IS the held right grip the sim aims on');
-  assert.deepEqual(r.R, { x: 0, y: 1, active: true }, 'a fresh pad aims straight up');
+  // A press does not become an aim the instant it lands: until it commits it is still a possible
+  // tap, so it is not holdR and the sim never aims on it.
+  assert.equal(r.holdR, false, 'an uncommitted press is not yet the held right grip');
+  assert.deepEqual(r.web, { x: 0, y: 1, active: false, tap: false, cancel: false }, 'a fresh pad is not aiming yet');
+  assert.equal(r.R.web, r.web, 'the gesture also rides on R, where a field-copying integrator cannot drop it');
   b.fire('pointermove', { pointerId: 5, clientX: cx + 84, clientY: cy - 84 });   // drag up and right
   r = input.read();
-  near(r.R.x, Math.SQRT1_2); near(r.R.y, Math.SQRT1_2);
-  assert.equal(r.R.active, true, 'the aim steers the hand too, the way the desktop cursor does');
+  assert.equal(r.holdR, true, 'a drag past the dead radius commits the press to an aim at once');
+  assert.equal(r.web.active, true);
+  near(r.web.x, Math.SQRT1_2); near(r.web.y, Math.SQRT1_2);
+  // B50 reverses B48's second half: the aim is NOT the hand's steering. One field cannot mean
+  // both, and when it did, the right stick went dead for as long as a thumb was on the pad.
+  assert.equal(r.R.x, 0); assert.equal(r.R.y, 0); assert.equal(r.R.active, false);   // the pad does not touch the right stick
   assert.deepEqual(knob.R, { x: 0, y: 0 }, 'the HUD knob still shows the stick, which nobody is touching');
-  // A finger on the right stick does not outvote the pad while it is held.
+  // ...so a finger on the right stick still steers the right hand while the other thumb aims.
   const st = hud.sticks.R;
   st.fire('pointerdown', pt(st, -1, 0, 6));
   r = input.read();
-  near(r.R.x, Math.SQRT1_2); near(r.R.y, Math.SQRT1_2);
+  near(r.R.x, -1); near(r.R.y, 0);
+  assert.equal(r.R.active, true, 'the right stick still reaches the hand while the pad is held');
+  near(r.web.x, Math.SQRT1_2); near(r.web.y, Math.SQRT1_2);        // and the aim is untouched by it
   st.fire('pointerup', pt(st, -1, 0, 6));
   b.fire('pointerup', { pointerId: 5 });                           // letting go looses the shot
   r = input.read();
   assert.equal(r.holdR, false);
-  assert.deepEqual(r.R, { x: 0, y: 0, active: false }, 'and the hand parks where the aim left it (B45)');
+  assert.equal(r.web.active, false);
   input.dispose();
 });
 
-test('input: the mouse is always steering the hand it drives, and LOOK takes nothing over', () => {
-  const hud = { sticks: { L: ring(20, 600), R: ring(250, 600) }, lookButton: ring(20, 400, 60) };
-  const view = ring(0, 0, 800);
+test('input: a quick press-and-lift on the pad is a webTap; a long hold is not (B50)', () => {
+  const hud = { sticks: { L: ring(20, 600), R: ring(250, 600) }, grips: {}, webButton: ring(250, 400, 60) };
+  let t = 0;
+  const input = createInput({ hud, keyboard: false, win: new FakeEl({}), now: () => t });
+  const b = hud.webButton;
+  // A tap: down and up inside 250 ms. This is what lets go of an attached line.
+  b.fire('pointerdown', { pointerId: 5, clientX: 280, clientY: 430 });
+  t += 90;
+  b.fire('pointerup', { pointerId: 5 });
+  assert.equal(input.read().web.tap, true, 'a quick tap is the release gesture');
+  assert.equal(input.read().web.tap, false, 'and it is an edge: true for exactly one read');
+  // A hold is the aim gesture, not a tap — a thumb resting on the pad must not sever the line.
+  b.fire('pointerdown', { pointerId: 6, clientX: 280, clientY: 430 });
+  t += 900;
+  b.fire('pointerup', { pointerId: 6 });
+  assert.equal(input.read().web.tap, false, 'a long hold is an aim, never a release');
+  // A cancelled pointer is not a tap either.
+  b.fire('pointerdown', { pointerId: 7, clientX: 280, clientY: 430 });
+  t += 50;
+  b.fire('pointercancel', { pointerId: 7 });
+  assert.equal(input.read().web.tap, false, 'a stolen pointer is not a gesture');
+  input.dispose();
+});
+
+test('input: the mouse is always steering the hand it drives, and a look drag takes nothing over', () => {
+  const hud = { sticks: { L: ring(20, 600), R: ring(250, 600) } };
+  const view = ring(0, 0, 800);                       // the canvas: the cursor AND the look surface
   const input = createInput({
     hud, keyboard: false, win: new FakeEl({}), now: () => 0, mouse: view,
     getHands: () => ({ L: { gripping: true }, R: { gripping: false } }),
@@ -303,9 +543,19 @@ test('input: the mouse is always steering the hand it drives, and LOOK takes not
   assert.equal(r.R.active, true, 'the cursor IS the free hand');
   assert.equal(r.L.active, false);
   assert.ok(Math.abs(r.R.x) > 0.1);
-  hud.lookButton.fire('pointerdown', { pointerId: 3, clientX: 40, clientY: 420 });
+  const steered = { x: r.R.x, y: r.R.y };
+  // B47: a finger dragging the view takes no hand anywhere. The cursor stops steering for as long
+  // as the drag lasts — the hand parks where it was (B45 `active` false) instead of being towed —
+  // and when the drag ends the cursor picks the same target back up, with no jump.
+  view.fire('pointerdown', { pointerType: 'touch', pointerId: 3, clientX: 200, clientY: 400 });
+  view.fire('pointermove', { pointerType: 'touch', pointerId: 3, clientX: 400, clientY: 400 });
   r = input.read();
-  assert.deepEqual(r.R, { x: 0, y: 0, active: false }, 'looking around must not drag the hand to rest');
   assert.equal(r.look.active, true);
+  assert.ok(r.look.x > 0, 'dragging right turns the head right');
+  assert.deepEqual(r.R, { x: 0, y: 0, active: false, web: WEB0 }, 'the hand parks; nothing tows it');
+  view.fire('pointerup', { pointerType: 'touch', pointerId: 3, clientX: 400, clientY: 400 });
+  r = input.read();
+  assert.equal(r.R.active, true, 'the cursor drives the hand again');
+  near(r.R.x, steered.x); near(r.R.y, steered.y);
   input.dispose();
 });

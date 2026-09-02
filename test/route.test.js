@@ -10,6 +10,12 @@ const EXPECTED_RUNES = Math.ceil(ROUTE.TOP / ROUTE.RUNE_EVERY) - 1;
 const H = route.holds;
 const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
 const SIDES = ['L', 'R'];
+// The last metres into the altar, where the field narrows to a point because nothing above it
+// can be reached from the side. It is a property of the shipped field, not a knob: the repair
+// pass deletes whatever cannot climb, and measured on the roster the face is full width again
+// 1.5 m below the altar. 2.2 m is that with room to spare. It lives here because only the tests
+// have any use for it — route.js does not read it.
+const FUNNEL = 2.2;
 
 // Every hold above `h` that hand `side` (or either hand) could take from it.
 const waysUp = (holds, h, side) => holds.filter((k) => k !== h && k.y > h.y + 0.05 &&
@@ -30,7 +36,7 @@ test('route: ids are sequential and the start holds sit at y≈1.2, x = ∓0.25'
     assert.equal(h.lit, false);
     assert.ok(Number.isFinite(h.angle) && h.angle >= 0 && h.angle < 2 * Math.PI + 1e-9);
   }
-  for (let i = 3; i < H.length; i++) assert.ok(H[i].y >= H[i - 1].y - 1e-9, `hold ${i} is out of height order`);
+  for (let i = 2; i < H.length; i++) assert.ok(H[i].y >= H[i - 1].y - 1e-9, `hold ${i} is out of height order`);
 });
 
 test('route: every hold has somewhere to go, within 0.9·REACH of the reaching shoulder', () => {
@@ -38,17 +44,32 @@ test('route: every hold has somewhere to go, within 0.9·REACH of the reaching s
   // guarantee is: from any hold, some hold above it is inside the free hand's reach circle —
   // the disc of radius 0.9·REACH around restingShoulder(hold, thatHand). Only the altar is
   // exempt, because there is nothing above the altar.
+  // Computed WITHOUT canReach, so this cannot pass by agreeing with itself: for every hold, find
+  // the nearest hold above it measured from the free shoulder, by brute force, and require that
+  // one to be inside the contract's circle.
+  const HANG_DROP = CFG.HANG_ONE - CFG.SHOULDER_DY;
+  let worst = 0;
   for (const h of H) {
     if (h.kind === 'summit') continue;
-    const up = waysUp(H, h);
-    assert.ok(up.length > 0, `hold ${h.id} (${h.x}, ${h.y}) is a dead end`);
-    for (const k of up) {
-      const s = SIDES.find((side) => canReach(h, k, side));
-      const d = dist(restingShoulder(h, s), k);
-      assert.ok(d <= 0.9 * CFG.REACH + 1e-9, `hold ${h.id} → ${k.id} is ${d.toFixed(3)} m from the shoulder`);
+    let best = Infinity, at = null;
+    for (const k of H) {
+      if (k === h || k.y <= h.y + 0.05) continue;
+      for (const s of SIDES) {
+        const shx = h.x + (s === 'L' ? -1 : 1) * (CFG.SHOULDER_DX - CFG.SWAY);
+        const d = Math.hypot(k.x - shx, k.y - (h.y - HANG_DROP));
+        if (d < best) { best = d; at = k; }
+      }
     }
+    assert.ok(at !== null, `hold ${h.id} (${h.x}, ${h.y}) has nothing above it at all`);
+    assert.ok(best <= 0.9 * CFG.REACH + 1e-9,
+      `hold ${h.id} (${h.x}, ${h.y}): its nearest hold above is ${best.toFixed(3)} m from the free shoulder, past 0.9·REACH = ${(0.9 * CFG.REACH).toFixed(3)}`);
+    worst = Math.max(worst, best);
   }
+  // ...and canReach must agree with that arithmetic, which is what everything else is built on
   assert.ok(Math.abs(REACH_LINK - 0.9 * CFG.REACH) < 1e-12, 'the exported link length must be the contract one');
+  assert.equal(canReach({ x: 0, y: 0 }, { x: -(CFG.SHOULDER_DX - CFG.SWAY), y: REACH_LINK - HANG_DROP - 1e-6 }, 'L'), true);
+  assert.equal(canReach({ x: 0, y: 0 }, { x: -(CFG.SHOULDER_DX - CFG.SWAY), y: REACH_LINK - HANG_DROP + 1e-3 }, 'L'), false);
+  assert.ok(worst > 0.5, `the tightest link in the field is only ${worst.toFixed(3)} m: is anything being checked?`);
 });
 
 test('route: most of the field has a way up for EACH hand, not just for one', () => {
@@ -62,7 +83,7 @@ test('route: most of the field has a way up for EACH hand, not just for one', ()
   // A single line of holds would score ~0% here, which is what this is really watching for.
   let body = 0, twoSided = 0;
   for (const h of H) {
-    if (h.kind === 'summit' || h.y > ROUTE.TOP - ROUTE.FUNNEL) continue;
+    if (h.kind === 'summit' || h.y > ROUTE.TOP - FUNNEL) continue;
     body++;
     if (SIDES.every((s) => waysUp(H, h, s).length)) twoSided++;
   }
@@ -86,7 +107,7 @@ test('route: the field is spread across the face, not a strip', () => {
   assert.ok(Math.max(...xs) >= ROUTE.SPREAD - 0.25, `field ends at x ${Math.max(...xs).toFixed(2)}`);
   // and it is spread at every height, not just somewhere: the funnel into the altar is the
   // only place the face is allowed to narrow.
-  for (let y = 3; y < ROUTE.TOP - ROUTE.FUNNEL; y += 2) {
+  for (let y = 3; y < ROUTE.TOP - FUNNEL; y += 2) {
     const band = H.filter((h) => Math.abs(h.y - y) < 1);
     const w = Math.max(...band.map((h) => h.x)) - Math.min(...band.map((h) => h.x));
     assert.ok(w > 5.0, `at y ${y} the field is only ${w.toFixed(2)} m wide`);
@@ -200,8 +221,15 @@ test('route: hold quality hardens with height, and the rests are always jugs', (
   const hard = (set) => set.filter((h) => h.grip === 'crimp' || h.grip === 'sloper').length / Math.max(1, set.length);
   const low = grips.filter((h) => h.y < ROUTE.TOP * 0.35);
   const high = grips.filter((h) => h.y > ROUTE.TOP * 0.65);
-  assert.ok(hard(high) > hard(low) + 0.1,
-    `the top should be harder: ${(hard(low) * 100).toFixed(0)}% poor down low vs ${(hard(high) * 100).toFixed(0)}% up high`);
+  // Both a gap AND a ratio, because either alone is easy to satisfy with a curve half as steep.
+  // Measured on the shipped field: 14.8% poor rock low, 55.8% high — a 40.9-point gap, ratio
+  // 3.76. Flatten gripFor's slope by 1.5x and it gives 12.0% / 39.3% (27.3 points, ratio 3.27),
+  // which fails the gap; by 3x, 9.9% / 24.9% (15.0 points, ratio 2.50), which fails both. The
+  // old single assertion (a 10-point gap) passed all three of those.
+  const gap = hard(high) - hard(low), ratio = hard(high) / Math.max(1e-9, hard(low));
+  const said = `${(hard(low) * 100).toFixed(1)}% poor down low vs ${(hard(high) * 100).toFixed(1)}% up high (gap ${(gap * 100).toFixed(1)} points, ratio ${ratio.toFixed(2)})`;
+  assert.ok(gap >= 0.28, `the top is not much harder: ${said}`);
+  assert.ok(ratio >= 2.8, `the curve has flattened: ${said}`);
   // ...and it has to climb the whole way, not jump once: four bands, each poorer than the last.
   const bands = [0, 1, 2, 3].map((b) => hard(grips.filter((h) => h.y >= ROUTE.TOP * b / 4 && h.y < ROUTE.TOP * (b + 1) / 4)));
   for (let b = 1; b < 4; b++) {
@@ -226,6 +254,32 @@ test('route: intendedHand is a side-of-the-face hint, not a rule', () => {
   assert.equal(intendedHand(0, route), 'L');            // start holds, one either side of centre
   assert.equal(intendedHand(1, route), 'R');
   assert.ok(['L', 'R'].includes(intendedHand(999999)));  // an id off the end still answers
+});
+
+test('route: the density knob thins the field without breaking it', () => {
+  // B46 review: "it cannot be made sparser" was too strong. The LATTICE cannot — its pitch is
+  // near the geometric optimum — but the finished field can be thinned afterwards, and step 6
+  // does it: it takes holds out one at a time and keeps only the removals that leave the climb
+  // intact and the wall still a field. Seed 7 goes 1965 → 1651 (16% fewer, 12.0 → 10.1 per m²).
+  //
+  // It stops there because of the floors, and the floors are real: relax MIN_WAYS_UP to 1 and it
+  // reaches 1257, but the bot then needs 1375 grabs and 322 misses instead of 160 and 5, because
+  // half the field has one way up and every mistake is a detour. Sparser is not automatically
+  // better, and this test is what says so.
+  const thin = generateRoute(7, { density: 6 });
+  assert.ok(thin.holds.length < H.length * 0.9, `thinning got ${thin.holds.length} from ${H.length}`);
+  assert.ok(thin.holds.length > H.length * 0.6, `thinning went too far: ${thin.holds.length}`);
+  thin.holds.forEach((h, i) => assert.equal(h.id, i));
+  assert.equal(thin.holds.filter((k) => k.kind === 'rune').length, EXPECTED_RUNES);
+  assert.equal(thin.holds[thin.holds.length - 1].kind, 'summit');
+  assert.equal(thin.fakes.length, ROUTE.DECOYS);
+  for (const h of thin.holds) {
+    if (h.kind === 'summit') continue;
+    assert.ok(waysUp(thin.holds, h).length > 0, `thinned hold ${h.id} is a dead end`);
+  }
+  const ways = thin.holds.filter((h) => h.kind !== 'summit').map((h) => waysUp(thin.holds, h).length).sort((a, b) => a - b);
+  assert.ok(ways[ways.length >> 1] >= ROUTE.MIN_WAYS_UP, `median ${ways[ways.length >> 1]} ways up after thinning`);
+  assert.ok(connectivity(thin).ok, 'the thinned field cannot be climbed');
 });
 
 test('route: ?seed= is parsed strictly, and each roster seed really is a different route', () => {

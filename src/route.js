@@ -7,15 +7,20 @@
 // through it. The runes and the summit altar are the only fixed points: they are the goals.
 //
 // THE REACH RULE (unchanged, and it is the whole geometry of this file). A hand hanging alone
-// on hold H puts the OTHER hand's shoulder at sim.restingShoulder(H, freeSide) — 0.42 m below H
-// and 0.14 m to the free hand's side. Anything within 0.9·REACH of that point is reachable, so
-// from H the free hand owns a disc of radius 0.648 m centred 0.42 m below H. The most a hold can
-// rise above H is 0.648 − 0.42 ≈ 0.228 m, and only straight above the shoulder; a hold 0.15 m
-// higher can be 0.38 m to the side. That is why the field is a flat lattice — rows much closer
-// together than columns — and why it cannot be made sparser without breaking the climb.
+// on hold H puts the OTHER hand's shoulder at sim.restingShoulder(H, freeSide) — HANG_ONE minus
+// SHOULDER_DY below H, and SHOULDER_DX minus SWAY to the free hand's side. Anything within
+// 0.9·REACH of that point is reachable, so from H the free hand owns a disc of radius 0.648 m
+// centred 0.42 m below H and 0.14 m to its own side. Measured off that:
+//   at H's own height   the right hand owns x ∈ [H.x − 0.354, H.x + 0.634] (the left mirrors it)
+//   0.15 m above H      x ∈ [H.x − 0.168, H.x + 0.448]
+//   the most any hold can rise above H is 0.648 − 0.42 = 0.228 m, and only at x = H.x ∓ 0.14
+// So the field is a flat lattice, rows much closer together than columns. It is NOT true that a
+// move has to be near-vertical, and it is NOT true that the lattice pitch is the sparsest a
+// climbable field can be — see the thinning in step 6, which is what actually sets the density.
 //
-// The generator links at PLACE_USE·REACH rather than 0.9·REACH so every edge it relies on has
-// ~3 cm of slack against the guarantee the tests assert.
+// The generator links at PLACE_USE·REACH rather than 0.9·REACH. That is 3.6 MILLIMETRES of
+// slack against the guarantee the tests assert — worth having, but nothing like a margin, which
+// is why the bot's path-finder carries its own comfort limit and refuses moves at the rim.
 //
 // STRUCTURE
 //   1. anchors      — the two start holds, one rune per RUNE_EVERY band, the summit altar
@@ -27,8 +32,11 @@
 //                     the top down, which is also what funnels the last metres into the altar
 //   5. open the way — walk the field the way a climber does, tracking which hand is free, and
 //                     open it wherever the walk cannot reach a goal
-//   6. sizes        — grip kind from height (B8), size from grip, capped so nothing overlaps
-//   7. decoys       — B10: field holds lifted OUT and turned to rock that gives way
+//   6. thinning     — optional: take holds back out, down to a target density, keeping the climb
+//                     and the field-ness floors. This, not the lattice pitch, sets how much rock
+//                     is on the wall
+//   7. sizes        — grip kind from height (B8), size from grip, capped so nothing overlaps
+//   8. decoys       — B10: field holds lifted OUT and turned to rock that gives way
 //
 // WHAT WAS TRIED AND DROPPED: blank slabs of featureless rock, to break the field up and halve
 // the geometry. Under this reach rule a blank is a WALL — the hands alternate, so a hold whose
@@ -64,7 +72,12 @@ export const ROUTE = Object.freeze({
   MIN_FIT: 0.245,     // ...and the room a REPAIR hold settles for: one squeezed in because a
                       // hold below it would otherwise have nowhere to go. Still legal rock:
                       // the size pass shrinks both to fit
-  FUNNEL: 2.2,        // the last metres into the altar, where the face narrows to a point
+  TWO_SIDED: 1,       // fraction of holds guaranteed a way up for BOTH hands (see generateRoute)
+  DENSITY: null,      // holds per square metre to thin the finished field down to; null keeps
+                      // every hold the row builder laid. The lattice bottoms out near 7.3/m²
+                      // however the knobs are set, so anything below that has to be thinned
+  MIN_IN_REACH: 8,    // a field is a field when this many holds are within reach on average...
+  MIN_WAYS_UP: 2,     // ...and half of them offer this many ways up. Thinning stops at these
   RUNE_SEP: 0.34,     // a rest keeps its bucket size, so its neighbours have to stand back
   CLEAR: 0.03,        // bare rock left between two hold rims
 
@@ -105,6 +118,8 @@ function mulberry32(seed) {
 // Longest link the guarantee allows, and the shorter one the generator actually builds with.
 export const REACH_LINK = ROUTE.REACH_USE * CFG.REACH;
 const PLACE_LINK = ROUTE.PLACE_USE * CFG.REACH;
+// How far the resting shoulder sits below the hold the other hand hangs on.
+export const HANG_DROP = CFG.HANG_ONE - CFG.SHOULDER_DY;
 
 // Can the hand `side` take `target` while the other hand hangs alone on `anchor`?
 // This is the sim's own geometry: restingShoulder is where that free shoulder settles.
@@ -138,10 +153,10 @@ export function intendedHand(holdId, route = lastRoute) {
 // that is all that is true. Giving the seeds real character back needs the generator to vary
 // per seed (density, spread, how fast the rock hardens) — a design call, not a description.
 export const SEEDS = Object.freeze([
-  Object.freeze({ seed: 7, name: 'Ritual', note: 'Runes left, right, left: 7.7 m of traverse' }),
-  Object.freeze({ seed: 21, name: 'Ladder', note: 'Runes right, left, right: the shortest zig-zag but the widest last one' }),
-  Object.freeze({ seed: 4, name: 'Serpent', note: 'Two runes on the right, then one long crossing to the last: 5.7 m, the least travel' }),
-  Object.freeze({ seed: 19, name: 'Ordeal', note: 'Starts hard left at 2.0 m off centre: 8.5 m of traverse, the widest climb' }),
+  Object.freeze({ seed: 7, name: 'Ritual', note: 'Runes left, right, left: 7.65 m of traverse' }),
+  Object.freeze({ seed: 21, name: 'Ladder', note: 'Runes right, left, right: 6.41 m of traverse' }),
+  Object.freeze({ seed: 4, name: 'Serpent', note: 'Two runes on the right, then one long crossing: 5.71 m, the least travel' }),
+  Object.freeze({ seed: 19, name: 'Ordeal', note: 'Starts hard left at 1.98 m off centre: 8.48 m of traverse, the widest climb' }),
 ]);
 
 export const DEFAULT_SEED = 7;
@@ -154,10 +169,19 @@ export function normalizeSeed(v) {
 
 // ---------------------------------------------------------------------------------------
 
-export function generateRoute(seed = 7) {
+export function generateRoute(seed = 7, opts = {}) {
   const rnd = mulberry32(seed);
   const U = (lo, hi) => lo + (hi - lo) * rnd();
   const R = ROUTE;
+  // The density knob. TWO_SIDED is the fraction of holds the row builder guarantees a way up
+  // for BOTH hands; the rest get one. It is the single biggest lever on how much rock is on
+  // the wall, because two-sidedness is what the row-finishing spends its holds on.
+  const twoSided = opts.twoSided === undefined ? R.TWO_SIDED : opts.twoSided;
+  const density = opts.density === undefined ? R.DENSITY : opts.density;
+  // The floors the thinning stops at. They are what keep it thinning toward a sparser FIELD
+  // rather than toward a line, and they are the real limit on how sparse the wall can get.
+  const minWaysUp = opts.minWaysUp === undefined ? R.MIN_WAYS_UP : opts.minWaysUp;
+  const minInReach = opts.minInReach === undefined ? R.MIN_IN_REACH : opts.minInReach;
   const FIELD_TOP = R.TOP - 0.32;              // the scatter stops here; the altar sits above it
 
   // A uniform grid over the face, so placement and the reach graph never go quadratic.
@@ -243,7 +267,7 @@ export function generateRoute(seed = 7) {
   // up for THAT hand is a dead end even when the other hand has three.
   const upLinks = (h, side) => {
     const out = [];
-    for (const k of within(h.x, h.y - 0.42, PLACE_LINK + 0.15)) {
+    for (const k of within(h.x, h.y - HANG_DROP, PLACE_LINK + 0.15)) {
       if (k === h || k.y <= h.y + 0.05) continue;
       if (side ? canReach(h, k, side, PLACE_LINK)
         : (canReach(h, k, 'L', PLACE_LINK) || canReach(h, k, 'R', PLACE_LINK))) out.push(k);
@@ -299,13 +323,16 @@ export function generateRoute(seed = 7) {
     //
     // A site this row left out is always the first choice, whole column before spare.
     for (const h of below) {
+      const both = rnd() < twoSided;
+      let any = SIDES.some((s) => upLinks(h, s).length > 0);
       for (const s of SIDES) {
         if (upLinks(h, s).length) continue;
+        if (any && !both) continue;                    // one way up is enough for this hold
         const fits = (c) => !c.used && canReach(h, c, s, PLACE_LINK) && !blocked(c.x, c.y, R.MIN_FIT);
         const st = sites.find((c) => !c.spare && fits(c)) || sites.find(fits);
-        if (st) { st.used = true; row.push(place(st.x, st.y)); continue; }
+        if (st) { st.used = true; row.push(place(st.x, st.y)); any = true; continue; }
         const p = spotAbove(h, s, Math.max(y0, h.y + 0.07), R.MIN_FIT);
-        if (p) row.push(place(p.x, p.y));
+        if (p) { row.push(place(p.x, p.y)); any = true; }
       }
     }
     below = row.length ? row : below;
@@ -425,8 +452,8 @@ export function generateRoute(seed = 7) {
   const OTHER = { L: 'R', R: 'L' };
   const takeable = (h, s) => within(h.x + SIGN[s] * (CFG.SHOULDER_DX - CFG.SWAY), h.y - (CFG.HANG_ONE - CFG.SHOULDER_DY), PLACE_LINK)
     .filter((k) => k !== h);
-  // Every (hold, free hand) the climber can get into, from the two start holds.
-  const walk = () => {
+  // Every (hold, free hand) the climber can get into, starting from `from`.
+  const walk = (from) => {
     const idx = new Map(holds.map((h, i) => [h, i]));
     const seen = new Uint8Array(holds.length * 2);
     const stack = [];
@@ -434,8 +461,7 @@ export function generateRoute(seed = 7) {
       const k = idx.get(h) * 2 + (s === 'L' ? 0 : 1);
       if (!seen[k]) { seen[k] = 1; stack.push([h, s]); }
     };
-    open(startR, 'L');                                  // right hand holds, left hand moves
-    open(startL, 'R');
+    for (const [h, s] of from) open(h, s);
     const states = [], stuck = [];
     while (stack.length) {
       const [h, s] = stack.pop();
@@ -445,6 +471,21 @@ export function generateRoute(seed = 7) {
       for (const k of opts) open(k, OTHER[s]);
     }
     return { seen, idx, states, stuck };
+  };
+  const START_STATES = () => [[startR, 'L'], [startL, 'R']];   // either hand may move first
+  // The climb as the guard states it: start → each rune in height order → the altar, carrying
+  // the set of positions the last leg could have left you in. Which hand is free when you
+  // arrive at a rune decides what you can do next, so the legs cannot be checked independently.
+  // test/climb-graph.js does exactly this from the outside; the two must not drift apart.
+  const legs = () => {
+    let from = START_STATES();
+    for (const g of [...runes, summit].sort((a, b) => a.y - b.y)) {
+      const w = walk(from);
+      const got = ['L', 'R'].filter((s) => w.seen[w.idx.get(g) * 2 + (s === 'L' ? 0 : 1)]);
+      if (!got.length) return { ok: false, goal: g, states: w.states };
+      from = got.map((s) => [g, s]);
+    }
+    return { ok: true, goal: null, states: null };
   };
   // A goal the walk cannot reach, joined to it in two moves: from a state the walk DOES reach,
   // one new hold that hand can take, from which the other hand can take the goal. A rest cannot
@@ -466,15 +507,13 @@ export function generateRoute(seed = 7) {
     return false;
   };
   for (let round = 0; round < 12; round++) {
-    const { seen, idx, states, stuck } = walk();
-    const missing = [...runes, summit].filter((g) => !seen[idx.get(g) * 2] && !seen[idx.get(g) * 2 + 1]);
-    if (!missing.length) break;
-    states.sort((a, b) => b.h.y - a.h.y);               // near the goal first
-    let opened = 0;
-    for (const g of missing) if (twoMoveInto(g, states)) opened++;
+    const leg = legs();
+    if (leg.ok) break;
+    const states = leg.states.slice().sort((a, b) => b.h.y - a.h.y);   // near the goal first
+    let opened = twoMoveInto(leg.goal, states) ? 1 : 0;
     // Otherwise raise the ceiling: highest first, because that is what lets the walk spread.
     if (!opened) {
-      stuck.sort((a, b) => b.h.y - a.h.y);
+      const stuck = walk(START_STATES()).stuck.sort((a, b) => b.h.y - a.h.y);
       for (const { h, s } of stuck) {
         if (opened >= 40) break;
         const p = bridgeAbove(h, s, false);             // add only — never shove, never delete
@@ -485,13 +524,95 @@ export function generateRoute(seed = 7) {
   }
   index(holds);
 
+  // --- 6. thinning ------------------------------------------------------------------------
+  // The row builder lays a lattice, and a lattice is the densest thing that is still a lattice:
+  // ~7.3 holds per square metre at the bottom of the knobs, ~12 with TWO_SIDED at 1. A FIELD
+  // does not have to be a lattice. This takes holds out one at a time, keeping the two things
+  // that make the wall what it is — nothing may lose its last way up, and the climb start → the
+  // runes → the altar must survive — and stops at the field-ness floors so it thins toward a
+  // sparser field rather than toward a line.
+  //
+  // Checked in blocks: the local rule is cheap and the walk is not, so forty removals are tried
+  // together and put back as a group if the walk stops reaching a goal.
+  if (density) {
+    index(holds);
+    const target = Math.round(density * 2 * R.SPREAD * (R.TOP - R.START_Y));
+    const reserved = new Set([startL, startR, summit, ...runes]);
+    const order = holds.filter((h) => !reserved.has(h));
+    for (let i = order.length - 1; i > 0; i--) {        // seeded shuffle: thin the whole face
+      const j = Math.floor(rnd() * (i + 1));            // evenly, not one region to the bone
+      const t = order[i]; order[i] = order[j]; order[j] = t;
+    }
+    const dead = new Set();
+    const live = () => holds.filter((h) => !dead.has(h));
+    const canGo = (h) => upLinks(h).some((k) => !dead.has(k));
+    // Is the wall still a field, and can it still be climbed? The floors are what stop this
+    // thinning toward a line: a line would pass the climb check happily.
+    const stillAField = () => {
+      const L = live();
+      const ways = [];
+      let reach = 0;
+      for (const h of L) {
+        const near = within(h.x, h.y - (CFG.HANG_ONE - CFG.SHOULDER_DY), PLACE_LINK + 0.15);
+        let up = 0, any = 0;
+        for (const k of near) {
+          if (k === h || dead.has(k)) continue;
+          if (!SIDES.some((s) => canReach(h, k, s, PLACE_LINK))) continue;
+          any++;
+          if (k.y > h.y + 0.05) up++;
+        }
+        reach += any;
+        if (h.kind !== 'summit') ways.push(up);
+      }
+      ways.sort((a, b) => a - b);
+      // 55% rather than the median, for headroom: the thinning otherwise stops exactly ON the
+      // median and lifting the decoys out afterwards tips it over.
+      return ways[Math.floor(ways.length * 0.45)] >= minWaysUp && reach / L.length >= minInReach;
+    };
+    const holdsUp = () => { index(live()); return legs().ok && stillAField(); };
+    // Try a block; on failure put it all back and let the caller retry one at a time.
+    const tryBlock = (block) => {
+      if (holdsUp()) return true;
+      for (const h of block) dead.delete(h);
+      index(live());
+      return false;
+    };
+    let block = [], singles = 0, stop = false;
+    for (const h of order) {
+      if (stop || holds.length - dead.size <= target) break;
+      dead.add(h);
+      let safe = true;
+      for (const b of within(h.x, h.y - 0.6, 1.5)) {    // anything under it that relied on it
+        if (dead.has(b) || b.y >= h.y || b.kind === 'summit') continue;
+        if (!canGo(b)) { safe = false; break; }
+      }
+      if (!safe) { dead.delete(h); continue; }
+      block.push(h);
+      if (block.length < 40) continue;
+      if (!tryBlock(block)) {
+        // Somewhere in those forty was a hold the wall needed. Find the rest one at a time,
+        // and give up on the whole thing once that stops being worth the walking.
+        for (const one of block) {
+          if (singles > 240) { stop = true; break; }
+          singles++;
+          dead.add(one);
+          tryBlock([one]);
+        }
+      }
+      block = [];
+    }
+    if (block.length) tryBlock(block);
+    holds.splice(0, holds.length, ...live());
+    index(holds);
+  }
+
   // Order by height (the tests, world.js's merge and main.js's teleport all read the array in
   // order), with the two start holds kept at ids 0 and 1 — createClimber puts the hands there.
   const rest = holds.filter((h) => h !== startL && h !== startR).sort((a, b) => a.y - b.y || a.x - b.x);
   holds.length = 0;
   holds.push(startL, startR, ...rest);
 
-  // --- 6. grips and sizes ----------------------------------------------------------------
+  // --- 7. grips and sizes ----------------------------------------------------------------
   // Hold quality hardens with height (B8): low on the face it is mostly buckets, by the altar
   // mostly edges and crimps with the odd sloper that will quietly drop you. Runes and the altar
   // are always jugs, because they are the rests.
@@ -531,7 +652,7 @@ export function generateRoute(seed = 7) {
 
   for (const h of holds) { h.size = r4(h.size); h.x = r4(h.x); h.y = r4(h.y); delete h._cull; }
 
-  // --- 7. decoys (B10) --------------------------------------------------------------------
+  // --- 8. decoys (B10) --------------------------------------------------------------------
   // Rock that looks exactly like the field around it and crumbles the moment you weigh it. A
   // decoy is a hold LIFTED OUT of the field, so it sits where a hold would sit and is worth
   // trying — and it may never be the only way up, which here means: with it gone, every hold
@@ -550,14 +671,16 @@ export function generateRoute(seed = 7) {
     if (!pool.length) continue;
     const cand = pool[Math.floor(rnd() * pool.length)];
     if (cand._fake) continue;
-    // would anything below be stranded without it?
+    // Would anything below be stranded without it, and does the climb survive? On a thinned
+    // field the second question is a real one: taking a hold out of a sparse wall can be the
+    // move that closes the last way past, which is exactly what B10 promises never happens.
     index(holds.filter((h) => h !== cand && !h._fake));
     let strands = false;
     for (const below of within(cand.x, cand.y - 0.6, 1.4)) {
       if (below.y >= cand.y || below.kind === 'summit') continue;
       if (upLinks(below).length === 0) { strands = true; break; }
     }
-    if (strands) continue;
+    if (strands || !legs().ok) continue;
     cand._fake = true;
     fakes.push(cand);
   }
