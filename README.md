@@ -1,9 +1,10 @@
 # Rock Climber: The Ritual
 
 A first-person climbing game for the phone and the desktop browser. Each hand has its own
-joystick and its own GRIP button: steer a hand to a hold, tap GRIP, then move the other one.
-Hanging drains a hand and the glowing runes are rests. **Nothing catches you**: lose both hands
-and you fall the whole cliff. Light every rune and reach the summit altar.
+joystick and nothing else: push a stick and that hand reaches, hold it over the rock and the hand
+grabs on its own, push that stick again to let go. Hanging drains a hand and the glowing runes are
+rests. **Nothing catches you**: lose both hands and you fall the whole cliff. Light every rune and
+reach the summit altar.
 
 **Four routes.** The title screen offers Ritual, Ladder, Serpent and Ordeal. Generation is
 deterministic per seed, so each name is a fixed climb, not a shuffle: Ladder is 42 jugs with easy
@@ -18,9 +19,15 @@ from 1 to 40 has been checked by the playability bot.
 python3 tools/devserver.py 8787   # then open http://localhost:8787/
 ```
 
-Controls on a phone: two thumbs, one per stick, GRIP above each.
-On a desktop: `WASD` + `Q` for the left hand, arrows + `Enter` (or `/`) for the right, `M` mutes.
-The sticks can also be dragged with the mouse.
+Controls on a phone: two thumbs, one per stick, and no buttons. Push a stick — that hand reaches.
+Hold it over the rock and the hand grabs on its own. Push that stick again to let go. Climb hand
+over hand and rest on the glowing runes. Drag anywhere else on the screen to look around; the view
+stays where you leave it. The stamina arc runs around each stick, and if you have found the WEB
+pad: hold it to aim, lift to fire, tap it to let go of the line.
+
+On a desktop: `WASD` for the left hand and the arrows for the right — push to let go, and to
+reach. Move the mouse and whichever hand is hanging free follows it. `Shift`-drag looks around,
+`Esc` re-centres the sticks, `M` mutes.
 
 ## Built with
 
