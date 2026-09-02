@@ -10,10 +10,11 @@
 //   mapping, zero the moment the pointer lifts. One pointer per stick; the pointer is
 //   captured so dragging past the ring keeps working. GRIP taps fire on pointerdown and
 //   are edge-triggered: true for exactly one read().
+// Looking: a drag on the play surface itself (`surface`, the canvas). See the block below.
 // Keyboard: W/A/S/D drive a virtual left stick and the arrow keys the right one, each
 //   axis integrating at KEY_RATE units/s and holding its value while no key is down.
 //   Q toggles the left grip and Enter or Slash the right one; a grip toggle also recenters
-//   that hand's virtual stick. Escape recenters both sticks.
+//   that hand's virtual stick. Escape recenters both sticks. Shift turns the head.
 
 const KEY_RATE = 2.5;          // virtual stick units per second per axis
 const MOVE_KEYS = {
@@ -36,14 +37,21 @@ function clampDisc(v) {
   return v;
 }
 
+/** Per-axis clamp: the look arc is a rectangle (yaw and pitch are independent), not a disc. */
+function clamp1(v) { return v > 1 ? 1 : v < -1 ? -1 : (+v || 0); }
+
 function keyCode(e) {
   if (e.code && (MOVE_KEYS[e.code] || GRIP_KEYS[e.code] || e.code === 'Escape')) return e.code;
   const k = typeof e.key === 'string' ? (e.key.length === 1 ? e.key.toLowerCase() : e.key) : '';
   return KEY_TO_CODE[k] || e.code || '';
 }
 
-export function createInput({ hud = null, keyboard = true, win, now = defaultNow, mouse = null, getHands = null } = {}) {
+export function createInput({ hud = null, keyboard = true, win, now = defaultNow, mouse = null, getHands = null, surface } = {}) {
   const target = win !== undefined ? win : (typeof window !== 'undefined' ? window : null);
+  // The play surface is the canvas: everything the HUD does not claim. The integrator already
+  // hands it over as `mouse`, so looking needs no new plumbing; `surface` only exists so a test
+  // can bind the look drag without also binding the desktop cursor.
+  const lookSurface = surface !== undefined ? surface : mouse;
   const pointer = { L: { x: 0, y: 0 }, R: { x: 0, y: 0 } };   // position-mapped sticks
   const active = { L: null, R: null };                         // pointerId holding each stick
   const virtual = { L: { x: 0, y: 0 }, R: { x: 0, y: 0 } };   // keyboard sticks
@@ -190,6 +198,7 @@ export function createInput({ hud = null, keyboard = true, win, now = defaultNow
     on(el, 'pointerdown', (e) => {
       if (e.pointerType && e.pointerType !== 'mouse') return;
       if (e.button !== 0 && e.button !== 2) return;
+      if (e.shiftKey) return;                   // Shift is the look modifier, not a grip
       prevent(e);
       const side = e.button === 0 ? 'L' : 'R';
       mouseSide = side;
@@ -210,53 +219,97 @@ export function createInput({ hud = null, keyboard = true, win, now = defaultNow
   if (mouse) bindMouse(mouse);
 
   // ---------------------------------------------------------------------------------------
-  // Looking around: hold Shift on a desktop, or the LOOK button on a phone. While held, the
-  // cursor (or the free hand's stick) turns the head instead of moving the hand. The camera
-  // decides what is reachable — it only allows it with one hand free.
+  // Looking around: drag the view on the screen itself (B47).
+  //
+  // There is no LOOK button any more, and no free-arm rule: you can turn your head with both
+  // hands on the rock. The play surface IS the control. A pointer that comes down on a stick, a
+  // grip or the WEB pad belongs to that control and never reaches here — the HUD is
+  // pointer-events:none with pointer-events:auto children, so "the event reached the canvas" is
+  // exactly "the finger was not on a control". It is a hit region, not a z-index. A look drag and
+  // a thumb on a stick are different pointer ids and run side by side.
+  //
+  // The view STAYS where you leave it: a drag ACCUMULATES into `look` and lifting the finger
+  // changes nothing. It only comes home when a hand takes the rock or the last hand leaves it —
+  // a new hold is a new place to be — and then it eases rather than snapping. `look.active` means
+  // a look gesture is in progress; it no longer says whether looking is allowed at all.
+  //
+  // Sensitivity is measured in screens, not pixels: a drag across the full width sweeps the whole
+  // horizontal arc and a drag down the full height the whole vertical one, so the gesture is the
+  // size of the phone it happens on.
+  const LOOK_SWEEP_X = 2.0;      // look units per viewport width dragged (the arc is -1..1, so 2)
+  const LOOK_SWEEP_Y = 2.0;      // ...and per viewport height dragged
+  const LOOK_HOME_RATE = 7.5;    // e-folds/s back to centre on a grab or a fall: ~95% home in 0.4 s
+  const KEY_LOOK_RATE = 1.1;     // look units per second at full stick, for Shift + stick on a desktop
+
   const look = { x: 0, y: 0, active: false };
-  let lookHeld = false;
+  let lookId = null;             // the pointer doing the dragging
+  let lookPX = 0, lookPY = 0;    // ...and where it was last seen
+  let homing = false;            // easing back to the climb after a grab or a fall
+  let shiftHeld = false;
+  let prevHeld = null;           // how many hands were on the rock at the last read
   if (target && keyboard) {
-    on(target, 'keydown', (e) => { if (e.key === 'Shift') lookHeld = true; });
-    on(target, 'keyup', (e) => { if (e.key === 'Shift') lookHeld = false; });
-    on(target, 'blur', () => { lookHeld = false; });
-  }
-  // On a phone the LOOK button is a drag-pad, not a modifier: press it and drag, with one
-  // thumb, and your head follows the drag. (It used to need a SECOND thumb on a stick to supply
-  // a direction, so pressing it on its own did nothing at all.)
-  const lookPad = { x: 0, y: 0 };
-  let padActive = false, padId = null, padCx = 0, padCy = 0;
-  const PAD_RADIUS = 84;                   // px of drag for a full turn
-  if (hud && hud.lookButton) {
-    const b = hud.lookButton;
-    on(b, 'pointerdown', (e) => {
-      prevent(e);
-      const r = b.getBoundingClientRect();
-      padCx = r.left + r.width / 2; padCy = r.top + r.height / 2;
-      padActive = true; padId = e.pointerId; lookHeld = true;
-      lookPad.x = lookPad.y = 0;
-      b.classList.add('on');
-      if (b.setPointerCapture) { try { b.setPointerCapture(e.pointerId); } catch (err) {} }
-    });
-    on(b, 'pointermove', (e) => {
-      if (!padActive || e.pointerId !== padId) return;
-      lookPad.x = (e.clientX - padCx) / PAD_RADIUS;
-      lookPad.y = -(e.clientY - padCy) / PAD_RADIUS;    // screen y grows downward
-      clampDisc(lookPad);
-    });
-    const endPad = () => {
-      padActive = false; padId = null; lookHeld = false;
-      lookPad.x = lookPad.y = 0;
-      b.classList.remove('on');
-    };
-    on(b, 'pointerup', endPad);
-    on(b, 'pointercancel', endPad);
-    on(b, 'lostpointercapture', endPad);
+    on(target, 'keydown', (e) => { if (e.key === 'Shift') shiftHeld = true; });
+    on(target, 'keyup', (e) => { if (e.key === 'Shift') shiftHeld = false; });
+    on(target, 'blur', () => { shiftHeld = false; });
   }
 
-  // The web pad: the same one-thumb drag as LOOK. Holding it IS the held right grip the sim
+  function bindLook(el) {
+    const span = () => {
+      const b = el.getBoundingClientRect ? el.getBoundingClientRect() : null;
+      return {
+        w: Math.max(1, (b && b.width) || (target && target.innerWidth) || 1),
+        h: Math.max(1, (b && b.height) || (target && target.innerHeight) || 1),
+      };
+    };
+    on(el, 'pointerdown', (e) => {
+      if (lookId !== null) return;                    // one drag at a time
+      // On a desktop the two mouse buttons are the two grips, so the cursor only looks with Shift
+      // held — the same modifier as the keyboard path — or on the middle button.
+      if (e.pointerType === 'mouse' && !(e.shiftKey || e.button === 1)) return;
+      lookId = e.pointerId;
+      lookPX = e.clientX; lookPY = e.clientY;
+      look.active = true;
+      homing = false;                                 // a finger on the screen outranks the ease home
+      if (el.setPointerCapture) { try { el.setPointerCapture(e.pointerId); } catch (err) { /* unsupported */ } }
+    });
+    on(el, 'pointermove', (e) => {
+      if (lookId === null || e.pointerId !== lookId) return;
+      const { w, h } = span();
+      look.x = clamp1(look.x + (e.clientX - lookPX) * (LOOK_SWEEP_X / w));
+      look.y = clamp1(look.y - (e.clientY - lookPY) * (LOOK_SWEEP_Y / h));   // screen down → look down
+      lookPX = e.clientX; lookPY = e.clientY;
+    });
+    const endLook = (e) => {
+      if (lookId === null) return;
+      if (e && e.pointerId !== undefined && e.pointerId !== lookId) return;
+      lookId = null;
+      look.active = false;                            // and the view stays exactly where it was left
+    };
+    on(el, 'pointerup', endLook);
+    on(el, 'pointercancel', endLook);
+    on(el, 'lostpointercapture', endLook);
+    on(el, 'contextmenu', prevent);                   // a long-press look must not open a callout
+    if (el.style) el.style.touchAction = 'none';
+  }
+  if (lookSurface) bindLook(lookSurface);
+
+  // A hand taking the rock is a new place to be, and so is the moment the last hand leaves it (a
+  // fall, or a swing), so the view eases home on both. input.js can see both without any new
+  // plumbing: it already reads the hands for the desktop cursor, and it owns the accumulator, so
+  // the ease is a change to the accumulator itself rather than a correction bolted on downstream.
+  function watchHands() {
+    const h = typeof getHands === 'function' ? getHands() : null;
+    if (!h || !h.L || !h.R) { prevHeld = null; return; }
+    const n = (h.L.gripping ? 1 : 0) + (h.R.gripping ? 1 : 0);
+    if (prevHeld !== null && n !== prevHeld && (n > prevHeld || n === 0)) homing = true;
+    prevHeld = n;
+  }
+
+  // The web pad: a one-thumb press-and-drag. Holding it IS the held right grip the sim
   // waits on, and the drag is the aim, so releasing fires. Without this the only way to aim on
   // a phone would be to hold the GRIP pill and aim with the same thumb, which is the mistake
-  // the LOOK button already made once.
+  // the old LOOK button made once (B23).
+  const PAD_RADIUS = 84;                   // px of drag for a full deflection of the aim
   const webVec = { x: 0, y: 1 };
   let webActive = false, webId = null, webCx = 0, webCy = 0;
   if (hud && hud.webButton) {
@@ -290,20 +343,36 @@ export function createInput({ hud = null, keyboard = true, win, now = defaultNow
     const out = { L: { x: 0, y: 0 }, R: { x: 0, y: 0 }, tapL: taps.L, tapR: taps.R };
     taps.L = taps.R = false;
     const mSide = mouse && mousePos.has ? freeSide() : null;
-    // While looking, the steering input turns the head and the hand stays put.
-    look.active = lookHeld;
-    if (lookHeld) {
-      const src = padActive ? lookPad
-        : (mSide ? mouseVec : (active.L !== null ? pointer.L : active.R !== null ? pointer.R : virtual.L));
-      look.x = src.x; look.y = src.y;
-    } else { look.x = 0; look.y = 0; }
+    // --- looking -------------------------------------------------------------------------
+    watchHands();
+    // Shift + a stick (or the cursor) still turns the head on a desktop. It feeds the same
+    // accumulator, as a rate rather than a position, so the view stays where the keys leave it
+    // exactly as a drag does.
+    let steering = false;
+    if (shiftHeld && lookId === null) {
+      const src = mSide ? mouseVec : (active.L !== null ? pointer.L : active.R !== null ? pointer.R : virtual.L);
+      if (src.x || src.y) {
+        look.x = clamp1(look.x + src.x * KEY_LOOK_RATE * dt);
+        look.y = clamp1(look.y + src.y * KEY_LOOK_RATE * dt);
+        steering = true;
+        homing = false;
+      }
+    }
+    if (homing && lookId === null && !steering) {
+      const k = Math.exp(-LOOK_HOME_RATE * dt);
+      look.x *= k; look.y *= k;
+      if (Math.abs(look.x) < 1e-3 && Math.abs(look.y) < 1e-3) { look.x = look.y = 0; homing = false; }
+    }
+    look.active = lookId !== null || shiftHeld;
     out.look = look;
     // while the web pad is held, it IS the right grip, and its drag is the aim
     out.holdL = holds.L;
     out.holdR = holds.R || webActive;
     if (webActive) { out.R.x = webVec.x; out.R.y = webVec.y; }
     for (const side of ['L', 'R']) {
-      if (lookHeld) { out[side].x = 0; out[side].y = 0; if (hud && typeof hud.setStick === 'function') hud.setStick(side, 0, 0); continue; }
+      // Shift turns the head instead of moving the hand; a drag on the screen does not, so a thumb
+      // on a stick and a thumb dragging the view work at the same time.
+      if (shiftHeld) { out[side].x = 0; out[side].y = 0; if (hud && typeof hud.setStick === 'function') hud.setStick(side, 0, 0); continue; }
       // touch stick wins, then the cursor for the hand it is driving, then the keyboard
       const v = active[side] !== null ? pointer[side]
         : (side === mSide ? mouseVec : virtual[side]);

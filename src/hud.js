@@ -386,7 +386,6 @@ export function createHud(root) {
   // ---- update -----------------------------------------------------------------------------------------------
   function update(state, events) {
     if (!state) return;
-    updateLookBtn(state);
     updateWeb(state);
     if (state.phase !== 'title' && !cache.hudOn && !endShown) showHud();
 
@@ -446,9 +445,8 @@ export function createHud(root) {
   let titleShown = false;
   let started = false;
 
-  // The LOOK and WEB pads are fixed to the bottom of the screen above everything, which put them
-  // on top of the title's tap line in landscape and over the end screen's credits in both. They
-  // belong to the climb, so they go away whenever a full-screen overlay is up.
+  // The WEB pad belongs to the climb, so it goes away whenever a full-screen overlay is up: it
+  // used to sit on top of the title's tap line in landscape and over the end screen's credits.
   function syncOverlayFlag() {
     const up = titleShown || endShown || !!(customEl && !customEl.hidden);
     if (doc.body && doc.body.classList) doc.body.classList.toggle('overlay-up', up);
@@ -467,6 +465,7 @@ export function createHud(root) {
         '<p><span class="n">1</span><span class="tx"><em>Push a stick</em> — that hand reaches for a hold.</span></p>' +
         '<p><span class="n">2</span><span class="tx"><em>Tap GRIP</em> to grab it. Tap again to let go.</span></p>' +
         '<p><span class="n">3</span><span class="tx">Climb hand over hand and <em>rest on the glowing runes</em>.</span></p>' +
+        '<p><span class="n">4</span><span class="tx"><em>Drag the screen</em> to look around.</span></p>' +
         '</div>' +
         '<div class="mini"><span class="mini-pill lit">Holding</span>' + ring(false, 58) + '<b>Right</b></div>' +
         '</div>' +
@@ -478,7 +477,7 @@ export function createHud(root) {
       '<div class="row">' +
       '<div class="hand"><b>Left hand</b><div class="keys"><kbd>Left click</kbd><span class="sep">grip / let go</span></div></div>' +
       '<div class="hand"><b>Right hand</b><div class="keys"><kbd>Right click</kbd><span class="sep">grip / let go</span></div></div>' +
-      '<p class="hint"><em>Move the mouse</em> and the hand that is hanging free follows it. Let a hand go, point where you want it, click again to take the rock.</p>' +
+      '<p class="hint"><em>Move the mouse</em> and the hand that is hanging free follows it. Let a hand go, point where you want it, click again to take the rock. <em>Shift-drag</em> to look around — the view stays where you leave it.</p>' +
       '</div>' +
       '<p class="hint">Hanging drains a hand — rest on the <i>glowing runes</i>. <b>Nothing catches you</b>: one fall is the whole cliff. Not every rock holds. <kbd>M</kbd> mutes.</p>'
     );
@@ -751,18 +750,10 @@ export function createHud(root) {
     clearTimeout(endTimer);
   }
 
-  // LOOK: input.js binds hold-to-look to this button; it only lights up when a hand is free.
-  const lookBtn = doc.getElementById('look');
+  // B47: there is no LOOK button. Looking is a drag on the screen itself, which input.js binds to
+  // the canvas, so the HUD has nothing to show and nothing to say about it.
   const webBtn = doc.getElementById('web');
-  let canLookNow = null;
   let webBtnState = '';
-  function updateLookBtn(state) {
-    if (!lookBtn) return;
-    const L = state.hands && state.hands.L, R = state.hands && state.hands.R;
-    const can = !!L && !!R && (L.gripping !== R.gripping)
-      && (state.phase === 'climbing' || state.phase === 'grounded');
-    if (can !== canLookNow) { canLookNow = can; lookBtn.classList.toggle('can', can); }
-  }
 
   // ---- customisation ----------------------------------------------------------------------
   // Only exists once the code has been typed. Choosing a glove reloads the hands, which is the
@@ -792,11 +783,6 @@ export function createHud(root) {
     customEl.addEventListener('pointerdown', (e) => { if (e.target === customEl) closeCustom(); });
   }
   if (customBtn) customBtn.addEventListener('click', openCustom);
-  // Pressing LOOK with both hands on the rock does nothing by design — you need a free arm to
-  // turn — so say that rather than leaving the button feeling broken.
-  if (lookBtn) lookBtn.addEventListener('pointerdown', () => {
-    if (!canLookNow) message('Let a hand go to look around', 1800);
-  });
   refreshCustomBtn();
 
   // ---- the web-zip's state, on the right-hand pill --------------------------------------
@@ -841,7 +827,6 @@ export function createHud(root) {
   const hud = {
     sticks,
     grips,
-    lookButton: lookBtn,
     webButton: webBtn,
     openCustom, closeCustom, refreshCustomBtn,
     onSkinChange(cb) { if (typeof cb === 'function') skinCbs.push(cb); },

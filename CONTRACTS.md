@@ -64,7 +64,12 @@ Event = { type, hand?: 'L'|'R', holdId?: number, ...extras }
   the zip:  'aim' | 'webshot' | 'webhit' (+yank) | 'webmiss' | 'webcut'
 Anything reading events must ignore types it does not know: the list grows.
 Input = { L:{x,y}, R:{x,y}, tapL:boolean, tapR:boolean,
-          look:{ x, y, active },                           // look: hold-to-look; sim ignores it, the camera rig consumes it
+          look:{ x, y, active },                           // ACCUMULATED look, each axis -1..1 of whatever arc the hands allow (B47). It is not
+                                                           // a stick: a drag on the play surface adds to it and lifting the finger changes
+                                                           // nothing, so the view stays where you leave it. input.js eases it back to 0 over
+                                                           // ~0.4 s when a hand takes the rock or the last hand leaves it (it watches getHands).
+                                                           // `active` = a look gesture is in progress; it does NOT gate whether looking is
+                                                           // allowed. The sim ignores all of it; the camera rig consumes it
           holdL:boolean, holdR:boolean }                   // grip currently HELD; the spider hand aims on a held right grip (true for one frame)
 ```
 Constants live in `sim.js` as `CFG`: REACH 0.72, SNAP 0.16, SHOULDER_DX 0.19, SHOULDER_DY 0.08, HANG_TWO 0.42, HANG_ONE 0.50,
@@ -91,7 +96,7 @@ export function shoulder(state, side) → { x, y }
 export function aimPoint(state) → { x, y } | null     // where the web shot would land; the camera rig and the HUD reticle both read it
 export function cutWeb(state)                        // drop the line from outside the sim
 export function generateRoute(seed) also returns `fakes`; SEEDS / DEFAULT_SEED / normalizeSeed(v) back the route picker
-export function createInput({ hud, keyboard = true, win, now, mouse, getHands }) → { read(): Input, dispose() }   // input.js — touch/mouse on hud.sticks + hud.grips + hud.lookButton + hud.webButton (pointer events), keyboard WASD+Q / arrows+Enter or Slash; sticks: position mapping; keyboard: integrating virtual stick that holds its value; taps are edge-triggered. `win` and `now` are injected so the tests can drive it headless
+export function createInput({ hud, keyboard = true, win, now, mouse, getHands, surface = mouse }) → { read(): Input, dispose() }   // input.js — touch/mouse on hud.sticks + hud.grips + hud.webButton (pointer events), and the LOOK DRAG on `surface`, the canvas: a pointer that reaches it was not on a control, which is how the gesture stays out of the sticks (hit region, not z-index). Keyboard WASD+Q / arrows+Enter or Slash, Shift + a stick turns the head; sticks: position mapping; keyboard: integrating virtual stick that holds its value; taps are edge-triggered. `win` and `now` are injected so the tests can drive it headless
 
 // world-light
 export async function createWorld({ renderer, scene, route, tier }) → world             // world.js — loads textures + HDRI itself (paths below)
@@ -106,6 +111,9 @@ export async function createArms({ scene, tier, shoulder, holdZ }) → arms     
 arms.update(dt, state, wallZ, camera)
 export function createCameraRig(camera) → rig                                           // camera.js — follows body, breathing, roll toward loaded arm, look-up bias toward the hands, fall/catch shake, fov kick on grab
 rig.update(dt, state, wallZ, events, lookIn, aim)     // lookIn = Input.look, aim = aimPoint(state) while aiming (else null): aiming pulls the eye back and turns the view to the anchor
+                                                      // lookIn is normalised, so camera.js decides what -1..1 is worth: with BOTH hands on the rock the neck alone (LOOK.neckYaw 60 deg
+                                                      // either way, neckUp 40, neckDown 55), with one hand free the arc follows the free arm (yawInward 35 / yawOutward 145, 62 up, 85 down),
+                                                      // with no hands the same 180 across but symmetric (yawLoose 90). Narrowing the arc eases the head into it at LOOK.settle; it never gates looking
 rig.setPortrait(isPortrait); rig.kick(...)
 export function createWebLine({ variant, segments }) → line                              // webLine.js — the line as real geometry, lashing as it flies
 export function applySpiderSkin(root, { variant }) ; spiderUnlocked() / unlockSpider() / spiderSkin() / setSpiderSkin(v)   // spiderHand.js — the egg, remembered per device
@@ -113,7 +121,7 @@ export function applySpiderSkin(root, { variant }) ; spiderUnlocked() / unlockSp
 // hud-audio
 export function createHud(root) → hud                                                    // hud.js — owns all DOM under #hud, #title, #end and #custom
 hud.sticks = { L: HTMLElement, R: HTMLElement }; hud.grips = { L: HTMLElement, R: HTMLElement }
-hud.lookButton, hud.webButton                         // input.js binds pointer events to all four; they are drag pads, not press-and-hold buttons
+hud.webButton                                         // input.js binds pointer events to it; it is a drag pad, not a press-and-hold button. There is no lookButton: B47 removed it
 hud.update(state, events)                             // stamina arcs, knob positions come from input via hud.setStick(side, x, y), grip pill state, height meter, rune progress, fall count, the web-zip's own state on the right pill
 hud.setStick(side, x, y)                              // called by input.js each frame with the stick vector
 hud.message(text, ms = 2200); hud.showTitle({ touch, seeds, seed }); hud.hideTitle(); hud.onStart(cb); hud.onSeed(cb); hud.showEnd(stats); hud.onRestart(cb)
@@ -123,13 +131,15 @@ audio.handle(events, state, dt)                       // wind bed follows height
 audio.setMusic(url); audio.setMuted(b); audio.muted
 ```
 Required DOM ids in `index.html`: `#gl` (canvas), `#hud`, `#title`, `#end`, `#stick-l`, `#stick-r`, `#grip-l`, `#grip-r`,
-`#ctl-l`, `#ctl-r`, `#look`, `#web`, `#height`, `#runes`, `#msg`, `#falls`, `#mute`, `#vig`, `#seeds`, `#custom`, `#customBtn`, `#boot`.
+`#ctl-l`, `#ctl-r`, `#web`, `#height`, `#runes`, `#msg`, `#falls`, `#mute`, `#vig`, `#seeds`, `#custom`, `#customBtn`, `#boot`.
 
-**Control layout invariant (B34).** `#look` and `#web` are children of `#ctl-l` and `#ctl-r`, the first item in each
-column: pad, then GRIP pill, then stick. They must stay in the flow — do not give them `position: fixed` and a
-z-index above the HUD again. They used to float over the middle of the screen and landed inside the bottom of the
-stick rings, where they took a thumb sliding down a stick. The cluster is anchored at its bottom edge, so hiding
-`#web` while the egg is locked leaves GRIP and the stick exactly where they are.
+**Control layout invariant (B34).** `#web` is the first child of `#ctl-r`: pad, then GRIP pill, then stick. `#ctl-l`
+has no pad any more — B47 deleted `#look`, so the left column is GRIP then stick. `#web` must stay in the flow — do
+not give it `position: fixed` and a z-index above the HUD again. The pads used to float over the middle of the screen
+and landed inside the bottom of the stick rings, where they took a thumb sliding down a stick. The cluster is anchored
+at its bottom edge, so hiding `#web` while the egg is locked leaves GRIP and the stick exactly where they are.
+The same rule is what keeps the look drag honest: everything the HUD claims is a `pointer-events: auto` child of a
+`pointer-events: none` HUD, so a pointer that reaches `#gl` is by definition not on a control.
 
 ## main.js loop (integrator)
 ```
