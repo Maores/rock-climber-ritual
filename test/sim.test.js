@@ -175,6 +175,26 @@ test('free hand: standing at the base, a parked hand walks back under the route 
   near(s.hands.L.y - sh1.y, off.y, 0.01);
 });
 
+test('free hand: a parked hand relaxes to rest once the climb is over (B45)', () => {
+  const s = climber([], 10);                           // high enough that letting go is a real fall
+  step(s, inp({ tapL: true }), DT);
+  run(s, 1.5, inp({ L: { x: -0.9, y: 0.3 } }));        // park the left hand out to the side
+  const shA = shoulder(s, 'L');
+  const off = { x: s.hands.L.tx - shA.x, y: s.hands.L.ty - shA.y };
+  assert.ok(Math.hypot(off.x + CFG.REST_X, off.y - CFG.REST_Y) > 0.4, 'parked nowhere near the rest offset');
+  step(s, inp({ tapR: true }), DT);                    // the last hand goes: nothing catches you
+  run(s, 0.3, inp());
+  assert.equal(s.phase, 'falling');
+  const shB = shoulder(s, 'L');
+  near(s.hands.L.tx - shB.x, off.x, 1e-9, 'a fall is still live, so the park holds');
+  near(s.hands.L.ty - shB.y, off.y, 1e-9);
+  run(s, 8, inp());                                    // ...and on the death screen nobody is steering
+  assert.equal(s.phase, 'fallen');
+  const sh = shoulder(s, 'L');
+  near(s.hands.L.x, sh.x - CFG.REST_X, 0.02, 'the arm hangs at rest: x');
+  near(s.hands.L.y, sh.y + CFG.REST_Y, 0.02, 'rest y');
+});
+
 test('free hand: a zero stick at the start of a climb does not move a hand off its hold (B45)', () => {
   const s = climber();
   const l = { x: s.hands.L.x, y: s.hands.L.y }, r = { x: s.hands.R.x, y: s.hands.R.y };
@@ -393,14 +413,14 @@ test('body: no gripping hand → falling under gravity with a fall event', () =>
   assert.ok(s.body.y < y0);
 });
 
-test('stamina: both hands gripping drain 0.05/s each', () => {
+test('stamina: both hands gripping drain 0.022/s each', () => {
   const s = climber();
   run(s, 1, inp());
   near(s.hands.L.stamina, 1 - CFG.DRAIN_TWO, 0.002);
   near(s.hands.R.stamina, 1 - CFG.DRAIN_TWO, 0.002);
 });
 
-test('stamina: the only gripping hand drains 0.20/s while the free hand refills 0.18/s', () => {
+test('stamina: the only gripping hand drains 0.085/s while the free hand refills 0.30/s', () => {
   const s = climber();
   s.hands.L.stamina = 0.5;
   step(s, inp({ tapL: true }), DT);

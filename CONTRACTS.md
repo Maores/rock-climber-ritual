@@ -89,7 +89,7 @@ Input = { L:{x,y,active}, R:{x,y,active}, tapL:boolean, tapR:boolean,
   // how B48 happened. `R` is the right hand's own control group and is forwarded by reference, so the gesture arrives.
 ```
 Constants live in `sim.js` as `CFG`: REACH 0.72, SNAP 0.16, SHOULDER_DX 0.19, SHOULDER_DY 0.08, HANG_TWO 0.42, HANG_ONE 0.50,
-GRACE 0.25, FLOOR 0.75, FALL_TERMINAL 26, drain two-hand 0.05/s, one-hand 0.20/s, refill free 0.18/s, rune refill 0.50/s, forced release at 0.
+GRACE 0.25, FLOOR 0.75, FALL_TERMINAL 26, drain per gripping hand 0.022/s with two hands on, 0.085/s with one, both times the hold's own multiplier (jug 0.65 to crimp 1.85), refill free 0.30/s, rune refill 0.50/s, forced release at 0.
 
 Behavior (kinematic with physical feel): free hands spring-damp toward `shoulder + stick × REACH`, and letting go of the stick
 leaves the hand there — the target is kept as an offset from the shoulder, so a parked hand rides along when the body moves, and it
@@ -137,7 +137,8 @@ export function createPost({ renderer, scene, camera, tier }) → post          
 post.render(dt); post.resize(w, h); post.setNight(t01); post.setTier(tier)
 
 // arms-camera
-export async function createArms({ scene, tier, shoulder, holdZ }) → arms                // arms.js — loads assets/models/hands/realistic_hand.glb (left = mirrored), builds forearm + sleeve per side, 2-bone IK from shoulder, finger curl from Hand.curl (use the model's 'Grab' clip or bone rotation), tremble from Hand.tremble. `shoulder` and `holdZ` are passed in so arms.js imports neither the sim nor the world
+export async function createArms({ scene, tier, shoulder, holdZ }) → arms                // arms.js — loads assets/models/hands/realistic_hand.glb (left = mirrored), builds forearm + sleeve per side, 2-bone IK from shoulder, finger curl from Hand.curl (use the model's 'Grab' clip or bone rotation), tremble from Hand.tremble. `shoulder` and `holdZ` are passed in so arms.js imports neither the sim nor the world.
+// ONLY THE HAND MESH IS DRAWN (B44, B49). The forearm, sleeve, cuff, rim, cord and bead are still built — the IK needs the arm to place the wrist and the finger direction — but every one of them is visible = false, and the group holds no other geometry. The hand GLB is watertight and closes itself at the wrist, so nothing may be added there to "cap" it: the blue plug that used to sit at each wrist was closing a hole that does not exist, and it read as a balloon. If the wrist end ever looks wrong, fix the lighting or the glove shader, not by adding an object
 arms.update(dt, state, wallZ, camera)
 export function createCameraRig(camera) → rig                                           // camera.js — follows body, breathing, roll toward loaded arm, look-up bias toward the hands, fall/catch shake, fov kick on grab
 rig.update(dt, state, wallZ, events, lookIn, aim)     // lookIn = Input.look, aim = aimPoint(state) while aiming (else null): aiming pulls the eye back and turns the view to the anchor
@@ -152,13 +153,15 @@ hud.lookButton, hud.webButton                         // input.js binds pointer 
 hud.update(state, events)                             // stamina arcs, knob positions come from input via hud.setStick(side, x, y), grip pill state, height meter, rune progress, fall count, the web-zip's own state on the right pill
 hud.setStick(side, x, y)                              // called by input.js each frame with the stick vector
 hud.message(text, ms = 2200); hud.showTitle({ touch, seeds, seed }); hud.hideTitle(); hud.onStart(cb); hud.onSeed(cb); hud.showEnd(stats); hud.onRestart(cb)
+hud.onMenu(cb)                                        // the Menu button asks for the title screen back: mid-climb behind one confirmation, straight from the end screen. Unwired it reloads the page. `showTitle` resets its own shell (end screen, dead veil, pending end timer), so the integrator only has to rebuild the game state
+hud.onPause(cb)                                       // cb(true/false) around the mid-climb confirmation, so the sim can be frozen while the question is on screen
 hud.openCustom() / closeCustom() / refreshCustomBtn() / onSkinChange(cb)                 // the hand panel behind the ✦ button
 export function createAudio() → audio                                                   // audio.js — WebAudio; call audio.unlock() on first user gesture
 audio.handle(events, state, dt)                       // wind bed follows height/night, cues per event, heartbeat when any stamina < 0.25
 audio.setMusic(url); audio.setMuted(b); audio.muted
 ```
 Required DOM ids in `index.html`: `#gl` (canvas), `#hud`, `#title`, `#end`, `#stick-l`, `#stick-r`, `#grip-l`, `#grip-r`,
-`#ctl-l`, `#ctl-r`, `#look`, `#web`, `#height`, `#runes`, `#msg`, `#falls`, `#mute`, `#vig`, `#seeds`, `#custom`, `#customBtn`, `#boot`.
+`#ctl-l`, `#ctl-r`, `#look`, `#web`, `#height`, `#runes`, `#msg`, `#falls`, `#mute`, `#vig`, `#seeds`, `#custom`, `#customBtn`, `#menuBtn`, `#confirm`, `#boot`.
 
 **Control layout invariant (B34).** `#look` and `#web` are children of `#ctl-l` and `#ctl-r`, the first item in each
 column: pad, then GRIP pill, then stick. They must stay in the flow — do not give them `position: fixed` and a
@@ -180,7 +183,9 @@ The one array of events from `drainEvents` is passed to every consumer in the sa
 find out what happened. Render at display rate.
 `window.__ritual = { state, world, arms, rig, post, hud, audio, input, renderer, scene, camera, tier, perf, errors, debug, seed, sim, ready }`
 for tests and evidence capture — `state`, `world`, `arms`, `rig` and `post` are getters, because a restart or a re-skin
-replaces them. `debug` offers `start() / restart() / teleport(y) / tap(side) / hold(side, bool) / fall() / autopilot(b)`,
+replaces them. `debug` offers `start() / restart() / teleport(y) / tap(side) / hold(side, bool) / fall() / autopilot(b)` and the
+`pause` flag — the one member of `debug` the game itself writes: `hud.onPause` raises it while the mid-climb
+confirmation is on screen, so a one-hand hang cannot drain away under the question,
 and the URL accepts `?seed= ?auto ?tier=phone ?fps=1`.
 
 ## Assets (already in the repo; paths are relative to project root)
@@ -205,4 +210,9 @@ desktop = { 'desktop', min(dpr, 2), 2048, 1.0, '2k', true }
 - Portrait first; landscape must remain playable. Safe-area insets respected. No text selection, no tap highlight, no double-tap zoom, `touch-action: none` on the canvas and sticks.
 - Tests: `node --test test/` must pass for sim-input before the integrator merges. Rendering domains verify with the dev server: `python3 tools/devserver.py 8787` (already running in the session) → http://localhost:8787/.
 - Evidence capture for critics: screenshots at three heights (start, ~20 m, summit approach) in a 390×844 portrait viewport at 2× and one desktop 1440×900 frame, plus an fps read from `window.__ritual` over 10 s, plus console-error count. Prefer the chrome-devtools MCP (its own Chrome) or a background Browser-pane tab; never front or navigate the user's visible tab.
+  `?fps=1` draws the same figures on the screen for a reading taken by hand on a real device (B27): the 2-second
+  average as a large coloured headline (teal ≥ 30, amber ≥ 24, red below), then the min fps since the climb started,
+  the watchdog step-down count, the tier name, the pixel ratio now, the drawing-buffer size, draw calls, triangles,
+  phase and height. It sits below the HUD's top row and inside the safe area, and reads nothing that `perf` and the
+  renderer do not already hold — the step count is `(tier.pixelRatio − renderer.getPixelRatio()) / 0.25`.
 - Never touch files you do not own; report contract problems to the integrator instead of working around them.

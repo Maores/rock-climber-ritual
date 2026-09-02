@@ -148,6 +148,7 @@ const perf = {
   frames: 0,            // frames rendered since boot
   frameMs: 0,           // last frame time
   minFps: Infinity,     // worst 2-second window since the climb started
+  steps: 0,             // watchdog step-downs this climb, counted at the fire (review of B27)
   history: [],          // one { t, fps, pixelRatio } per 2-second window, capped at 10 minutes
   pixelRatio: tier.pixelRatio,
   drawCalls: 0, triangles: 0,
@@ -173,6 +174,7 @@ function watchdog(dt) {
     if (fps < perf.minFps) perf.minFps = fps;
     if (fps < WATCHDOG_MIN_FPS && renderer.getPixelRatio() > MIN_PIXEL_RATIO + 1e-6) {
       const pr = Math.max(MIN_PIXEL_RATIO, renderer.getPixelRatio() - 0.25);
+      perf.steps++;                      // counted, not derived: a clamped last step rounded away to 'steps 0'
       renderer.setPixelRatio(pr);
       resize();
       console.warn(`[ritual] ${fps.toFixed(1)} fps: pixel ratio stepped down to ${pr}`);
@@ -200,7 +202,9 @@ if (window.visualViewport) window.visualViewport.addEventListener('resize', resi
 // Debug surface (window.__ritual.debug): autopilot through the Input interface, teleport,
 // pause/advance, fps overlay. Used by the test/evidence harness only.
 
-const zeroInput = () => ({ L: { x: 0, y: 0 }, R: { x: 0, y: 0 }, tapL: false, tapR: false, holdL: false, holdR: false });
+// `active` is the B45 flag: false here means "nobody is on this stick", so a free hand keeps its
+// parked target instead of reading a zero vector as a push toward the shoulder.
+const zeroInput = () => ({ L: { x: 0, y: 0, active: false }, R: { x: 0, y: 0, active: false }, tapL: false, tapR: false, holdL: false, holdR: false });
 const heldDebug = { L: false, R: false };   // debug.hold(side, on) — the evidence harness fires the web with this
 const OTHER = { L: 'R', R: 'L' };
 
@@ -215,6 +219,7 @@ function steerTo(st, side, hold) {
   const v = { x: (hold.x - sh.x) / CFG.REACH, y: (hold.y - sh.y) / CFG.REACH };
   const m = Math.hypot(v.x, v.y);
   if (m > 1) { v.x /= m; v.y /= m; }
+  v.active = true;             // the bot's thumb is on the stick for this frame
   return v;
 }
 
@@ -303,18 +308,33 @@ function teleport(y) {
   return { hold: i, y: state.body.y };
 }
 
-let overlayEl = null;
+// `?fps=1` overlay. It is read on a phone held at arm's length, so B27: the headline number is
+// big enough to glance at (11px was under Apple's 11pt floor), the block clears the safe area on
+// every edge rather than only the top, and it answers the whole question on its own — the tier
+// that was picked, the pixel ratio *now*, the worst 2-second window since the climb started, and
+// how many times the watchdog stepped the pixel ratio down. Those last two are read out of
+// `perf` and out of the renderer; nothing new is tracked to draw them.
+let overlayEl = null, overlayNum = null, overlayRest = null;
 function overlay(on) {
   if (on && !overlayEl) {
     overlayEl = document.createElement('div');
     overlayEl.id = 'fps';
-    overlayEl.style.cssText = 'position:fixed;top:calc(56px + env(safe-area-inset-top,0px));right:12px;z-index:30;pointer-events:none;' +
-      'font:600 11px/1.45 ui-monospace,Menlo,monospace;color:#7fe0ff;text-align:right;text-shadow:0 1px 4px #000,0 0 10px rgba(0,0,0,.8);' +
-      'background:rgba(10,12,24,.55);padding:6px 8px;border-radius:8px;white-space:pre';
+    overlayEl.style.cssText = 'position:fixed;z-index:30;pointer-events:none;' +
+      // 74px clears the whole of #top (the fall count, the height meter and the rune row, 66px
+      // tall) whatever the rune count, so the block never lands on the HUD it is measuring.
+      'top:calc(74px + env(safe-area-inset-top,0px));right:calc(12px + env(safe-area-inset-right,0px));' +
+      'font:600 13px/1.5 ui-monospace,Menlo,monospace;color:#f1e6d8;text-align:right;' +
+      'text-shadow:0 1px 4px #000,0 0 10px rgba(0,0,0,.9);' +
+      'background:rgba(8,10,20,.74);border:1px solid rgba(127,224,255,.22);' +
+      'padding:7px 10px;border-radius:10px;white-space:pre';
+    overlayNum = document.createElement('div');
+    overlayNum.style.cssText = 'font:700 22px/1.15 ui-monospace,Menlo,monospace;letter-spacing:-.02em;margin-bottom:2px';
+    overlayRest = document.createElement('div');
+    overlayEl.append(overlayNum, overlayRest);
     document.body.appendChild(overlayEl);
   } else if (!on && overlayEl) {
     overlayEl.remove();
-    overlayEl = null;
+    overlayEl = overlayNum = overlayRest = null;
   }
 }
 let overlayT = 0;
@@ -324,11 +344,20 @@ function updateOverlay(dt) {
   if (overlayT < 0.25) return;
   overlayT = 0;
   const size = renderer.getDrawingBufferSize(new THREE.Vector2());
-  overlayEl.textContent =
-    `${perf.fps.toFixed(1)} fps  ${perf.frameMs.toFixed(1)} ms\n` +
-    `${tier.name} ×${renderer.getPixelRatio().toFixed(2)}  ${size.x}×${size.y}\n` +
+  const pr = renderer.getPixelRatio();
+  // The watchdog only ever steps down, and only by 0.25, so the count is the distance travelled.
+  const steps = perf.steps;
+  const min = isFinite(perf.minFps) ? perf.minFps.toFixed(1) : '--';
+  const fps = perf.fps;
+  overlayNum.textContent = `${fps.toFixed(1)} fps`;
+  // Rune teal at or above the 30 fps target, HUD gold between there and the watchdog line, red under it.
+  overlayNum.style.color = fps <= 0 ? '#f1e6d8' : fps >= 30 ? '#7fe0ff' : fps >= WATCHDOG_MIN_FPS ? '#d99a5b' : '#e8695f';
+  overlayRest.textContent =
+    `min ${min}   steps ${steps}\n` +
+    `tier ${tier.name}  ×${pr.toFixed(2)}\n` +
+    `${size.x}×${size.y}  ${perf.frameMs.toFixed(1)} ms\n` +
     `${perf.drawCalls} calls  ${(perf.triangles / 1000).toFixed(0)}k tris\n` +
-    `${state.phase}  ${state.body.y.toFixed(1)} m  night ${state.night.toFixed(2)}`;
+    `${state.phase} ${state.body.y.toFixed(1)}m n${state.night.toFixed(2)}`;
 }
 
 const queuedEvents = [];
@@ -366,6 +395,7 @@ function start() {
   startClimb(state);
   upT = 0;                      // the watchdog's warm-up restarts with the climb (title → HUD swap compiles shaders)
   perf.minFps = Infinity;
+  perf.steps = 0;
   if (query.has('auto')) debug.autopilot(true);
   state.web.unlocked = spiderUnlocked();       // the egg, if the code has been typed
   hud.refreshCustomBtn();
@@ -373,6 +403,7 @@ function start() {
 
 function restart() {
   state = createClimber(generateRoute(route.seed));   // fresh holds: nothing lit, nothing remembered
+  perf.minFps = Infinity; perf.steps = 0;    // the overlay's min and step count are per climb, like start()
   state.web.unlocked = spiderUnlocked();
   startClimb(state);
   rig = createCameraRig(camera);
@@ -384,8 +415,33 @@ function restart() {
   hud.message('Light every rune · reach the altar', 3000);
 }
 
+// B40: the way back to the title, from the Menu button mid-climb or on the end screen. Same
+// rebuild as restart() — a fresh climber on the same seed — but it stops short of startClimb, so
+// the state is left in phase 'title' exactly as it was at boot and "Tap to begin" starts a clean
+// climb. hud.showTitle puts its own shell back (end screen, dead veil, pending end timer).
+function toTitle() {
+  state = createClimber(generateRoute(route.seed));
+  state.web.unlocked = spiderUnlocked();
+  rig = createCameraRig(camera);
+  rig.setPortrait(window.innerHeight >= window.innerWidth);
+  auto.target = null;
+  auto.restUntil = 0;
+  pendingTap.L = pendingTap.R = false;
+  debug.pause = false;                  // the confirmation's freeze never outlives the climb
+  // The theme belongs to the climb, and start() is the only thing that ever asked for it, so a
+  // title reached this way would keep playing over a screen the boot title leaves silent.
+  // setMusic(null) pauses the element (and stops the decoded fallback); start()'s setMusic(MUSIC_URL)
+  // finds the same src already loaded and simply plays it again.
+  audio.setMusic(null);
+  hud.showTitle({ touch, seeds: SEEDS, seed });
+}
+
 hud.onStart(start);
 hud.onRestart(restart);
+hud.onMenu(toTitle);
+// The mid-climb confirmation freezes the sim while it is up — the same freeze the evidence
+// harness uses — so a one-hand hang cannot run out while the question is being read.
+hud.onPause((on) => { debug.pause = !!on; });
 // Picking a route rebuilds the cliff, the holds, the decoys and the arms, so it goes through the
 // URL and one reload rather than a half-hearted in-place swap. It only happens on the title
 // screen, before anything has been climbed, and it leaves a link that opens the same route.
@@ -417,7 +473,7 @@ function frame(now) {
   const lookIn = inp.look;
   if (auto.on && !debug.pause) {
     const ai = autoInput(state);
-    inp = { L: ai.L, R: ai.R, tapL: inp.tapL || ai.tapL, tapR: inp.tapR || ai.tapR, look: lookIn };
+    inp = { L: ai.L, R: ai.R, tapL: inp.tapL || ai.tapL, tapR: inp.tapR || ai.tapR, look: lookIn, web: inp.web };
     hud.setStick('L', ai.L.x, ai.L.y);
     hud.setStick('R', ai.R.x, ai.R.y);
   }
@@ -437,6 +493,9 @@ function frame(now) {
         tapL: pendingTap.L, tapR: pendingTap.R,
         // held grips drive the web-zip's aim; without these the shot can never charge
         holdL: inp.holdL || heldDebug.L, holdR: inp.holdR || heldDebug.R,
+        // the WEB pad's gesture (B50): this literal names its fields, and a field it does not name
+        // never reaches the sim -- which is exactly how the pad's aim went missing in B48
+        web: inp.web,
       }, SIM_DT);
       pendingTap.L = pendingTap.R = false;
       acc -= SIM_DT;
