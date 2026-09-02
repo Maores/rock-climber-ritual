@@ -37,6 +37,11 @@ function steer(state, side, hold) {
   if (m > 1) { v.x /= m; v.y /= m; }
   return v;
 }
+// Hold the stick on `hold` for `seconds`, re-aiming every frame the way a thumb does while the
+// body is still moving. A stick aimed once goes stale as soon as the shoulder shifts.
+function drive(state, side, hold, seconds) {
+  for (let t = 0; t < seconds - 1e-9; t += DT) step(state, inp({ [side]: steer(state, side, hold) }), DT);
+}
 // Where the free left hand ends up with the stick straight up while the right hand hangs
 // alone from the right start hold: body (0.30, 0.70) → shoulder (0.11, 0.78) → hand (0.11, 1.50).
 const L_UP = { x: 0.25 + CFG.SWAY - CFG.SHOULDER_DX, y: 1.2 - CFG.HANG_ONE + CFG.SHOULDER_DY + CFG.REACH };
@@ -105,17 +110,103 @@ test('reach clamp: a free hand never leaves the REACH circle and a full stick re
   }
 });
 
-test('free hand: a released stick lingers, then drifts to the rest offset', () => {
+test('free hand: a released stick leaves the hand where it was steered (B45)', () => {
   const s = climber();
   step(s, inp({ tapL: true }), DT);
   run(s, 3, inp({ L: { x: 0.5, y: 0.5 } }));
   const p = { x: s.hands.L.x, y: s.hands.L.y };
-  run(s, CFG.LINGER * 0.8, inp());
-  near(dist(s.hands.L, p), 0, 0.02, 'hand moved during the linger');
-  run(s, 3, inp());
+  const off = { x: p.x - shoulder(s, 'L').x, y: p.y - shoulder(s, 'L').y };
+  run(s, 2, inp());                                    // thumb off the stick for two whole seconds
+  near(dist(s.hands.L, p), 0, 0.03, 'the hand went back where it came from');
+  const sh = shoulder(s, 'L');
+  assert.ok(dist(s.hands.L, { x: sh.x - CFG.REST_X, y: sh.y + CFG.REST_Y }) > 0.15, 'and it is not at the rest offset');
+  // It is parked as an offset from the shoulder, so it is still the same reach, not a world point.
+  near(s.hands.L.x - sh.x, off.x, 0.03, 'parked offset x');
+  near(s.hands.L.y - sh.y, off.y, 0.03, 'parked offset y');
+  // A zero stick from a device that reports `active` is a deliberate steer back to centre.
+  run(s, 2, inp({ L: { x: 0, y: 0, active: true } }));
+  near(s.hands.L.x, shoulder(s, 'L').x - CFG.REST_X, 0.02, 'rest x');
+  near(s.hands.L.y, shoulder(s, 'L').y + CFG.REST_Y, 0.02, 'rest y');
+});
+
+test('free hand: a hand that has not been steered since it left the rock hangs at the rest offset', () => {
+  const s = climber();
+  step(s, inp({ tapL: true }), DT);                    // let go without ever touching the stick
+  run(s, 2, inp());
   const sh = shoulder(s, 'L');
   near(s.hands.L.x, sh.x - CFG.REST_X, 0.02, 'rest x');
   near(s.hands.L.y, sh.y + CFG.REST_Y, 0.02, 'rest y');
+});
+
+test('free hand: a parked hand rides with the body while the other hand climbs (B45)', () => {
+  const s = climber([{ x: -0.30, y: 1.35 }]);          // a hold up and left of the two start holds
+  const up = s.route.holds[2];
+  step(s, inp({ tapL: true }), DT);
+  drive(s, 'L', up, 1.5);
+  step(s, inp({ tapL: true, L: steer(s, 'L', up) }), DT);
+  assert.equal(s.hands.L.holdId, 2, 'the left hand made the move');
+  step(s, inp({ tapR: true }), DT);                    // the right hand comes off and is flicked out
+  run(s, 0.25, inp({ R: { x: 0.8, y: -0.3 } }));
+  const sh0 = shoulder(s, 'R');
+  const off = { x: s.hands.R.tx - sh0.x, y: s.hands.R.ty - sh0.y };   // the parked target, as an offset
+  const p0 = { x: s.hands.R.x, y: s.hands.R.y };
+  run(s, 2, inp());                                    // thumb off: the body swings under the new grip
+  const sh1 = shoulder(s, 'R');
+  assert.ok(dist(sh0, sh1) > 0.15, `the shoulder only moved ${dist(sh0, sh1).toFixed(2)} m: nothing to ride`);
+  near(s.hands.R.tx - sh1.x, off.x, 1e-9, 'the parked target is an offset from the shoulder');
+  near(s.hands.R.ty - sh1.y, off.y, 1e-9);
+  near(s.hands.R.x - sh1.x, off.x, 0.02, 'and the hand settles on it');
+  near(s.hands.R.y - sh1.y, off.y, 0.02);
+  assert.ok(dist(s.hands.R, p0) > 0.15, 'so it travelled with the shoulder instead of hanging in the air');
+});
+
+test('free hand: standing at the base, a parked hand walks back under the route with you (B45)', () => {
+  const s = climber();
+  s.body.x = 0.9;                                      // standing off to one side of the route
+  step(s, inp({ tapL: true, tapR: true }), DT);        // both hands off with your feet down: not a fall
+  run(s, 0.5, inp({ L: { x: -0.7, y: 0.6 } }));        // steer the left hand out, then let the stick go
+  assert.equal(s.phase, 'grounded');
+  const sh0 = shoulder(s, 'L');
+  const off = { x: s.hands.L.tx - sh0.x, y: s.hands.L.ty - sh0.y };
+  run(s, 2.5, inp());
+  const sh1 = shoulder(s, 'L');
+  assert.ok(dist(sh0, sh1) > 0.4, `the climber only walked ${dist(sh0, sh1).toFixed(2)} m`);
+  near(s.hands.L.x - sh1.x, off.x, 0.01, 'the parked hand came along');
+  near(s.hands.L.y - sh1.y, off.y, 0.01);
+});
+
+test('free hand: a zero stick at the start of a climb does not move a hand off its hold (B45)', () => {
+  const s = climber();
+  const l = { x: s.hands.L.x, y: s.hands.L.y }, r = { x: s.hands.R.x, y: s.hands.R.y };
+  run(s, 2, inp());                                    // sticks read zero because nobody is touching them
+  assert.equal(s.hands.L.holdId, 0);
+  assert.equal(s.hands.R.holdId, 1);
+  near(dist(s.hands.L, l), 0, 1e-9);
+  near(dist(s.hands.R, r), 0, 1e-9);
+  run(s, 1, inp({ L: { x: 0, y: 0, active: true }, R: { x: 0, y: 0, active: true } }));
+  assert.equal(s.hands.L.gripping, true, 'an active stick at centre still does not peel a hand off rock');
+  assert.equal(s.hands.R.gripping, true);
+});
+
+test('free hand: steer, let go of the stick, THEN tap GRIP — the hand still arms and closes (B45)', () => {
+  const s = climber([{ x: L_UP.x + 0.29, y: L_UP.y - 0.06 }]);   // rock a third of a metre off to the side
+  step(s, inp({ tapL: true }), DT);
+  run(s, 1.5, inp({ L: { x: 0, y: 1 } }));             // steer straight up, short of the hold
+  run(s, 1.5, inp());                                  // thumb off the stick for a second and a half
+  const parked = { x: s.hands.L.x, y: s.hands.L.y };
+  const d = dist(s.hands.L, s.route.holds[2]);
+  assert.ok(d > CFG.SNAP && d <= CFG.HOVER_RANGE, `parked ${d.toFixed(2)} m from the hold, out of grab range`);
+  assert.equal(s.hands.L.nearId, 2, 'nearId keeps updating while the hand is parked');
+  assert.ok(s.hands.L.hover > 0, 'and so does hover');
+  drainEvents(s);
+  step(s, inp({ tapL: true }), DT);                    // the tap comes after the thumb is off the stick
+  assert.equal(s.hands.L.armed, true);
+  assert.deepEqual(types(s), ['miss', 'arm']);
+  near(dist(s.hands.L, parked), 0, 0.02, 'the tap did not move the hand');
+  drive(s, 'L', s.route.holds[2], 1.2);                // steer the armed hand onto the rock
+  assert.equal(s.hands.L.gripping, true);
+  assert.equal(s.hands.L.holdId, 2);
+  assert.deepEqual(types(s), ['grab']);
 });
 
 test('grab: a tap grabs the nearest hold within SNAP, closes the hand onto it (no teleport) and curls the fingers', () => {
@@ -172,7 +263,7 @@ test('grab: the settle is stable at the largest step (1/20 s) and ends locked on
   assert.equal(s.hands.L.vx, 0);
 });
 
-test('grab: lifting the thumb and tapping GRIP within the linger still takes the hold', () => {
+test('grab: lifting the thumb off the stick and then tapping GRIP still takes the hold', () => {
   const s = climber([{ x: L_UP.x, y: L_UP.y }]);
   step(s, inp({ tapL: true }), DT);
   run(s, 1.5, inp({ L: { x: 0, y: 1 } }));

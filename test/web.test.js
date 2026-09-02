@@ -145,6 +145,21 @@ test('web: catching rock mid-swing ends the swing and returns you to climbing', 
   }
 });
 
+test('swing: the free hand parks where the pump left it (B45)', () => {
+  const s = climber();
+  shoot(s);
+  run(s, 0.6, inp({ holdR: true }));
+  assert.equal(s.phase, 'swinging');
+  run(s, 0.5, inp({ holdR: true, L: { x: 0.9, y: 0.2 } }));   // the left stick pumps the swing, and steers
+  const sh0 = shoulder(s, 'L');
+  const off = { x: s.hands.L.tx - sh0.x, y: s.hands.L.ty - sh0.y };
+  run(s, 1.5, inp({ holdR: true }));                          // thumb off: the pumping stops, the arm stays out
+  const sh1 = shoulder(s, 'L');
+  assert.equal(s.phase, 'swinging');
+  assert.ok(Math.abs(s.hands.L.tx - sh1.x - off.x) < 1e-9 && Math.abs(s.hands.L.ty - sh1.y - off.y) < 1e-9,
+    'the hand target rides the shoulder around the swing instead of drifting back to rest');
+});
+
 test('web: cutWeb from outside is safe when nothing is out', () => {
   const s = climber();
   cutWeb(s);
