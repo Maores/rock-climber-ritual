@@ -27,3 +27,13 @@ All textures and HDRIs here are CC0 from Poly Haven (https://polyhaven.com):
 
 - three.js (MIT) vendored under `vendor/three`.
 - Fonts Cinzel and Inter served from Google Fonts (SIL Open Font License).
+
+## Web-shooter sound
+
+The film's own "thwip" is copyrighted, so the shot is built rather than lifted: a real recorded
+air swish with a synthesised shooter click and a pressurised spray tail layered over it at
+runtime.
+
+- `audio/thwip.mp3` — one swish from the **Swishes Sound Pack** by artisticdude, OpenGameArt,
+  **CC0** (https://opengameart.org/content/swishes-sound-pack). Trimmed, high-passed and
+  re-encoded to mono; no other change.

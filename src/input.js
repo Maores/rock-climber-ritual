@@ -48,6 +48,7 @@ export function createInput({ hud = null, keyboard = true, win, now = defaultNow
   const active = { L: null, R: null };                         // pointerId holding each stick
   const virtual = { L: { x: 0, y: 0 }, R: { x: 0, y: 0 } };   // keyboard sticks
   const taps = { L: false, R: false };
+  const holds = { L: false, R: false };   // grip currently held down (the spider hand aims on a hold)
   const held = new Set();
   const cleanups = [];
   let lastT = now();
@@ -193,7 +194,17 @@ export function createInput({ hud = null, keyboard = true, win, now = defaultNow
       const side = e.button === 0 ? 'L' : 'R';
       mouseSide = side;
       taps[side] = true;
+      holds[side] = true;
     });
+    const up = (e) => {
+      if (e.pointerType && e.pointerType !== 'mouse') return;
+      if (e.button === 0) holds.L = false;
+      else if (e.button === 2) holds.R = false;
+      else holds.L = holds.R = false;
+    };
+    on(el, 'pointerup', up);
+    on(el, 'pointercancel', () => { holds.L = holds.R = false; });
+    on(target || el, 'blur', () => { holds.L = holds.R = false; });
     on(el, 'contextmenu', prevent);           // the right button is a grip, not a menu
   }
   if (mouse) bindMouse(mouse);
@@ -231,6 +242,7 @@ export function createInput({ hud = null, keyboard = true, win, now = defaultNow
       look.x = src.x; look.y = src.y;
     } else { look.x = 0; look.y = 0; }
     out.look = look;
+    out.holdL = holds.L; out.holdR = holds.R;
     for (const side of ['L', 'R']) {
       if (lookHeld) { out[side].x = 0; out[side].y = 0; if (hud && typeof hud.setStick === 'function') hud.setStick(side, 0, 0); continue; }
       // touch stick wins, then the cursor for the hand it is driving, then the keyboard

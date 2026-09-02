@@ -43,7 +43,8 @@ Hand  = { side:'L'|'R', x, y, vx, vy, tx, ty, gripping, holdId|null, armed, stam
 Hold  = { id, x, y, size (0.10..0.24 radius), kind: 'hold'|'rune'|'summit', lit:boolean, angle }
 Event = { type: 'start'|'grab'|'release'|'miss'|'arm'|'slip'|'rune'|'fall'|'catch'|'summit', hand?: 'L'|'R', holdId?: number }
 Input = { L:{x,y}, R:{x,y}, tapL:boolean, tapR:boolean,
-          look:{ x, y, active } }                          // look: hold-to-look; sim ignores it, the camera rig consumes it (true for one frame)
+          look:{ x, y, active },                           // look: hold-to-look; sim ignores it, the camera rig consumes it
+          holdL:boolean, holdR:boolean }                   // grip currently HELD; the spider hand aims on a held right grip (true for one frame)
 ```
 Constants live in `sim.js` as `CFG`: REACH 0.72, SNAP 0.16, SHOULDER_DX 0.19, SHOULDER_DY 0.08, HANG_TWO 0.42, HANG_ONE 0.50,
 ROPE_SLACK 1.3, GRACE 0.25, drain two-hand 0.05/s, one-hand 0.20/s, refill free 0.18/s, rune refill 0.50/s, forced release at 0.

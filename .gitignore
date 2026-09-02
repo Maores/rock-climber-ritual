@@ -9,3 +9,6 @@ tools/
 # Spider reference scans: fetched to sample colour, never shipped (see assets/models/spider/NOTICE.md)
 assets/models/spider/*.glb
 assets/models/spider/tex_*
+
+# CC0 source audio kept locally; only the converted thwip.mp3 ships
+assets/audio/src_cc0/

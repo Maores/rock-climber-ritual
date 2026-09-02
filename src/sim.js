@@ -46,6 +46,18 @@ export const CFG = Object.freeze({
   CURL_RATE: 12, TREMBLE_RATE: 6,
   ROPE_ANCHOR_UP: 1.6,  // rope anchor sits this far above the summit hold
   EVENT_CAP: 64,        // undrained events are dropped beyond this
+
+  // --- the web-zip (the unlocked spider hand only) -------------------------------------
+  WEB_RANGE: 7.0,       // furthest a shot reaches
+  WEB_MIN: 1.1,         // nearest anchor worth taking
+  WEB_SPEED: 26,        // m/s the shot travels out
+  WEB_COOLDOWN: 3.0,    // seconds after letting go before the next shot
+  WEB_AIM_HOLD: 0.16,   // hold the grip this long and it becomes an aim instead of a grab
+  SWING_DAMP: 0.22,     // energy bled off per second while swinging
+  SWING_PUMP: 5.5,      // how hard the free stick drives the swing
+  SWING_REEL: 1.5,      // m/s the line shortens while you pull yourself up it
+  SWING_MIN_LEN: 0.7,   // never reel closer than this to the anchor
+  SWING_RELEASE_BOOST: 1.06,
 });
 
 const ZERO_STICK = Object.freeze({ x: 0, y: 0 });
@@ -81,6 +93,8 @@ export function createClimber(route) {
     hands: { L: makeHand('L', h0), R: makeHand('R', h1) },
     ropeAnchor: { x: summit.x, y: summit.y + CFG.ROPE_ANCHOR_UP },
     fallCount: 0, height: 0, maxHeight: 0,
+    // The web-zip. `mode` is idle → aiming → flying → attached; `cd` is the cooldown left.
+    web: { mode: 'idle', ax: 0, ay: 0, tipX: 0, tipY: 0, len: 0, cd: 0, aimX: 0, aimY: 1, unlocked: false },
     runesLit: [], checkpoint: null, night: 0,
     route, events: [],
     _fall: { t: 0, from: 0, catchY: 0, catchX: 0 },
@@ -152,14 +166,16 @@ export function step(state, input, dt) {
   if (dt === 0) return;
   const inp = input || ZERO_INPUT;
   state.t += dt;
-  const live = state.phase === 'climbing' || state.phase === 'falling' || state.phase === 'caught';
+  const live = state.phase === 'climbing' || state.phase === 'falling' || state.phase === 'caught' ||
+    state.phase === 'swinging';
 
+  const webTap = updateWeb(state, inp, dt);      // may swallow the right tap as a shot
   if (live) {
     if (inp.tapL) tap(state, state.hands.L);
-    if (inp.tapR) tap(state, state.hands.R);
+    if (inp.tapR && !webTap) tap(state, state.hands.R);
     updateStamina(state, dt);
   }
-  updateBody(state, dt);
+  updateBody(state, dt, inp);
   updateHand(state, state.hands.L, live ? inp.L : null, dt);
   updateHand(state, state.hands.R, live ? inp.R : null, dt);
 
@@ -167,6 +183,152 @@ export function step(state, input, dt) {
   state.height = b.y;
   if (b.y > state.maxHeight) state.maxHeight = b.y;
   state.night = clamp01(b.y / state.route.top);
+}
+
+// ---------------------------------------------------------------------------------------
+// The web-zip. Only the unlocked spider hand can shoot, and only the right hand.
+//
+//   idle → (hold the right grip past WEB_AIM_HOLD) aiming → (let go) flying → attached
+//
+// While attached the body is a pendulum on a rigid line: gravity acts, then the position is
+// projected back onto the circle around the anchor and the radial part of the velocity is
+// dropped. That is a position-based constraint, which stays stable at any frame rate rather
+// than exploding the way a stiff spring would.
+function updateWeb(state, inp, dt) {
+  const w = state.web;
+  if (w.cd > 0) w.cd = Math.max(0, w.cd - dt);
+  if (!w.unlocked) return false;
+
+  const hand = state.hands.R;
+  const holding = !!inp.holdR;
+  // Hanging on the rope is exactly when you want to shoot, so 'caught' counts too.
+  const canShoot = state.phase === 'climbing' || state.phase === 'falling' ||
+    state.phase === 'swinging' || state.phase === 'caught';
+
+  // Aim vector: whatever the right stick is pushing, defaulting to straight up.
+  const ax = (inp.R && +inp.R.x) || 0, ay = (inp.R && +inp.R.y) || 0;
+  if (Math.hypot(ax, ay) > 0.08) { w.aimX = ax; w.aimY = ay; }
+
+  if (w.mode === 'idle') {
+    if (holding && !hand.gripping && w.cd <= 0 && canShoot) {
+      w._hold = (w._hold || 0) + dt;
+      if (w._hold >= CFG.WEB_AIM_HOLD) { w.mode = 'aiming'; w._hold = 0; push(state, { type: 'aim' }); }
+    } else w._hold = 0;
+    return false;
+  }
+
+  if (w.mode === 'aiming') {
+    if (!holding) return fire(state);            // letting go looses the shot
+    return true;                                 // the grip tap is the aim, not a grab
+  }
+
+  if (w.mode === 'flying') {
+    const dx = w.ax - w.tipX, dy = w.ay - w.tipY;
+    const d = Math.hypot(dx, dy);
+    const stepLen = CFG.WEB_SPEED * dt;
+    if (d <= stepLen) {
+      w.tipX = w.ax; w.tipY = w.ay;
+      w.mode = 'attached';
+      w.len = Math.hypot(state.body.x - w.ax, state.body.y - w.ay);
+      state.phase = 'swinging';
+      releaseBoth(state);
+      push(state, { type: 'webhit' });
+    } else {
+      w.tipX += (dx / d) * stepLen;
+      w.tipY += (dy / d) * stepLen;
+    }
+    return !!inp.tapR;
+  }
+
+  if (w.mode === 'attached') {
+    if (inp.tapR || !holding) { cutWeb(state); return true; }
+    return true;
+  }
+  return false;
+}
+
+function fire(state) {
+  const w = state.web;
+  const sh = shoulder(state, 'R');
+  let m = Math.hypot(w.aimX, w.aimY);
+  if (m < 1e-4) { w.aimX = 0; w.aimY = 1; m = 1; }
+  const dx = w.aimX / m, dy = w.aimY / m;
+  const reach = CFG.WEB_RANGE;
+  w.ax = sh.x + dx * reach;
+  w.ay = sh.y + dy * reach;
+  // The cliff is the only thing up there to hit, so a shot always lands; it just cannot land
+  // below the climber's feet or off the face.
+  const R = state.route;
+  w.ax = Math.max(-4.2, Math.min(4.2, w.ax));
+  w.ay = Math.max(CFG.FLOOR + 0.4, Math.min(R.top + 1.4, w.ay));
+  if (Math.hypot(w.ax - sh.x, w.ay - sh.y) < CFG.WEB_MIN) { w.mode = 'idle'; w.cd = 0.35; push(state, { type: 'webmiss' }); return true; }
+  w.tipX = sh.x; w.tipY = sh.y;
+  w.mode = 'flying';
+  push(state, { type: 'webshot' });
+  return true;
+}
+
+function releaseBoth(state) {
+  for (const side of ['L', 'R']) {
+    const h = state.hands[side];
+    if (h.gripping) release(state, h, 'release');
+  }
+}
+
+// Let go of the line: keep the velocity you had, so a well-timed release throws you.
+export function cutWeb(state) {
+  const w = state.web;
+  if (w.mode === 'idle') return;
+  const wasAttached = w.mode === 'attached';
+  w.mode = 'idle';
+  w._hold = 0;
+  w.cd = CFG.WEB_COOLDOWN;
+  if (wasAttached) {
+    const b = state.body;
+    b.vx *= CFG.SWING_RELEASE_BOOST;
+    b.vy *= CFG.SWING_RELEASE_BOOST;
+    beginFall(state);
+    push(state, { type: 'webcut' });
+  }
+}
+
+// The pendulum itself.
+function updateSwing(state, inp, dt) {
+  const w = state.web, b = state.body;
+  b.vy -= CFG.GRAVITY * dt;
+
+  // the free stick drives the swing, the way a climber pumps their legs
+  const px = (inp && inp.L && +inp.L.x) || 0;
+  if (px) b.vx += px * CFG.SWING_PUMP * dt;
+  // pushing the stick up reels you in along the line
+  const py = (inp && inp.L && +inp.L.y) || 0;
+  if (py > 0.1) w.len = Math.max(CFG.SWING_MIN_LEN, w.len - py * CFG.SWING_REEL * dt);
+
+  const damp = Math.exp(-CFG.SWING_DAMP * dt);
+  b.vx *= damp; b.vy *= damp;
+
+  b.x += b.vx * dt;
+  b.y += b.vy * dt;
+
+  // rigid-line constraint: pull the body back onto the circle, then kill the radial velocity
+  let dx = b.x - w.ax, dy = b.y - w.ay;
+  const d = Math.hypot(dx, dy);
+  if (d > 1e-5) {
+    dx /= d; dy /= d;
+    b.x = w.ax + dx * w.len;
+    b.y = w.ay + dy * w.len;
+    const radial = b.vx * dx + b.vy * dy;
+    if (radial > 0) { b.vx -= radial * dx; b.vy -= radial * dy; }   // the line cannot push
+  }
+  // The ground is a hard constraint too. When the swing dips into it, the floor wins and the
+  // line is left slightly slack for that frame; `grounded` says so, so nothing downstream
+  // assumes the body is exactly on the circle.
+  w.grounded = false;
+  if (b.y < CFG.FLOOR) {
+    b.y = CFG.FLOOR;
+    if (b.vy < 0) b.vy = 0;
+    w.grounded = true;
+  }
 }
 
 function push(state, ev) {
@@ -179,7 +341,7 @@ function anyGripping(state) {
 
 // Grabs work while climbing, while hanging on the rope, and in the grace window of a fall.
 function canGrab(state) {
-  return state.phase === 'climbing' || state.phase === 'caught' ||
+  return state.phase === 'climbing' || state.phase === 'caught' || state.phase === 'swinging' ||
     (state.phase === 'falling' && state._fall.t <= CFG.GRACE);
 }
 
@@ -255,6 +417,13 @@ function targetHold(state, hand) {
 }
 
 function grab(state, hand, hold) {
+  // Catching rock mid-swing ends the swing: the line goes slack and you are climbing again.
+  if (state.phase === 'swinging') {
+    state.web.mode = 'idle';
+    state.web.cd = CFG.WEB_COOLDOWN;
+    state.phase = 'climbing';
+    push(state, { type: 'webcut' });
+  }
   hand.gripping = true;
   hand.holdId = hold.id;
   hand.armed = false;
@@ -348,8 +517,9 @@ function springCritical(obj, pk, vk, target, omega, dt) {
   obj[vk] = (v0 - k * omega) * e;
 }
 
-function updateBody(state, dt) {
+function updateBody(state, dt, inp) {
   const b = state.body;
+  if (state.phase === 'swinging') { updateSwing(state, inp, dt); return; }
   if (state.phase === 'falling') {
     const f = state._fall;
     f.t += dt;

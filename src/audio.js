@@ -212,6 +212,31 @@ export function createAudio() {
       noise(t, 1.6, 0.16, { type: 'lowpass', f0: 110, f1: 900, a: 0.6, q: 0.5 });
       chime(330, 0.12, master, t + 0.2);
     },
+    // aiming: the shooter primes with a short mechanical tick
+    aim(e) {
+      const t = now(), d = pan(e && e.hand);
+      tone('square', 1400, 900, t, 0.03, 0.05, 0.001, d);
+    },
+    // the shot: a real recorded air swish (CC0) with a click and a pressurised spray over it
+    webshot(e) {
+      const t = now(), d = pan(e && e.hand);
+      playSample('thwip', t, 0.9, d);
+      tone('square', 900, 320, t, 0.04, 0.11, 0.001, d);              // the shooter
+      noise(t + 0.01, 0.22, 0.24, { type: 'highpass', f0: 2400, f1: 900, a: 0.002, dest: d });  // spray
+    },
+    webhit(e) {
+      const t = now(), d = pan(e && e.hand);
+      noise(t, 0.14, 0.30, { type: 'bandpass', f0: 700, f1: 240, q: 0.9, a: 0.001, dest: d });
+      tone('sine', 150, 70, t, 0.20, 0.24, 0.003, d);
+    },
+    webcut(e) {
+      const t = now(), d = pan(e && e.hand);
+      noise(t, 0.18, 0.16, { type: 'highpass', f0: 1400, f1: 500, a: 0.004, dest: d });
+    },
+    webmiss(e) {
+      const t = now(), d = pan(e && e.hand);
+      noise(t, 0.10, 0.10, { type: 'bandpass', f0: 800, q: 1.2, a: 0.002, dest: d });
+    },
     // a decoy giving way: dry crack, then grit falling away from under the fingers
     crumble(e) {
       const t = now(), d = pan(e.hand);
@@ -465,6 +490,37 @@ export function createAudio() {
       musicWanted = true;
       if (musicGain) musicGain.gain.setTargetAtTime(MUSIC_GAIN, now(), 1.6);
     }
+  }
+
+  // ---- one-shot samples -------------------------------------------------------------------
+  // Everything else here is synthesised; the web shot layers one short recorded swish (CC0)
+  // under its synth so the air sounds real. Loaded lazily on first use and cached.
+  const samples = new Map();
+  const SAMPLE_URLS = { thwip: 'assets/audio/thwip.mp3' };
+
+  function playSample(name, when, gain = 1, dest = null) {
+    if (!ctx || !audio.unlocked) return;
+    const have = samples.get(name);
+    if (have && have.buffer) {
+      const src = ctx.createBufferSource();
+      src.buffer = have.buffer;
+      src.playbackRate.value = 0.94 + Math.random() * 0.12;    // never twice the same
+      const g = ctx.createGain();
+      g.gain.value = gain;
+      src.connect(g).connect(dest || master);
+      try { src.start(when || ctx.currentTime); } catch (e) {}
+      return;
+    }
+    if (have) return;                                          // already loading
+    const url = SAMPLE_URLS[name];
+    if (!url) return;
+    const rec = { buffer: null };
+    samples.set(name, rec);
+    fetch(url)
+      .then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(new Error('HTTP ' + r.status))))
+      .then((ab) => ctx.decodeAudioData(ab))
+      .then((buf) => { rec.buffer = buf; })
+      .catch(() => { samples.delete(name); });                 // silent: the synth still fires
   }
 
   async function fallbackMusic() {

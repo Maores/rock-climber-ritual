@@ -11,6 +11,8 @@ import * as THREE from 'three';
 import { CFG, createClimber, startClimb, step, drainEvents, shoulder, hangTarget } from './sim.js';
 import { generateRoute, intendedHand } from './route.js';
 import { createInput } from './input.js';
+import { createWebLine } from './webLine.js';
+import { spiderUnlocked } from './spiderHand.js';
 import { createWorld } from './world.js';
 import { createPost } from './post.js';
 import { createArms } from './arms.js';
@@ -94,6 +96,29 @@ let post = null;     // created once the renderer has its size (below)
 let world = null;
 let arms = null;
 
+// --- the web-zip's line ------------------------------------------------------------------
+// One line, built once and pointed each frame. It only exists once the egg is unlocked.
+let webLine = null;
+function updateWebLine() {
+  const w = state.web;
+  if (!w || !w.unlocked || !world) return;
+  if (!webLine) { webLine = createWebLine({ variant: 'rope' }); scene.add(webLine.group); }
+  if (w.mode === 'flying' || w.mode === 'attached') {
+    const hand = state.hands.R;
+    const hz = world.wallZ(hand.x, hand.y) + 0.05;
+    const az = world.wallZ(w.ax, w.ay) + 0.02;
+    const grow = w.mode === 'attached' ? 1
+      : Math.min(0.999, Math.hypot(w.tipX - hand.x, w.tipY - hand.y) / Math.max(1e-3, Math.hypot(w.ax - hand.x, w.ay - hand.y)));
+    webLine.set(
+      new THREE.Vector3(hand.x, hand.y, hz),
+      new THREE.Vector3(w.ax, w.ay, az),
+      { grow },
+    );
+  } else {
+    webLine.visible = false;
+  }
+}
+
 // ---------------------------------------------------------------------------------------------
 // Perf counters + fps watchdog (evidence reads window.__ritual.perf)
 
@@ -154,7 +179,8 @@ if (window.visualViewport) window.visualViewport.addEventListener('resize', resi
 // Debug surface (window.__ritual.debug): autopilot through the Input interface, teleport,
 // pause/advance, fps overlay. Used by the test/evidence harness only.
 
-const zeroInput = () => ({ L: { x: 0, y: 0 }, R: { x: 0, y: 0 }, tapL: false, tapR: false });
+const zeroInput = () => ({ L: { x: 0, y: 0 }, R: { x: 0, y: 0 }, tapL: false, tapR: false, holdL: false, holdR: false });
+const heldDebug = { L: false, R: false };   // debug.hold(side, on) — the evidence harness fires the web with this
 const OTHER = { L: 'R', R: 'L' };
 
 // dwell: seconds both hands rest after a grab before the next move — a human pace, not a blur.
@@ -302,6 +328,7 @@ const debug = {
   },
   fall() { pendingTap.L = pendingTap.R = true; },
   tap(side) { pendingTap[side] = true; },
+  hold(side, on = true) { heldDebug[side] = !!on; return heldDebug; },
   start() {
     const title = document.getElementById('title');
     if (title && !title.hidden) title.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true }));
@@ -319,10 +346,12 @@ function start() {
   upT = 0;                      // the watchdog's warm-up restarts with the climb (title → HUD swap compiles shaders)
   perf.minFps = Infinity;
   if (query.has('auto')) debug.autopilot(true);
+  state.web.unlocked = spiderUnlocked();       // the egg, if the code has been typed
 }
 
 function restart() {
   state = createClimber(generateRoute(route.seed));   // fresh holds: nothing lit, nothing remembered
+  state.web.unlocked = spiderUnlocked();
   startClimb(state);
   rig = createCameraRig(camera);
   rig.setPortrait(window.innerHeight >= window.innerWidth);
@@ -372,7 +401,12 @@ function frame(now) {
     acc += dt * Math.max(0, debug.timeScale || 1);
     const maxSteps = Math.ceil(16 * Math.max(1, debug.timeScale || 1));
     while (acc >= SIM_DT && steps < maxSteps) {
-      step(state, { L: inp.L, R: inp.R, tapL: pendingTap.L, tapR: pendingTap.R }, SIM_DT);
+      step(state, {
+        L: inp.L, R: inp.R,
+        tapL: pendingTap.L, tapR: pendingTap.R,
+        // held grips drive the web-zip's aim; without these the shot can never charge
+        holdL: inp.holdL || heldDebug.L, holdR: inp.holdR || heldDebug.R,
+      }, SIM_DT);
       pendingTap.L = pendingTap.R = false;
       acc -= SIM_DT;
       steps++;
@@ -393,6 +427,7 @@ function frame(now) {
   renderer.info.reset();
   world.update(dt, state, camera);
   arms.update(dt, state, world.wallZ, camera);
+  updateWebLine();
   rig.update(dt, state, world.wallZ, events, lookIn);
   hud.update(state, events);
   audio.handle(events, state, dt);
