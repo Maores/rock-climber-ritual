@@ -2,8 +2,15 @@
 
 A first-person climbing game for the phone and the desktop browser. Each hand has its own
 joystick and its own GRIP button: steer a hand to a hold, tap GRIP, then move the other one.
-Hanging drains a hand, the glowing runes are rests and checkpoints, and the rope catches every
-fall. Light every rune and reach the summit altar.
+Hanging drains a hand and the glowing runes are rests. **Nothing catches you**: lose both hands
+and you fall the whole cliff. Light every rune and reach the summit altar.
+
+**Four routes.** The title screen offers Ritual, Ladder, Serpent and Ordeal. Generation is
+deterministic per seed, so each name is a fixed climb, not a shuffle: Ladder is 42 jugs with easy
+rock down low, Serpent wanders 0.70 m either side of centre, and Ordeal is 31 crimps, 18 slopers
+and mostly poor rock up high. Picking one reloads the page with `?seed=` in the URL, so a link
+opens the same climb for anyone. Any other `?seed=<n>` generates under the same rules — every seed
+from 1 to 40 has been checked by the playability bot.
 
 **Play:** open the deployed page, or run it locally.
 
@@ -23,7 +30,7 @@ are pure logic with no renderer imports, covered by `node --test test/`.
 | Module | Owns |
 |---|---|
 | `src/sim.js`, `src/route.js`, `src/input.js` | climbing simulation, route generation, touch/mouse/keyboard input |
-| `src/world.js`, `src/env.js`, `src/post.js` | cliff, holds, runes, rope, dusk-to-night lighting, bloom and grain |
+| `src/world.js`, `src/env.js`, `src/post.js` | cliff, holds, runes, decoys, dusk-to-night lighting, bloom and grain |
 | `src/arms.js`, `src/camera.js` | rigged hands and arms, camera rig |
 | `src/hud.js`, `src/audio.js` | HUD, title and end screens, synthesized sound |
 | `src/main.js` | wiring and the frame loop |

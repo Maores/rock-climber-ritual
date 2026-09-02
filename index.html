@@ -9,7 +9,7 @@
 <meta name="apple-mobile-web-app-title" content="The Ritual">
 <meta name="theme-color" content="#0a0c18">
 <meta name="color-scheme" content="dark">
-<meta name="description" content="Rock Climber: The Ritual — a first-person climb up a sacred cliff at dusk. Two thumbs, two hands, one rope.">
+<meta name="description" content="Rock Climber: The Ritual — a first-person climb up a sacred cliff at dusk. Two thumbs, two hands, and nothing to catch you.">
 <title>Rock Climber: The Ritual</title>
 <link rel="manifest" href="./manifest.webmanifest">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%230a0c18'/%3E%3Cg fill='none' stroke='%237fe0ff' stroke-width='3' stroke-linecap='round'%3E%3Ccircle cx='32' cy='32' r='22' opacity='.55'/%3E%3Cpath d='M32 14v36M32 28L20 16M32 28l12-12'/%3E%3C/g%3E%3C/svg%3E">
@@ -975,10 +975,9 @@ kbd {
   <div id="fallflash"></div>
   <div id="vig"></div>
   <div id="top">
-    <div id="falls" title="Falls caught by the rope">
-      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M8 1v5.5M8 6.5c-3 0-4 2.2-4 4.2 0 1.8 1.2 3.3 4 3.3s4-1.5 4-3.3c0-2-1-4.2-4-4.2z"/></svg>
-      <span>Falls</span><b>0</b>
-    </div>
+    <!-- B43: the rope is gone, so nothing counts falls. Kept as an empty slot: #top is a
+         three-column grid and the height meter is the middle one. -->
+    <div id="falls" hidden></div>
     <div id="meter">
       <div id="height">0.0<small>m</small></div>
       <div id="runes"></div>

@@ -52,11 +52,11 @@ test('createClimber: title phase, both hands on the start holds, full stamina, b
   assert.equal(s.hands.R.stamina, 1);
   near(s.body.x, 0, 1e-9);
   near(s.body.y, 1.2 - CFG.HANG_TWO, 1e-9);
-  assert.equal(s.fallCount, 0);
   assert.deepEqual(s.runesLit, []);
   assert.equal(s.checkpoint, null);
   near(s.night, s.body.y / 40, 1e-9);
-  assert.deepEqual(s.ropeAnchor, { x: 0.25, y: 1.2 + CFG.ROPE_ANCHOR_UP });
+  assert.equal(s.ropeAnchor, undefined, 'B43: there is no rope, so there is no anchor to hang it from');
+  assert.equal(s.fallCount, undefined, 'B43: nothing counts falls, because one fall ends the climb');
   assert.deepEqual(s.events, []);
 });
 
@@ -355,37 +355,33 @@ test('stamina: slipping off the last hold starts a fall', () => {
   assert.ok(types(s).includes('fall'));
 });
 
-test('rope: after ROPE_SLACK the rope catches, counts the fall, bounces and settles; a grab resumes the climb', () => {
-  const s = climber([{ x: -0.19, y: 10 - CFG.HANG_TWO - CFG.ROPE_SLACK + CFG.SHOULDER_DY + 0.55 }], 10);
+test('fall: nothing catches you — the plunge runs to the ground and ends the climb', () => {
+  const s = climber([], 10);
   const from = s.body.y;
   step(s, inp({ tapL: true, tapR: true }), DT);
-  let minY = Infinity, caughtAt = null;
-  for (let t = 0; t < 3; t += DT) {
+  let hitAt = null, maxSpeed = 0;
+  for (let t = 0; t < 8 && hitAt === null; t += DT) {
     step(s, inp(), DT);
-    minY = Math.min(minY, s.body.y);
-    if (caughtAt === null && s.phase === 'caught') caughtAt = t;
+    maxSpeed = Math.max(maxSpeed, Math.abs(s.body.vy));
+    if (s.phase === 'fallen') hitAt = t;
   }
-  const catchY = from - CFG.ROPE_SLACK;
-  assert.equal(s.phase, 'caught');
-  assert.ok(caughtAt > 0.4 && caughtAt < 0.7, `caught at ${caughtAt}s`);
-  assert.equal(s.fallCount, 1);
+  assert.equal(s.phase, 'fallen', 'the fall must reach the ground');
+  near(s.body.y, CFG.FLOOR, 1e-9, 'and stop there');
+  assert.equal(s.body.vy, 0);
   const ev = types(s);
-  assert.equal(ev.filter((e) => e === 'catch').length, 1);
-  assert.ok(minY < catchY - 0.05 && minY > catchY - 0.6, `rope stretch ${catchY - minY}`);
-  near(s.body.y, catchY, 0.03, 'settled at the catch height');
+  assert.ok(!ev.includes('catch'), 'B43: there is no rope, so nothing is ever caught');
+  assert.equal(ev.filter((e) => e === 'fall').length, 1);
+  assert.equal(ev.filter((e) => e === 'impact').length, 1);
+  assert.equal(ev.filter((e) => e === 'fallen').length, 1);
+  // It falls the whole way, under gravity, capped so the drop reads instead of blurring.
+  assert.ok(maxSpeed <= CFG.FALL_TERMINAL + 1e-6, `terminal velocity broken: ${maxSpeed}`);
+  const freeFall = Math.sqrt(2 * (from - CFG.FLOOR) / CFG.GRAVITY);
+  assert.ok(hitAt > freeFall * 0.9 && hitAt < freeFall * 1.6, `fell ${from - CFG.FLOOR} m in ${hitAt}s`);
   assert.equal(s.hands.L.gripping, false);
   assert.equal(s.hands.R.gripping, false);
-  // Both hands refilled while hanging; a grab from the rope goes back to climbing.
-  assert.equal(s.hands.L.stamina, 1);
-  step(s, inp({ tapL: true }), DT);
-  assert.equal(s.hands.L.armed, true);
-  for (let t = 0; t < 3; t += DT) step(s, inp({ L: steer(s, 'L', s.route.holds[2]) }), DT);
-  assert.equal(s.phase, 'climbing');
-  assert.equal(s.hands.L.holdId, 2);
-  near(s.body.y, s.route.holds[2].y - CFG.HANG_ONE, 0.03, 'the body hangs from the new hold');
 });
 
-test('rope: a grab inside the grace window saves the fall without a catch', () => {
+test('fall: a grab inside the grace window saves it, and nothing is counted', () => {
   const s = climber([], 10);
   step(s, inp({ tapL: true, tapR: true }), DT);
   run(s, 0.12, inp());
@@ -393,31 +389,33 @@ test('rope: a grab inside the grace window saves the fall without a catch', () =
   step(s, inp({ tapL: true }), DT);                    // the left hand is still next to hold 0
   assert.equal(s.phase, 'climbing');
   assert.equal(s.hands.L.holdId, 0);
-  assert.equal(s.fallCount, 0);
-  assert.ok(!types(s).includes('catch'));
+  const ev = types(s);
+  assert.ok(!ev.includes('catch'));
+  assert.ok(!ev.includes('fallen'), 'saved in time: the climb goes on');
 });
 
-test('rope: after the grace window nothing can be grabbed until the rope catches', () => {
+test('fall: past the grace window nothing can be grabbed, all the way to the ground', () => {
   const s = climber([{ x: -0.25, y: 10 - 0.8 }], 10);  // a hold the falling left hand passes at ~0.4 s
   step(s, inp({ tapL: true, tapR: true }), DT);
   run(s, 0.3, inp());
   step(s, inp({ tapL: true }), DT);                    // arms only: past the grace window
   assert.equal(s.hands.L.armed, true);
   assert.ok(!types(s).includes('miss'));
-  run(s, 1.5, inp());
-  assert.equal(s.phase, 'caught');
-  assert.equal(s.hands.L.gripping, false);
-  assert.equal(s.fallCount, 1);
+  run(s, 6, inp());
+  assert.equal(s.phase, 'fallen');
+  assert.equal(s.hands.L.gripping, false, 'the hold it passed must not save it');
+  assert.ok(types(s).includes('fallen'));
 });
 
-test('rope: near the ground the floor catches the fall and the start holds stay in reach', () => {
+test('fall: letting go with your feet on the ground is not a fall', () => {
   const s = climber();
   s.body.x = 0.6;                                      // even when the body was off to one side
+  assert.ok(s.body.y <= CFG.FLOOR + CFG.HANG_TWO, 'the start hang is within standing height');
   step(s, inp({ tapL: true, tapR: true }), DT);
   run(s, 4, inp());
-  assert.equal(s.phase, 'caught');
+  assert.equal(s.phase, 'grounded', 'you were standing, so you stay standing');
   near(s.body.y, CFG.FLOOR, 0.03);
-  near(s.body.x, 0, 0.05, 'the rope swings the body back under the holds');
+  assert.ok(!types(s).includes('fallen'), 'no death screen for stepping off the ground');
   assert.ok(dist(shoulder(s, 'L'), s.route.holds[0]) <= 0.9 * CFG.REACH);
   assert.ok(dist(shoulder(s, 'R'), s.route.holds[1]) <= 0.9 * CFG.REACH);
 });
@@ -544,7 +542,7 @@ test('autopilot: the generated route can be climbed to the summit without a fall
   const log = [];
   botClimb(s, 2, route.holds.length - 1, log);
   assert.equal(s.phase, 'summit');
-  assert.equal(s.fallCount, 0);
+  assert.ok(!log.includes('fall'), 'a steady rhythm should never fall');
   assert.equal(s.runesLit.length, Math.ceil(ROUTE.TOP / ROUTE.RUNE_EVERY) - 1);
   assert.equal(log.filter((t) => t === 'rune').length, Math.ceil(ROUTE.TOP / ROUTE.RUNE_EVERY) - 1);
   assert.equal(log.filter((t) => t === 'summit').length, 1);
@@ -552,7 +550,7 @@ test('autopilot: the generated route can be climbed to the summit without a fall
   assert.ok(s.t < 480, `took ${s.t.toFixed(0)} s`);
 });
 
-test('autopilot: after a fall the rope catches and the climb can continue to the summit', () => {
+test('autopilot: a fall from anywhere on the route runs to the ground and ends the climb', () => {
   const route = generateRoute(7);
   const holds = route.holds;
   const n = holds.length;
@@ -561,23 +559,21 @@ test('autopilot: after a fall the rope catches and the climb can continue to the
     startClimb(s);
     const log = [];
     botClimb(s, 2, fallAt, log);
-    step(s, inp({ tapL: true, tapR: true }), DT);
-    run(s, 3, inp());
-    assert.equal(s.phase, 'caught', `fall from hold ${fallAt}`);
-    assert.equal(s.fallCount, 1);
-    // Something is reachable from the rope by the hand meant for it.
-    const reachable = holds.filter((h) => dist(shoulder(s, intendedHand(h.id)), h) <= 0.9 * CFG.REACH);
-    assert.ok(reachable.length > 0, `nothing reachable after falling from hold ${fallAt} (body ${s.body.x.toFixed(2)}, ${s.body.y.toFixed(2)})`);
-    assert.ok(reachable.length >= 3, `only ${reachable.length} holds reachable after falling from hold ${fallAt}`);
-    const h = reachable[reachable.length - 1];          // aim for the highest one, keep whatever the hand closes on
-    const got = botGrab(s, h.id, intendedHand(h.id), log);
-    assert.equal(s.phase, 'climbing');
-    assert.ok(got < fallAt, 'the climber resumes below the point of the fall');
-    botClimb(s, got + 1, Math.min(holds.length - 1, got + 6), log);
-    if (fallAt === holds.length - 3) {
-      botClimb(s, got + 7, holds.length - 1, log);
-      assert.equal(s.phase, 'summit');
-      assert.equal(s.fallCount, 1);
-    }
+    const from = s.body.y;
+    assert.ok(from > CFG.FLOOR + CFG.HANG_TWO, `hold ${fallAt} is above standing height`);
+    drainEvents(s);
+    step(s, inp({ tapL: true, tapR: true }), DT);      // both hands off, and past the grace window
+    run(s, 0.4, inp());
+    assert.equal(s.phase, 'falling', `fall from hold ${fallAt}`);
+    // Nothing may stop it: not a hold it passes, not a rune, not the height it started from.
+    run(s, 12, inp());
+    assert.equal(s.phase, 'fallen', `fall from hold ${fallAt} never reached the ground`);
+    near(s.body.y, CFG.FLOOR, 1e-9, `fall from hold ${fallAt}`);
+    const ev = types(s);
+    assert.ok(!ev.includes('catch'), 'B43: nothing catches a fall any more');
+    assert.equal(ev.filter((e) => e === 'impact').length, 1, `fall from hold ${fallAt}`);
+    assert.equal(ev.filter((e) => e === 'fallen').length, 1, `fall from hold ${fallAt}`);
+    // and a fall from higher up must take longer, or the plunge is not being integrated
+    assert.ok(s.t > 0, `fall from hold ${fallAt}`);
   }
 });

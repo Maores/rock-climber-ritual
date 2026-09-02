@@ -238,9 +238,9 @@ function pickTarget(st) {
 
 function autoInput(st) {
   const inp = zeroInput();
-  if (st.phase !== 'climbing' && st.phase !== 'caught') { auto.target = null; return inp; }   // title, summit, mid-fall: wait
+  if (st.phase !== 'climbing' && st.phase !== 'grounded') { auto.target = null; return inp; }   // title, summit, mid-fall: wait
   const H = st.route.holds;
-  if (auto.target !== null && st.t - auto.t0 > (st.phase === 'caught' ? 3 : 8)) {
+  if (auto.target !== null && st.t - auto.t0 > (st.phase === 'grounded' ? 3 : 8)) {
     auto.timeouts++; auto.target = null;             // give up on this hold and re-plan
   }
   if (auto.target === null) {

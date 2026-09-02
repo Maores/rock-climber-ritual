@@ -5,7 +5,7 @@
 // far as the current hand spread needs so both hands stay in frame at the narrow portrait aspect
 // without shrinking them more than necessary; the lens itself keeps one vertical fov per orientation.
 // On top: breathing sway, roll toward the loaded arm on one-hand hangs, a quick fov punch on grab,
-// a downward pitch plus shake while falling and a spring bounce when the rope catches, and a slow
+// a downward pitch plus shake that runs the whole way down a fall, and a slow
 // rising crane shot on the summit that settles on the altar. Reads `state` only. Grab/fall/catch are
 // detected from state transitions, or from the drained event list when the integrator passes it as
 // the optional fourth argument.
@@ -93,7 +93,7 @@ export function createCameraRig(camera) {
   let shake = 0;                            // 0..1 envelope
   let fallBlend = 0;                        // 0..1 look-down amount
   let summitT = -1;                         // seconds since summit, -1 when not on the summit
-  let doom = 0;                             // 0..1 how far into a doomed plunge we are
+  let doom = 0;                             // 0..1 how far into the plunge we are
   let tumble = 0;                           // spin accumulated while plunging
   let impact = 0;                           // jolt envelope when the ground arrives
   let yank = 0;                             // jolt envelope when the web goes taut
@@ -134,7 +134,6 @@ export function createCameraRig(camera) {
     const phase = state.phase;
     if (prevPhase !== null && phase !== prevPhase) {
       if (phase === 'falling') out.fall = true;
-      if (phase === 'caught') out.catch = true;
       if (phase === 'summit') out.summit = true;
     }
     for (const side of ['L', 'R']) {
@@ -194,11 +193,11 @@ export function createCameraRig(camera) {
       pullTarget = Math.max(pullTarget, handZ + need / halfTan - eyeBaseZ);
     }
     pullTarget = THREE.MathUtils.clamp(pullTarget, 0, PULL_MAX);
-    const onRope = state.phase === 'falling' || state.phase === 'caught';
-    if (onRope) pullTarget = Math.max(pullTarget, ROPE_PULL);
+    const falling = state.phase === 'falling';
+    if (falling) pullTarget = Math.max(pullTarget, ROPE_PULL);
     if (!initialised) { pull.x = pullTarget; pull.v = 0; }
     spring(pull, pullTarget, 3.2, 1.0, dt);
-    spring(lean, onRope ? ROPE_LEAN : 0, 3.0, 1.0, dt);
+    spring(lean, falling ? ROPE_LEAN : 0, 3.0, 1.0, dt);
 
     // --- eye target ----------------------------------------------------------------------
     const eyeTarget = _v.set(body.x + lean.x, body.y + EYE_UP, wz(body.x, body.y) + EYE_OUT + pull.x);
@@ -215,7 +214,7 @@ export function createCameraRig(camera) {
     }
 
     // --- look target ---------------------------------------------------------------------
-    // Falling: pitch down toward the valley; caught: come back up over a second or so.
+    // Falling: pitch down toward the valley, and stay there — the fall does not end early now.
     const fallTarget = state.phase === 'falling' ? 1 : 0;
     fallBlend = approach(fallBlend, fallTarget, fallTarget ? 9 : 2.5, dt);
     if (fallBlend > 0.001) {
@@ -227,7 +226,8 @@ export function createCameraRig(camera) {
     // Once the rope is spent the fall runs the whole cliff, so it gets its own treatment: the
     // head pitches right over toward the ground, the world tumbles, the lens widens with speed
     // and the wall streams past close to the lens. `doom` ramps with how fast you are going.
-    const doomed = state.phase === 'falling' && state._fall && state._fall.doomed;
+    // B43: every fall is the whole cliff now, so this treatment is simply what falling looks like.
+    const doomed = state.phase === 'falling';
     const speed = doomed ? Math.min(1, Math.abs(body.vy) / 22) : 0;
     doom = approach(doom, doomed ? 0.35 + 0.65 * speed : 0, doomed ? 3.2 : 6, dt);
     if (state.phase === 'fallen') doom = approach(doom, 0, 1.4, dt);
@@ -271,7 +271,6 @@ export function createCameraRig(camera) {
     if (ev.release) fovKick.v += 55;        // small breath out
     if (ev.miss) fovKick.v += 25;
     if (ev.fall) { shake = 1; fovKick.v += 90; }
-    if (ev.catch) { bounce.v -= 2.4; shake = Math.max(shake, 0.8); fovKick.v -= 60; }
     if (ev.summit) fovKick.v -= 40;
 
     spring(fovKick, 0, 17, 0.55, dt);
@@ -308,7 +307,7 @@ export function createCameraRig(camera) {
     // --- look around ------------------------------------------------------------------------
     // Only while exactly one hand holds the rock: the other arm is what lets you turn.
     const freeSide = (L && !L.gripping && R && R.gripping) ? 'L' : (R && !R.gripping && L && L.gripping) ? 'R' : null;
-    const canLook = !!freeSide && (state.phase === 'climbing' || state.phase === 'caught');
+    const canLook = !!freeSide && (state.phase === 'climbing' || state.phase === 'grounded');
     const wantX = canLook && lookIn && lookIn.active ? clamp1(lookIn.x) : 0;
     const wantY = canLook && lookIn && lookIn.active ? clamp1(lookIn.y) : 0;
     const outSign = freeSide === 'L' ? -1 : 1;                 // free left arm turns you left

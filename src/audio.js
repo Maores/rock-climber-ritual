@@ -1,6 +1,6 @@
 // audio.js — Rock Climber: The Ritual
 // Every sound effect is synthesised live in WebAudio (no samples): a wind bed that follows height and
-// night, grip / release / rune / fall / catch cues, a heartbeat under low stamina, plus one looped music
+// night, grip / release / rune / fall / impact cues, a heartbeat under low stamina, plus one looped music
 // track routed through the same graph so iOS respects our ~0.35 gain (HTMLAudioElement.volume is
 // read-only there). The single export is createAudio(); see CONTRACTS.md, section "hud-audio".
 //
@@ -290,12 +290,6 @@ export function createAudio() {
       noise(t, 0.95, 0.24, { type: 'lowpass', f0: 220, f1: 90, a: 0.1, q: 0.5 });
       // the music gets out of the way on its own now — updateDuck() follows the wind bed
     },
-    catch() {
-      const t = now();
-      tone('sine', 54, 30, t, 0.45, 0.78, 0.004);                 // harness thump
-      noise(t, 0.15, 0.4, { type: 'lowpass', f0: 380, f1: 110, a: 0.002 });
-      tone('sawtooth', 200, 105, t + 0.04, 0.28, 0.045, 0.02);    // rope creak
-    },
     summit() {
       const t = now();
       [523.25, 659.25, 783.99, 1046.5].forEach((f, i) => chime(f, 0.26 - i * 0.03, master, t + i * 0.17));
@@ -321,9 +315,9 @@ export function createAudio() {
     const night = clamp(state.night || 0, 0, 1);
     let level = 0.10 + 0.30 * h01 + 0.16 * night;
     if (state.phase === 'falling') {
-      // A doomed plunge roars: the wind rises with speed instead of sitting at a fixed bump.
-      const doomed = state._fall && state._fall.doomed;
-      level += doomed ? 0.5 + 1.5 * Math.min(1, Math.abs(state.body.vy) / 22) : 0.5;
+      // The plunge roars: the wind rises with speed instead of sitting at a fixed bump.
+      // B43: every fall runs the whole cliff, so the wind always roars up with the speed.
+      level += 0.5 + 1.5 * Math.min(1, Math.abs(state.body.vy) / 22);
     }
     if (state.phase === 'fallen') level *= 0.25;        // after the ground, the air goes out
 
@@ -348,7 +342,7 @@ export function createAudio() {
   // The music sat at a fixed gain and fought the wind: during a plunge the bed roars up to five
   // times its climbing level and the loop kept playing straight through it. The duck reads the
   // same `wind.level` the bed is built from, so it is the wind that pushes the music down, not a
-  // list of events — a doomed fall that never gets a rope catch still comes back up afterwards.
+  // list of events — a fall that ends on the ground still lets the bed come back up afterwards.
   // Fast to duck (0.16 s: the roar is already there), slow to lift (1.1 s), so the return is a
   // fade rather than a switch.
   const DUCK_FROM = 0.42;          // wind level where the music starts giving way

@@ -1,9 +1,9 @@
 // The cliff and everything bolted to it: displaced PBR wall (wallZ is the single source of truth
 // for depth), edge-shaped holds cut from the same red stone with chalk on their lips, rune holds
 // with carved sigils, point lights and embers, faint glyph waymarks along the route that wake up
-// as runes are lit, the summit ledge + altar + great circle, the rope from harness to anchor, and
+// as runes are lit, and the summit ledge + altar + great circle, and
 // hover rings for the hands. Lighting, sky, fog and particles live in env.js; this module owns the
-// solid things and drives the per-frame state (glow, rope, rings) from the shared `state`.
+// solid things and drives the per-frame state (glow, rings, dust) from the shared `state`.
 import * as THREE from 'three';
 import { SimplexNoise } from 'three/addons/math/SimplexNoise.js';
 import { mergeGeometries, mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
@@ -18,7 +18,6 @@ const WALL = { width: 13, height: 51.5, segX: 104, segY: 515, yCenter: 17.75, fl
 // Holds are squashed toward the wall (zScale), sit almost flush in it (sink) and have a flat front
 // face at `front` × zScale where the fingers grip — holdZ() is exact, not an estimate.
 const HOLD = { zScale: 0.42, sink: 0.05, front: 0.925 };
-const ROPE = { radius: 0.011, segments: 44, radial: 6, stripe: 0.22 };
 const RUNE_LIGHTS = 2;                              // shared point lights re-parked on the nearest runes
 const WAYMARK_EVERY = 2.6;                          // metres between glyph waymarks along the route
 // The boulder set is beige; this multiplier lands it on the wall's own red stone. Vertex colours
@@ -500,44 +499,9 @@ export async function createWorld({ renderer, scene, route, tier }) {
     dustLive = DUST_MAX;                 // let the update loop find the dead ones itself
   }
 
-  // ---------------------------------------------------------------------------------------
-  // Rope: harness → anchor, our own tube so we can rewrite the vertices every frame without GC.
-  const ropeTex = makeRopeTexture();
-  const rope = createRopeMesh(ropeTex);
-  root.add(rope.mesh);
-  const anchorGroup = new THREE.Group();
-  {
-    const metal = new THREE.MeshStandardMaterial({ color: 0xcfd3d8, metalness: 0.85, roughness: 0.35 });
-    const ring = new THREE.Mesh(new THREE.TorusGeometry(0.05, 0.009, 10, 24), metal);
-    ring.position.z = 0.05;
-    const bolt = new THREE.Mesh(new THREE.CylinderGeometry(0.014, 0.014, 0.12, 10), metal);
-    bolt.rotation.x = Math.PI / 2;
-    bolt.position.z = -0.01;
-    ring.castShadow = bolt.castShadow = true;
-    anchorGroup.add(ring, bolt);
-  }
-  root.add(anchorGroup);
-
-  // Belay strand: the other half of a top rope, running from the anchor down the face to the
-  // belayer at the base. It lies against the rock a little to the side of the line, so it is in
-  // frame most of the time without ever crossing the lens, and it twangs when a fall is caught.
-  const belayTex = ropeTex.clone();
-  belayTex.needsUpdate = true;
-  const belayHome = [];          // resting control points, from the anchor down
-  {
-    const ax0 = summit ? summit.x : 0, ay0 = summit ? summit.y + 1.6 : 41;
-    for (let y = ay0; y > -1.5; y -= 2) {
-      const f = smoothstep(ay0, ay0 - 3, y);                  // leaves the anchor ring, then hugs the face
-      const x = ax0 - 0.58 * f + 0.12 * noise.noise(y * 0.21 + 55, 8.8) * f;
-      belayHome.push(new THREE.Vector3(x, y, wallZ(x, y) + 0.05 + 0.05 * f));
-    }
-    belayHome.push(new THREE.Vector3(ax0 - 0.5, -3.5, wallZ(ax0 - 0.5, -3.5) + 0.1));
-    belayTex.repeat.set(Math.max(1, (ay0 + 3.5) / ROPE.stripe), 1);
-  }
-  const belay = createRopeMesh(belayTex, 72, belayHome.length);
-  belay.mesh.name = 'belay';
-  root.add(belay.mesh);
-  let twang = 0;
+  // B43: there is no rope. The climber's strand, the anchor ring at the summit and the belay line
+  // down the face all lived here; Maor had the rope removed after playing it, and a top-rope rig
+  // hanging on the wall would promise a save that no longer exists.
 
   // Hover rings: one per hand, parked on the nearest grabbable hold.
   const ringMat = new THREE.MeshBasicMaterial({
@@ -562,7 +526,6 @@ export async function createWorld({ renderer, scene, route, tier }) {
   // ---------------------------------------------------------------------------------------
   // Per-frame
   let t = 0;
-  let taut = 0;
   let routeRef = null;
   const holdById = new Map();
   const _a = new THREE.Vector3(), _b = new THREE.Vector3();
@@ -740,47 +703,6 @@ export async function createWorld({ renderer, scene, route, tier }) {
       embers.commit();
     }
 
-    // --- rope ------------------------------------------------------------------------------
-    {
-      const anchor = (state && state.ropeAnchor) || (summit ? { x: summit.x, y: summit.y + 1.2 } : { x: 0, y: 41 });
-      const bz = wallZ(body.x, body.y);
-      const hx = body.x, hy = body.y - 0.35, hz = bz + 0.55 + 0.12;
-      const az = wallZ(anchor.x, anchor.y) + 0.06;
-      const tautTarget = (phase === 'falling' || phase === 'caught') ? 1 : 0;
-      taut += (tautTarget - taut) * Math.min(1, dt * 5);
-      const side = anchor.x >= hx - 0.6 ? 1 : -1;
-      const P = rope.points;
-      P[0].set(hx, hy, hz);
-      P[3].set(anchor.x, anchor.y, az);
-      // slack path bows out to the side and away from the wall; under load the rope runs up past
-      // the climber's shoulder (where a top rope really hangs) so the catch is seen, and hums.
-      const sway = 0.04 * Math.sin(t * 1.1);
-      const hum = taut * 0.012 * Math.sin(t * 23.0);
-      _a.set(hx + side * (0.58 + sway), hy + 0.3, hz + 0.05);
-      _b.set(hx + side * (0.34 + hum), hy + 0.62, hz + 0.02);
-      P[1].lerpVectors(_a, _b, taut);
-      _a.set(hx + side * (0.62 + sway), hy + 2.6, wallZ(hx + side * 0.6, hy + 2.6) + 0.32);
-      _b.set(lerp(hx, anchor.x, 0.4) + side * (0.22 + hum), lerp(hy, anchor.y, 0.4), lerp(hz, az, 0.4) + 0.12);
-      P[2].lerpVectors(_a, _b, taut);
-      rope.update();
-      const L = Math.hypot(anchor.x - hx, anchor.y - hy, az - hz);
-      ropeTex.repeat.set(Math.max(1, L / ROPE.stripe), 1);
-      anchorGroup.position.set(anchor.x, anchor.y, az - 0.06);
-
-      // belay strand: slow sway in the wind, a sharp decaying twang while the climber's strand
-      // is loaded, both fading out toward the fixed ends
-      twang = phase === 'falling' ? 1 : twang * Math.exp(-dt * 1.6);
-      const BP = belay.points;
-      for (let i = 0; i < BP.length; i++) {
-        const h = belayHome[i];
-        const end = Math.min(1, i / 1.5) * Math.min(1, (BP.length - 1 - i) / 1.5);
-        const sway = 0.035 * Math.sin(t * 0.8 + h.y * 0.35) * end;
-        const tw = twang * 0.03 * Math.sin(t * 28 + h.y * 1.7) * end;
-        BP[i].set(h.x + sway + tw, h.y, h.z + 0.02 * Math.sin(t * 0.6 + h.y * 0.5) * end + Math.abs(tw) * 0.6);
-      }
-      belay.update();
-    }
-
     // --- hover rings -----------------------------------------------------------------------
     if (state && state.hands) {
       for (const side of ['L', 'R']) {
@@ -820,7 +742,7 @@ export async function createWorld({ renderer, scene, route, tier }) {
 
   return {
     wallZ, holdZ, update, setTier,
-    env, root, wall, holds: holdsMesh, chalk: chalkMesh, runes, altar, waymarks: waymarkMesh, rope: rope.mesh, embers, hoverRings,
+    env, root, wall, holds: holdsMesh, chalk: chalkMesh, runes, altar, waymarks: waymarkMesh, embers, hoverRings,
     dust,
     get dustLive() { return dustLive; },
     get time() { return t; },
@@ -990,104 +912,4 @@ function makeWaymarkAtlas(rnd) {
     ctx.restore();
   }
   return canvasTexture(c);
-}
-
-function makeRopeTexture() {
-  const w = 256, h = 32;
-  const c = document.createElement('canvas');
-  c.width = w; c.height = h;
-  const ctx = c.getContext('2d');
-  ctx.fillStyle = '#e8702a';
-  ctx.fillRect(0, 0, w, h);
-  // helical teal and white tracers
-  ctx.lineWidth = 4;
-  ctx.strokeStyle = '#2fb8c8';
-  for (let x = -h; x < w + h; x += 128) { ctx.beginPath(); ctx.moveTo(x, h); ctx.lineTo(x + h, 0); ctx.stroke(); }
-  ctx.lineWidth = 2;
-  ctx.strokeStyle = '#4a2a18';
-  for (let x = -h + 64; x < w + h; x += 128) { ctx.beginPath(); ctx.moveTo(x, h); ctx.lineTo(x + h, 0); ctx.stroke(); }
-  // fibre noise
-  for (let i = 0; i < 400; i++) {
-    ctx.fillStyle = `rgba(0,0,0,${0.05 + Math.random() * 0.12})`;
-    ctx.fillRect(Math.random() * w, Math.random() * h, 2, 1);
-  }
-  const t = canvasTexture(c);
-  t.wrapS = t.wrapT = THREE.RepeatWrapping;
-  return t;
-}
-
-// ---------------------------------------------------------------------------------------------
-// Rope tube with a parallel-transport frame, rewritten in place each frame.
-
-function createRopeMesh(texture, segments = ROPE.segments, controlPoints = 4) {
-  const N = segments, R = ROPE.radial;
-  const count = (N + 1) * (R + 1);
-  const positions = new Float32Array(count * 3);
-  const normals = new Float32Array(count * 3);
-  const uvs = new Float32Array(count * 2);
-  const index = [];
-  for (let i = 0; i <= N; i++) {
-    for (let j = 0; j <= R; j++) {
-      const k = i * (R + 1) + j;
-      uvs[k * 2] = i / N; uvs[k * 2 + 1] = j / R;
-    }
-  }
-  for (let i = 0; i < N; i++) {
-    for (let j = 0; j < R; j++) {
-      const a = i * (R + 1) + j, b = a + 1, c = a + (R + 1), d = c + 1;
-      index.push(a, c, b, b, c, d);
-    }
-  }
-  const g = new THREE.BufferGeometry();
-  const posAttr = new THREE.BufferAttribute(positions, 3); posAttr.setUsage(THREE.DynamicDrawUsage);
-  const norAttr = new THREE.BufferAttribute(normals, 3); norAttr.setUsage(THREE.DynamicDrawUsage);
-  g.setAttribute('position', posAttr);
-  g.setAttribute('normal', norAttr);
-  g.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
-  g.setIndex(index);
-
-  const material = new THREE.MeshStandardMaterial({ map: texture, roughness: 0.85, metalness: 0, side: THREE.DoubleSide });
-  const mesh = new THREE.Mesh(g, material);
-  mesh.name = 'rope';
-  mesh.castShadow = true;
-  mesh.frustumCulled = false;
-
-  const points = [];
-  for (let i = 0; i < controlPoints; i++) points.push(new THREE.Vector3());
-  const curve = new THREE.CatmullRomCurve3(points, false, 'centripetal', 0.5);
-  const samples = [];
-  for (let i = 0; i <= N; i++) samples.push(new THREE.Vector3());
-  const T = new THREE.Vector3(), Nn = new THREE.Vector3(), B = new THREE.Vector3(), A = new THREE.Vector3(), X = new THREE.Vector3();
-
-  function update() {
-    for (let i = 0; i <= N; i++) curve.getPoint(i / N, samples[i]);
-    for (let i = 0; i <= N; i++) {
-      const p = samples[i];
-      if (i === 0) T.subVectors(samples[1], samples[0]);
-      else if (i === N) T.subVectors(samples[N], samples[N - 1]);
-      else T.subVectors(samples[i + 1], samples[i - 1]);
-      if (T.lengthSq() < 1e-12) T.set(0, 1, 0); else T.normalize();
-      if (i === 0) {
-        A.set(Math.abs(T.y) < 0.9 ? 0 : 1, Math.abs(T.y) < 0.9 ? 1 : 0, 0);
-        Nn.crossVectors(T, A).normalize();
-      } else {
-        Nn.addScaledVector(T, -Nn.dot(T));
-        if (Nn.lengthSq() < 1e-8) { A.set(1, 0, 0); Nn.crossVectors(T, A); }
-        Nn.normalize();
-      }
-      B.crossVectors(T, Nn);
-      for (let j = 0; j <= R; j++) {
-        const ang = (j / R) * Math.PI * 2;
-        const ca = Math.cos(ang), sa = Math.sin(ang);
-        X.set(Nn.x * ca + B.x * sa, Nn.y * ca + B.y * sa, Nn.z * ca + B.z * sa);
-        const k = (i * (R + 1) + j) * 3;
-        normals[k] = X.x; normals[k + 1] = X.y; normals[k + 2] = X.z;
-        positions[k] = p.x + X.x * ROPE.radius; positions[k + 1] = p.y + X.y * ROPE.radius; positions[k + 2] = p.z + X.z * ROPE.radius;
-      }
-    }
-    posAttr.needsUpdate = true;
-    norAttr.needsUpdate = true;
-  }
-
-  return { mesh, points, update };
 }

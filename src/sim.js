@@ -4,7 +4,7 @@
 // No three.js, no DOM. Units are meters, +y is up, +x is the climber's right, the wall
 // is the x/y plane. The model is kinematic with a physical feel: hands and body are
 // spring-damped toward targets, weight shifts on one-arm hangs, gravity acts only
-// while falling, and the rope (or the ground) catches every fall.
+// while falling. Nothing catches a fall: it runs to the ground and ends the climb.
 //
 // Hold ids must equal their index in route.holds (route.js guarantees this).
 
@@ -16,7 +16,6 @@ export const CFG = Object.freeze({
   SHOULDER_DX: 0.19, SHOULDER_DY: 0.08,
   HANG_TWO: 0.42,       // body hangs this far below the mean of two gripped holds
   HANG_ONE: 0.50,       // ...and this far below a single gripped hold
-  ROPE_SLACK: 1.3,      // fall distance before the rope catches
   GRACE: 0.25,          // seconds after the last release during which a grab still saves the fall
   DRAIN_TWO: 0.022,     // stamina/s per hand while both hands grip
   DRAIN_ONE: 0.085,     // stamina/s for the only gripping hand (~12 s of hanging, was ~5 s)
@@ -38,15 +37,13 @@ export const CFG = Object.freeze({
   GRAB_OMEGA: 22,       // closing onto a hold takes ~0.3 s: the fingers arrive, they are not magneted in...
   GRAB_LOCK: 0.002,     // ...and locks exactly onto it once this close
   BODY_OMEGA: 7, BODY_ZETA_Y: 0.85, BODY_ZETA_X: 0.55,   // body: settles vertically, sways sideways
-  ROPE_OMEGA: 8, ROPE_ZETA: 0.40,           // rope stretch after a catch: one visible bounce
-  SWING_OMEGA: 3, SWING_ZETA: 0.9,          // the rope swings the caught body back under the line of holds
+  SWING_OMEGA: 3, SWING_ZETA: 0.9,          // the web line swings the body back under the line of holds
   GRAVITY: 9.81,
   FLOOR: 0.75,          // lowest body height (standing at the base); the ground catches falls near the start
-  FALL_TERMINAL: 26,    // m/s cap on a doomed plunge, so the drop reads rather than blurs
+  FALL_TERMINAL: 26,    // m/s cap on the plunge, so the drop reads rather than blurs
   HOVER_RANGE: 0.40,    // Hand.hover fades to 0 at this distance from the nearest hold
   TREMBLE_AT: 0.30,     // tremble grows as stamina drops below this
   CURL_RATE: 12, TREMBLE_RATE: 6,
-  ROPE_ANCHOR_UP: 1.6,  // rope anchor sits this far above the summit hold
   EVENT_CAP: 64,        // undrained events are dropped beyond this
 
   // --- hold quality ---------------------------------------------------------------------
@@ -109,13 +106,12 @@ export function createClimber(route) {
     phase: 'title',
     body: { x: (h0.x + h1.x) / 2, y: (h0.y + h1.y) / 2 - CFG.HANG_TWO, vx: 0, vy: 0 },
     hands: { L: makeHand('L', h0), R: makeHand('R', h1) },
-    ropeAnchor: { x: summit.x, y: summit.y + CFG.ROPE_ANCHOR_UP },
-    fallCount: 0, height: 0, maxHeight: 0,
+    height: 0, maxHeight: 0,
     // The web-zip. `mode` is idle → aiming → flying → attached; `cd` is the cooldown left.
     web: { mode: 'idle', ax: 0, ay: 0, tipX: 0, tipY: 0, len: 0, cd: 0, aimX: 0, aimY: 1, unlocked: false },
     runesLit: [], checkpoint: null, night: 0,
     route, events: [],
-    _fall: { t: 0, from: 0, catchY: 0, catchX: 0 },
+    _fall: { t: 0, from: 0 },
     _holdById: new Map(holds.map((h) => [h.id, h])),
   };
   state.height = state.maxHeight = state.body.y;
@@ -184,8 +180,8 @@ export function step(state, input, dt) {
   if (dt === 0) return;
   const inp = input || ZERO_INPUT;
   state.t += dt;
-  const live = state.phase === 'climbing' || state.phase === 'falling' || state.phase === 'caught' ||
-    state.phase === 'swinging';
+  const live = state.phase === 'climbing' || state.phase === 'falling' || state.phase === 'swinging' ||
+    state.phase === 'grounded';
 
   const webTap = updateWeb(state, inp, dt);      // may swallow the right tap as a shot
   if (live) {
@@ -219,9 +215,8 @@ function updateWeb(state, inp, dt) {
 
   const hand = state.hands.R;
   const holding = !!inp.holdR;
-  // Hanging on the rope is exactly when you want to shoot, so 'caught' counts too.
-  const canShoot = state.phase === 'climbing' || state.phase === 'falling' ||
-    state.phase === 'swinging' || state.phase === 'caught';
+  // Mid-fall is exactly when you want to shoot: the line is the only thing left that can stop you.
+  const canShoot = state.phase === 'climbing' || state.phase === 'falling' || state.phase === 'swinging';
 
   // Aim vector: whatever the right stick is pushing, defaulting to straight up.
   const ax = (inp.R && +inp.R.x) || 0, ay = (inp.R && +inp.R.y) || 0;
@@ -372,9 +367,10 @@ function anyGripping(state) {
   return state.hands.L.gripping || state.hands.R.gripping;
 }
 
-// Grabs work while climbing, while hanging on the rope, and in the grace window of a fall.
+// Grabs work while climbing, while swinging, and in the grace window just after a slip — the
+// quarter second in which a hand can still find rock. Nothing else stops a fall.
 function canGrab(state) {
-  return state.phase === 'climbing' || state.phase === 'caught' || state.phase === 'swinging' ||
+  return state.phase === 'climbing' || state.phase === 'swinging' || state.phase === 'grounded' ||
     (state.phase === 'falling' && state._fall.t <= CFG.GRACE);
 }
 
@@ -492,7 +488,7 @@ function grab(state, hand, hold) {
     state.phase = 'summit';
     push(state, { type: 'summit', hand: hand.side, holdId: hold.id });
   } else {
-    state.phase = 'climbing';   // also ends a fall (grace) or a rope hang
+    state.phase = 'climbing';   // also ends a swing, a stand at the base, or a fall inside the grace window
   }
 }
 
@@ -510,10 +506,9 @@ function beginFall(state) {
   state.phase = 'falling';
   state._fall.t = 0;
   state._fall.from = state.body.y;
-  // The rope saves you once. Once it is spent, this fall is the whole cliff: nothing stops the
-  // body until the ground does, which is what the falling animation and the death screen are for.
-  state._fall.doomed = state.fallCount >= 1;
-  push(state, { type: 'fall', doomed: state._fall.doomed });
+  // Nothing catches you. Every fall is the whole cliff, down to the ground and the death screen
+  // (B43 — Maor had the rope removed after playing it). The only way out is the grace window.
+  push(state, { type: 'fall' });
 }
 
 function updateStamina(state, dt) {
@@ -570,33 +565,29 @@ function updateBody(state, dt, inp) {
     b.vx *= Math.exp(-3 * dt);
     b.x += b.vx * dt;
     b.y += b.vy * dt;
-    // A doomed fall has no catch: it runs all the way to the ground, gathering speed.
-    if (f.doomed) {
-      b.vy = Math.max(b.vy, -CFG.FALL_TERMINAL);       // terminal velocity, so it reads as a plunge
-      if (b.y <= CFG.FLOOR) {
-        b.y = CFG.FLOOR;
-        b.vx = 0; b.vy = 0;
-        state.phase = 'fallen';
-        push(state, { type: 'impact' });
-        push(state, { type: 'fallen' });
+    b.vy = Math.max(b.vy, -CFG.FALL_TERMINAL);         // terminal velocity, so it reads as a plunge
+    if (b.y <= CFG.FLOOR) {
+      b.y = CFG.FLOOR;
+      b.vx = 0; b.vy = 0;
+      // Letting go while your feet are still on the ground is not a fall: at the base of the
+      // cliff you are standing, not hanging, so you stay standing and can take the rock again --
+      // stepping back under the line of holds, because on the ground you have feet.
+      if (f.from <= CFG.FLOOR + CFG.HANG_TWO) {
+        state.phase = 'grounded';
+        return;
       }
-      return;
-    }
-    const catchY = Math.max(f.from - CFG.ROPE_SLACK, CFG.FLOOR);
-    if (b.y <= catchY) {
-      b.y = catchY;
-      b.vy *= 0.35;               // the rope stretches: a short bounce below the catch point
-      f.catchY = catchY;
-      f.catchX = lineCenter(state, catchY + CFG.SHOULDER_DY + 0.35, b.x);
-      state.fallCount += 1;
-      state.phase = 'caught';
-      push(state, { type: 'catch' });
+      state.phase = 'fallen';
+      push(state, { type: 'impact' });
+      push(state, { type: 'fallen' });
     }
     return;
   }
-  if (state.phase === 'caught') {
-    spring(b, 'x', 'vx', state._fall.catchX, CFG.SWING_OMEGA, CFG.SWING_ZETA, dt);
-    spring(b, 'y', 'vy', state._fall.catchY, CFG.ROPE_OMEGA, CFG.ROPE_ZETA, dt);
+  if (state.phase === 'grounded') {
+    // Standing at the base with nothing held: walk back under the start holds and wait. The
+    // moment a hand takes rock, `grabHold` puts the phase back to 'climbing'.
+    const home = lineCenter(state, CFG.FLOOR + CFG.SHOULDER_DY + 0.35, b.x);
+    spring(b, 'x', 'vx', home, CFG.SWING_OMEGA, CFG.SWING_ZETA, dt);
+    b.y = CFG.FLOOR; b.vy = 0;
     return;
   }
   const tgt = hangTarget(state);   // title / climbing / summit

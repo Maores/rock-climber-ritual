@@ -52,23 +52,25 @@ function botClimb(state) {
     if (m > 1) { v.x /= m; v.y /= m; }
     return v;
   };
-  let grabs = 0, misses = 0;
+  let grabs = 0, misses = 0, falls = 0;
   for (let i = 2; i < H.length;) {
     const side = intendedHand(i), hand = state.hands[side], hold = H[i];
     const startHold = hand.holdId, t0 = state.t;
     for (;;) {
       if (hand.gripping && hand.holdId !== startHold) break;
-      if (state.t - t0 > 8) return { stuck: i, grabs, misses, t: state.t };
+      if (state.t - t0 > 8) return { stuck: i, grabs, misses, falls, t: state.t };
       const input = zero();
       if (hand.gripping) input['tap' + side] = true;
       else { input[side] = steer(side, hold); if (!hand.armed) input['tap' + side] = true; }
       step(state, input, DT);
-      for (const e of drainEvents(state)) if (e.type === 'miss') misses++;
+      // With the rope gone (B43) there is no fallCount to read, and counting the event is the
+      // stronger guard anyway: it fires even for a slip the grace window recovers.
+      for (const e of drainEvents(state)) { if (e.type === 'miss') misses++; else if (e.type === 'fall') falls++; }
     }
     grabs++;
     i = hand.holdId >= i ? hand.holdId + 1 : i;
   }
-  return { stuck: null, grabs, misses, t: state.t };
+  return { stuck: null, grabs, misses, falls, t: state.t };
 }
 
 test('playability: a steady climber tops out, and it does not take all afternoon', () => {
@@ -78,7 +80,7 @@ test('playability: a steady climber tops out, and it does not take all afternoon
   const out = botClimb(s);
   assert.equal(out.stuck, null, `stuck trying to reach hold ${out.stuck}`);
   assert.equal(s.phase, 'summit', `ended in ${s.phase}`);
-  assert.equal(s.fallCount, 0, 'a steady rhythm should never fall');
+  assert.equal(out.falls, 0, 'a steady rhythm should never fall');
   assert.ok(out.t < 420, `the climb took ${(out.t / 60).toFixed(1)} min of game time`);
   assert.ok(out.t > 30, `the climb took only ${out.t.toFixed(0)} s: something is skipping the route`);
   assert.ok(out.misses < out.grabs * 0.35,
@@ -101,7 +103,7 @@ test('playability: every route the title screen offers can be topped out', () =>
     const out = botClimb(s);
     assert.equal(out.stuck, null, `${at}: stuck trying to reach hold ${out.stuck}`);
     assert.equal(s.phase, 'summit', `${at}: ended in ${s.phase}`);
-    assert.equal(s.fallCount, 0, `${at}: a steady rhythm should never fall`);
+    assert.equal(out.falls, 0, `${at}: a steady rhythm should never fall`);
     assert.ok(out.t < 420, `${at}: the climb took ${(out.t / 60).toFixed(1)} min of game time`);
     assert.ok(out.t > 30, `${at}: the climb took only ${out.t.toFixed(0)} s`);
     assert.ok(out.misses < out.grabs * 0.35,

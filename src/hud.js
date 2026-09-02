@@ -14,7 +14,7 @@
 //   • hud.update(state[, events]) — the event list is optional; misses are also detected from state.
 //   • hud.onMute(cb) wires the mute button to audio.setMuted; without it the button reaches
 //     window.__ritual.audio. hud.onRestart(cb) replaces the default location.reload() of "Climb again".
-//   • hud.showEnd(stats) accepts the state object or { time, falls, runesLit, runesTotal }; the HUD
+//   • hud.showEnd(stats) accepts the state object or { time, high, runesLit, runesTotal }; the HUD
 //     also shows the end screen itself 2.8 s after state.phase becomes 'summit' unless it was shown.
 //   • The keystroke that starts the climb is stopped in the capture phase on window, so input.js never
 //     sees it as a grip toggle; pointer starts never reach the sticks (the overlay is above them).
@@ -106,14 +106,14 @@ export function createHud(root) {
   if (!topEl) {
     topEl = doc.createElement('div');
     topEl.id = 'top';
-    topEl.innerHTML = '<div id="falls"><span>Falls</span><b>0</b></div><div id="meter"><div id="height">0.0<small>m</small></div><div id="runes"></div></div><div></div>';
+    topEl.innerHTML = '<div id="falls" hidden></div><div id="meter"><div id="height">0.0<small>m</small></div><div id="runes"></div></div><div></div>';
     hudEl.insertBefore(topEl, msgEl);
   }
   const heightEl = ensure('height', 'div', byId('meter') || topEl);
   const runesEl = ensure('runes', 'div', byId('meter') || topEl);
+  // B43: the rope is gone, so a fall ends the climb and a counter of them can only ever read 0.
   const fallsEl = ensure('falls', 'div', topEl);
-  if (!fallsEl.querySelector('b')) fallsEl.innerHTML = '<span>Falls</span><b>0</b>';
-  const fallsNum = fallsEl.querySelector('b');
+  fallsEl.hidden = true;
   if (!heightEl.querySelector('small')) heightEl.innerHTML = '0.0<small>m</small>';
   const heightText = heightEl.firstChild; // the text node before <small>
 
@@ -166,7 +166,7 @@ export function createHud(root) {
   // ---- per-frame caches --------------------------------------------------------------------------
   const cache = {
     height: null,
-    falls: null,
+    high: null,
     runesLit: -1,
     runesTotal: -1,
     runeIds: '',
@@ -370,8 +370,6 @@ export function createHud(root) {
     }
     if (next === 'climbing' && (prev === 'title' || prev === null)) {
       message('Light every rune · reach the altar', 3000);
-    } else if (next === 'caught') {
-      message('The rope holds', 1900, 'gold');
     } else if (next === 'summit') {
       message('The ritual is complete', 3400, 'rune');
       clearTimeout(endTimer);
@@ -411,13 +409,6 @@ export function createHud(root) {
     if (h !== cache.height) {
       cache.height = h;
       heightText.nodeValue = h;
-    }
-
-    const falls = state.fallCount | 0;
-    if (falls !== cache.falls) {
-      cache.falls = falls;
-      fallsNum.textContent = String(falls);
-      fallsEl.classList.toggle('some', falls > 0);
     }
 
     updateRunes(state);
@@ -479,7 +470,7 @@ export function createHud(root) {
         '</div>' +
         '<div class="mini"><span class="mini-pill lit">Holding</span>' + ring(false, 58) + '<b>Right</b></div>' +
         '</div>' +
-        '<p class="hint">Hanging drains a hand — the arc around its stick shows how much is left. The rope saves you <b>once</b>, and not every rock holds.</p>'
+        '<p class="hint">Hanging drains a hand — the arc around its stick shows how much is left. <b>Nothing catches you</b>, and not every rock holds.</p>'
       );
     }
     return (
@@ -489,7 +480,7 @@ export function createHud(root) {
       '<div class="hand"><b>Right hand</b><div class="keys"><kbd>Right click</kbd><span class="sep">grip / let go</span></div></div>' +
       '<p class="hint"><em>Move the mouse</em> and the hand that is hanging free follows it. Let a hand go, point where you want it, click again to take the rock.</p>' +
       '</div>' +
-      '<p class="hint">Hanging drains a hand — rest on the <i>glowing runes</i>. The rope saves you <b>once</b>. Not every rock holds. <kbd>M</kbd> mutes.</p>'
+      '<p class="hint">Hanging drains a hand — rest on the <i>glowing runes</i>. <b>Nothing catches you</b>: one fall is the whole cliff. Not every rock holds. <kbd>M</kbd> mutes.</p>'
     );
   }
   function footHtml() {
@@ -644,7 +635,7 @@ export function createHud(root) {
       : (Array.isArray(stats.runesLit) ? stats.runesLit.length : (stats.runesLit != null ? stats.runesLit : (stats.runes != null ? stats.runes : cache.runesLit)));
     return {
       time: isState ? stats.t : (stats.time != null ? stats.time : stats.t),
-      falls: isState ? stats.fallCount : (stats.falls != null ? stats.falls : stats.fallCount),
+      high: isState ? stats.maxHeight : (stats.high != null ? stats.high : stats.maxHeight),
       lit: Math.max(0, lit | 0),
       total: total == null ? null : (total | 0),
       complete: isState ? stats.phase === 'summit' : stats.complete !== false,
@@ -662,7 +653,7 @@ export function createHud(root) {
     const grid = ensure('end-stats', 'div', inner, 'stats');
     grid.innerHTML =
       '<div class="stat"><b>' + fmtTime(s.time) + '</b><span>Time</span></div>' +
-      '<div class="stat"><b>' + (s.falls | 0) + '</b><span>Falls</span></div>' +
+      '<div class="stat"><b>' + (+s.high || 0).toFixed(1) + '<small style="font-size:.55em;color:var(--muted)"> m</small></b><span>Highest</span></div>' +
       '<div class="stat"><b>' + s.lit + (s.total != null ? '<small style="font-size:.55em;color:var(--muted)"> / ' + s.total + '</small>' : '') + '</b><span>Runes lit</span></div>';
     const cred = ensure('end-credits', 'div', inner, 'credits');
     cred.innerHTML = '<h3>Credits</h3>' + CREDITS.map((c) =>
@@ -769,7 +760,7 @@ export function createHud(root) {
     if (!lookBtn) return;
     const L = state.hands && state.hands.L, R = state.hands && state.hands.R;
     const can = !!L && !!R && (L.gripping !== R.gripping)
-      && (state.phase === 'climbing' || state.phase === 'caught');
+      && (state.phase === 'climbing' || state.phase === 'grounded');
     if (can !== canLookNow) { canLookNow = can; lookBtn.classList.toggle('can', can); }
   }
 
