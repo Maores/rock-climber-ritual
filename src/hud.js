@@ -977,6 +977,20 @@ export function createHud(root) {
       else if (state.phase === 'climbing' || state.phase === 'falling') mark = 'ready';
     }
     const cd = w.unlocked && w.cd > 0 ? Math.min(1, w.cd / 3) : 0;
+    const st = !w.unlocked ? 'off' : mark === 'cool' ? 'cool' : (mark === 'ready' || mark === 'aim' || mark === 'web') ? 'can' : 'idle';
+
+    // The gesture is not guessable from a pad that just says WEB, so say it once, the first time
+    // the pad is actually usable. Once per session, and not in the opening seconds: the climb's
+    // own "light every rune" message is on screen then and would simply replace this.
+    //
+    // This is evaluated BEFORE the cache check on purpose. On a plain climb the pad is 'ready'
+    // from the first frame and nothing about it ever changes, so the key never moves and the
+    // early return below meant the hint could not fire on the one flow that needs it most.
+    if (!webHinted && st === 'can' && state.phase === 'climbing' && state.t > 6) {
+      webHinted = true;
+      message('Hold WEB, drag to aim, let go to fire — tap it again to release the line', 4200);
+    }
+
     // `unlocked` belongs in the key: it flips false -> true when the climb starts, and with both
     // hands still on the rock nothing else changes, so without it the pad stayed hidden until the
     // first time the right hand came off.
@@ -995,7 +1009,6 @@ export function createHud(root) {
     // right pill: the pad is the control your thumb is on, and it must be able to tell you
     // ready / aiming / out / cooling on its own.
     if (webBtn) {
-      const st = !w.unlocked ? 'off' : mark === 'cool' ? 'cool' : (mark === 'ready' || mark === 'aim' || mark === 'web') ? 'can' : 'idle';
       webBtn.classList.toggle('web-aim', mark === 'aim');
       webBtn.classList.toggle('web-out', mark === 'web');
       webBtn.classList.toggle('web-cool', mark === 'cool');
@@ -1006,13 +1019,6 @@ export function createHud(root) {
         webBtn.hidden = st === 'off';
         webBtn.classList.toggle('can', st === 'can');
         webBtn.classList.toggle('cool', st === 'cool');
-      }
-      // The gesture is not guessable from a pad that just says WEB, so say it once, the first
-      // time the pad is actually usable. Once per session, and not in the opening seconds: the
-      // climb's own "light every rune" message is on screen then and would simply replace this.
-      if (!webHinted && st === 'can' && state.phase === 'climbing' && state.t > 6) {
-        webHinted = true;
-        message('Hold WEB, drag to aim, let go to fire — tap it again to release the line', 4200);
       }
     }
   }

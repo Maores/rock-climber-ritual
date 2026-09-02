@@ -84,18 +84,24 @@ test('swing: the body stays exactly on the line, and swings rather than falling 
   run(s, 0.6);
   assert.equal(s.phase, 'swinging');
   const { ax, ay, len } = s.web;
-  let minX = Infinity, maxX = -Infinity;
+  let minX = Infinity, maxX = -Infinity, grounded = 0, walled = 0;
   for (let i = 0; i < 400; i++) {
     step(s, inp(), DT);
     const d = Math.hypot(s.body.x - ax, s.body.y - ay);
-    // exactly on the line, except on the frames where the ground or the edge of the cliff is
-    // holding the body somewhere the circle does not pass through
-    if (!s.web.grounded && !s.web.walled) assert.ok(Math.abs(d - s.web.len) < 1e-6, `off the line by ${(d - s.web.len).toExponential(2)}`);
+    // Exactly on the line, except on the frames where the ground or the edge of the cliff is
+    // holding the body somewhere the circle does not pass through. Those two flags are not a
+    // blanket excuse: each one is checked to be telling the truth, so the relaxation cannot
+    // quietly grow to cover a real constraint failure.
+    if (s.web.grounded) { assert.equal(s.body.y, CFG.FLOOR, 'grounded means the body is on the floor'); grounded++; }
+    else if (s.web.walled) { assert.equal(Math.abs(s.body.x), CFG.SWING_MAX_X, 'walled means the body is exactly at the clamp'); walled++; }
+    else assert.ok(Math.abs(d - s.web.len) < 1e-6, `off the line by ${(d - s.web.len).toExponential(2)}`);
     assert.ok(Number.isFinite(s.body.x) && Number.isFinite(s.body.y), 'the pendulum stayed finite');
     minX = Math.min(minX, s.body.x); maxX = Math.max(maxX, s.body.x);
   }
   assert.ok(maxX - minX > 0.25, `it should swing sideways, travelled ${(maxX - minX).toFixed(2)} m`);
   assert.ok(len > 0);
+  // and the relaxed frames must stay the exception: this swing should mostly be a free pendulum
+  assert.ok(grounded + walled < 200, `${grounded} grounded + ${walled} walled of 400 frames is not a swing`);
 });
 
 test('swing: pushing the stick up reels you closer, never past the minimum', () => {

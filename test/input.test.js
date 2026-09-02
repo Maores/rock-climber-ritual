@@ -38,7 +38,7 @@ function rig({ keyboard = true } = {}) {
   return { hud, win, clock, input, calls };
 }
 // The idle web gesture: no thumb on the pad, aiming straight up, no tap.
-const WEB0 = { x: 0, y: 1, active: false, tap: false };
+const WEB0 = { x: 0, y: 1, active: false, tap: false, cancel: false };
 const near = (a, b, tol = 1e-9) => assert.ok(Math.abs(a - b) <= tol, `expected ${b}, got ${a}`);
 const pt = (el, fx, fy, pointerId = 1) => {
   const r = el.rect;
@@ -275,17 +275,22 @@ test('input: the WEB pad is the right grip, and its drag is the aim — in its o
     webButton: ring(250, 400, 60),
     setStick(side, x, y) { knob[side] = { x, y }; },
   };
-  const input = createInput({ hud, keyboard: false, win: new FakeEl({}), now: () => 0 });
+  let t = 0;
+  const input = createInput({ hud, keyboard: false, win: new FakeEl({}), now: () => t });
   const b = hud.webButton;
   const cx = 280, cy = 430;                                        // the pad's centre; PAD_RADIUS is 84 px
   assert.equal(input.read().holdR, false);
   b.fire('pointerdown', { pointerId: 5, clientX: cx, clientY: cy });
   let r = input.read();
-  assert.equal(r.holdR, true, 'holding the pad IS the held right grip the sim aims on');
-  assert.deepEqual(r.web, { x: 0, y: 1, active: true, tap: false }, 'a fresh pad aims straight up, and says the thumb is on it');
+  // A press does not become an aim the instant it lands: until it commits it is still a possible
+  // tap, so it is not holdR and the sim never aims on it.
+  assert.equal(r.holdR, false, 'an uncommitted press is not yet the held right grip');
+  assert.deepEqual(r.web, { x: 0, y: 1, active: false, tap: false, cancel: false }, 'a fresh pad is not aiming yet');
   assert.equal(r.R.web, r.web, 'the gesture also rides on R, where a field-copying integrator cannot drop it');
   b.fire('pointermove', { pointerId: 5, clientX: cx + 84, clientY: cy - 84 });   // drag up and right
   r = input.read();
+  assert.equal(r.holdR, true, 'a drag past the dead radius commits the press to an aim at once');
+  assert.equal(r.web.active, true);
   near(r.web.x, Math.SQRT1_2); near(r.web.y, Math.SQRT1_2);
   // B50 reverses B48's second half: the aim is NOT the hand's steering. One field cannot mean
   // both, and when it did, the right stick went dead for as long as a thumb was on the pad.

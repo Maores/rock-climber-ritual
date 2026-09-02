@@ -8,10 +8,13 @@
 //   x, y   — where the shot would go. Its OWN vector, never `R.x/R.y`, so the aim never fights
 //            the stick that steers the right hand; before B50 one field meant both and the right
 //            stick went completely dead for as long as a thumb was on the pad.
-//   active — a thumb is on the pad right now. The aim is live, and because the pad is the web and
-//            nothing else, the sim aims from the first frame instead of waiting out WEB_AIM_HOLD.
-//   tap    — a press and lift inside 250 ms: the gesture that lets go of an attached line. Edge-
-//            triggered, true for exactly one read.
+//   active — the press has COMMITTED to being an aim: held past 250 ms, or dragged past a dead
+//            radius. Only a committed press is holdR. An uncommitted one is still just a possible
+//            tap, so it neither aims nor fires, and a brush of the pad does nothing at all.
+//   tap    — a press and lift inside 250 ms with no drag: the gesture that lets go of an attached
+//            line. Edge-triggered, true for exactly one read.
+//   cancel — the browser took the pointer away mid-aim. Not a release: the sim puts the aim away
+//            and charges no cooldown. Edge-triggered, like `tap`.
 // hud.setStick(side, x, y) receives the same vector every read, so the HUD must negate y
 // when it converts to CSS translate.
 //
@@ -285,37 +288,57 @@ export function createInput({ hud = null, keyboard = true, win, now = defaultNow
   // a phone would be to hold the GRIP pill and aim with the same thumb, which is the mistake
   // the LOOK button already made once.
   //
-  // The pad reports two things the shared grip button cannot, both on `web` (B50):
-  //   `active` — this held right grip is the dedicated aim gesture, not the grip button that
-  //     doubles as a grab. The sim skips WEB_AIM_HOLD for it, so the reticle appears the frame
-  //     the thumb lands and no press is ever too short to do anything.
-  //   `tap` — a press and lift inside WEB_TAP_MS. That is the gesture that lets go of an
-  //     attached line and throws you. It has to be its own edge: the thumb that fired the shot
-  //     is already off the pad, so "the pad is no longer held" cannot mean "cut".
+  // The pad reports three things the shared grip button cannot, all on `web` (B50):
+  //   `active` — the press has COMMITTED to being an aim (see below). Only then is it holdR.
+  //   `tap`    — a press and lift inside WEB_TAP_MS with no drag. That is the gesture that lets
+  //     go of an attached line and throws you. It has to be its own edge: the thumb that fired
+  //     the shot is already off the pad, so "the pad is no longer held" cannot mean "cut".
+  //   `cancel` — the browser took the pointer away mid-aim. Not a release, so it must not fire.
+  //
+  // A press does not become an aim the instant it lands. It commits by being HELD past the tap
+  // window, or by being DRAGGED past a dead radius — and until it commits it is not holdR, so
+  // the sim never aims and a lift cannot fire. Without that, a one-frame brush of the pad fired
+  // an unaimed shot straight up, which always bit, took both hands off the wall, and with no
+  // rope (B43) is a death from a stray touch. A brush now does nothing at all.
   const webVec = { x: 0, y: 1 };
   // One object, handed out under two names each read (see the note in read()). Reused, like `look`.
-  const web = { x: 0, y: 1, active: false, tap: false };
-  let webActive = false, webId = null, webCx = 0, webCy = 0, webDownT = 0, webTapped = false;
-  const WEB_TAP_MS = 250;                  // press and lift inside this and it was a tap, not a hold
+  const web = { x: 0, y: 1, active: false, tap: false, cancel: false };
+  let webDown = false, webId = null, webCx = 0, webCy = 0, webDownT = 0;
+  let webDragged = false, webTapped = false, webCancelled = false;
+  const WEB_TAP_MS = 250;                  // press and lift inside this, undragged, and it was a tap
+  const WEB_AIM_DEAD = 0.15;               // ...and a drag past this much of PAD_RADIUS is an aim, however brief
+  const webCommitted = () => webDown && (webDragged || now() - webDownT > WEB_TAP_MS);
   if (hud && hud.webButton) {
     const b = hud.webButton;
     on(b, 'pointerdown', (e) => {
       prevent(e);
       const r = b.getBoundingClientRect();
       webCx = r.left + r.width / 2; webCy = r.top + r.height / 2;
-      webActive = true; webId = e.pointerId; webDownT = now();
+      webDown = true; webId = e.pointerId; webDownT = now(); webDragged = false;
       webVec.x = 0; webVec.y = 1;
       b.classList.add('on');
       if (b.setPointerCapture) { try { b.setPointerCapture(e.pointerId); } catch (err) {} }
     });
     on(b, 'pointermove', (e) => {
-      if (!webActive || e.pointerId !== webId) return;
+      if (!webDown || e.pointerId !== webId) return;
       const dx = (e.clientX - webCx) / PAD_RADIUS;
       const dy = -(e.clientY - webCy) / PAD_RADIUS;
-      if (Math.hypot(dx, dy) > 0.12) { webVec.x = dx; webVec.y = dy; clampDisc(webVec); }
+      // Past the dead radius the drag is the aim, and the press has committed to being a shot.
+      if (Math.hypot(dx, dy) > WEB_AIM_DEAD) { webDragged = true; webVec.x = dx; webVec.y = dy; clampDisc(webVec); }
     });
-    // A lift is a tap only if it was quick; a cancel or a stolen capture is never a tap.
-    const endWeb = (tapped) => { if (tapped && webActive && now() - webDownT <= WEB_TAP_MS) webTapped = true; webActive = false; webId = null; b.classList.remove('on'); };
+    const endWeb = (lifted) => {
+      if (!webDown) return;
+      if (lifted) {
+        // A quick, undragged lift is a TAP: it lets go of an attached line and does nothing else.
+        // A committed press falls through to the sim, where letting go looses the shot.
+        if (!webDragged && now() - webDownT <= WEB_TAP_MS) webTapped = true;
+      } else if (webCommitted()) {
+        // The browser took the pointer (a system gesture, a call). Not a release: abort the aim.
+        webCancelled = true;
+      }
+      webDown = false; webId = null; webDragged = false;
+      b.classList.remove('on');
+    };
     on(b, 'pointerup', () => endWeb(true));
     on(b, 'pointercancel', () => endWeb(false));
     on(b, 'lostpointercapture', () => endWeb(false));
@@ -328,8 +351,11 @@ export function createInput({ hud = null, keyboard = true, win, now = defaultNow
     integrateKeys(dt);
     const out = { L: { x: 0, y: 0, active: false }, R: { x: 0, y: 0, active: false }, tapL: taps.L, tapR: taps.R };
     taps.L = taps.R = false;
-    const webTap = webTapped;                 // edge: true for exactly one read, like the grip taps
-    webTapped = false;
+    // Edges: true for exactly one read, like the grip taps. The sim consumes them again on its
+    // own side, because one read feeds several fixed sim sub-steps.
+    const webTap = webTapped, webCancel = webCancelled;
+    webTapped = webCancelled = false;
+    const onPad = webCommitted();             // the press has committed to being an aim, not a tap
     const keyed = { L: false, R: false };
     for (const code of held) keyed[MOVE_KEYS[code][0]] = true;
     const mSide = mouse && mousePos.has ? freeSide() : null;
@@ -341,9 +367,10 @@ export function createInput({ hud = null, keyboard = true, win, now = defaultNow
       look.x = src.x; look.y = src.y;
     } else { look.x = 0; look.y = 0; }
     out.look = look;
-    // while the web pad is held, it IS the right grip; its drag is the aim, applied after the loop
+    // A COMMITTED press on the pad is the held right grip; an uncommitted one is still only a
+    // possible tap, so it must not aim and its lift must not fire.
     out.holdL = holds.L;
-    out.holdR = holds.R || webActive;
+    out.holdR = holds.R || onPad;
     for (const side of ['L', 'R']) {
       // Looking: nothing counts as on the stick, so the hand keeps the target it already has.
       if (lookHeld) { out[side].x = 0; out[side].y = 0; if (hud && typeof hud.setStick === 'function') hud.setStick(side, 0, 0); continue; }
@@ -366,8 +393,8 @@ export function createInput({ hud = null, keyboard = true, win, now = defaultNow
     // press reset the pad to (0,1) and pinned the arm straight up.
     //
     // So the aim travels in its own field. `R` stays the right stick, the arm keeps steering and
-    // parking under B45, and the sim prefers `web` over `R` only while a thumb is actually on the
-    // pad. The HUD knob is still fed the stick, not the aim: it shows the physical control.
+    // parking under B45, and the sim prefers `web` over `R` only while the pad is committed to an
+    // aim. The HUD knob is still fed the stick, not the aim: it shows the physical control.
     //
     // It is handed out twice, as `out.web` and as `out.R.web` — the SAME object, so the two can
     // never disagree. The second is not belt and braces, it is the one that arrives: main.js
@@ -376,8 +403,9 @@ export function createInput({ hud = null, keyboard = true, win, now = defaultNow
     // precisely how B48 happened, and riding on `R` — the right hand's own control group, which
     // is forwarded by reference — is what stops it happening again.
     web.x = webVec.x; web.y = webVec.y;
-    web.active = webActive;                   // a thumb is on the pad: this is the aim, and it needs no hold
+    web.active = onPad;                       // committed to an aim: this is the vector, and it needs no hold
     web.tap = webTap;
+    web.cancel = webCancel;
     out.web = web;
     out.R.web = web;
     recenter.L = recenter.R = false;

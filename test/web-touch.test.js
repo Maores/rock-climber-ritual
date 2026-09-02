@@ -7,7 +7,7 @@
 // nothing, or worse, on a phone.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { CFG, createClimber, startClimb, step, drainEvents } from '../src/sim.js';
+import { CFG, createClimber, startClimb, step, drainEvents, shoulder } from '../src/sim.js';
 import { generateRoute } from '../src/route.js';
 import { createInput } from '../src/input.js';
 
@@ -68,10 +68,11 @@ function climber(at = 14) {
   return s;
 }
 
-// One rendered frame, exactly as main.js runs it — including the part that matters: main.js does
-// NOT pass what input.js returns. It builds a fresh object naming the fields it forwards, and
-// clears the grip taps after the first of the frame's fixed 120 Hz steps. Anything the web
-// gesture needs has to survive that copy, which is why it travels on `R`.
+// One rendered frame, exactly as main.js runs it — including the parts that bite. main.js does
+// NOT pass what input.js returns: it builds a fresh object naming the fields it forwards, so a
+// field it does not name never reaches the sim (that is how B48 happened). It now names `web`,
+// and it also hands that ONE object to every fixed 120 Hz sub-step of the frame, clearing only
+// the grip taps in between — so any other edge on it has to be consumed by the sim itself.
 const SIM_DT = 1 / 120;
 function frame(rg, s, ms = 1000 / 60) {
   rg.tick(ms);
@@ -79,7 +80,7 @@ function frame(rg, s, ms = 1000 / 60) {
   let tapL = inp.tapL, tapR = inp.tapR;
   let acc = ms / 1000;
   while (acc >= SIM_DT) {
-    step(s, { L: inp.L, R: inp.R, tapL, tapR, holdL: inp.holdL, holdR: inp.holdR }, SIM_DT);
+    step(s, { L: inp.L, R: inp.R, tapL, tapR, holdL: inp.holdL, holdR: inp.holdR, web: inp.web }, SIM_DT);
     acc -= SIM_DT;
     tapL = tapR = false;
   }
@@ -108,16 +109,18 @@ test('touch: hold the pad, drag, lift — and you swing, with no further touch (
   frame(rg, s);
   assert.ok(s.hands.L.gripping && s.hands.R.gripping, 'both hands start on the rock');
 
-  // 1. thumb down. The pad is the web and nothing else, so it aims from the very first frame.
+  // 1. thumb down. Nothing commits yet: this could still turn out to be a tap.
   padDown(rg);
   let r = frame(rg, s);
-  assert.equal(s.web.mode, 'aiming', 'the pad aims the moment the thumb lands');
-  assert.ok(types(r.evs).includes('aim'), 'and says so, so the reticle has something to show');
+  assert.equal(s.web.mode, 'idle', 'a press that might still be a tap does not aim');
+  assert.equal(types(r.evs).length, 0);
 
-  // 2. drag to aim. The reticle follows the thumb...
+  // 2. drag to aim. The drag commits the press, and the reticle follows the thumb.
   const aim0 = { x: s.web.aimX, y: s.web.aimY };
   padDrag(rg, 40, -66);                         // up and to the right
-  frames(rg, s, 12);
+  r = frames(rg, s, 12);
+  assert.equal(s.web.mode, 'aiming', 'the drag commits the press to an aim');
+  assert.ok(types(r.evs).includes('aim'), 'and says so, so the reticle has something to show');
   assert.notDeepEqual({ x: s.web.aimX, y: s.web.aimY }, aim0, 'the drag steers the aim');
   assert.ok(s.web.aimX > 0.2 && s.web.aimY > 0.2, `aimed up and right, got (${s.web.aimX.toFixed(2)}, ${s.web.aimY.toFixed(2)})`);
 
@@ -203,23 +206,58 @@ test('touch: aiming never takes your right hand off the rock (B50)', () => {
   rg.input.dispose();
 });
 
-test('touch: no press on the pad is too short to do anything (B50)', () => {
-  // WEB_AIM_HOLD exists to tell a click of the shared right grip (a grab) from a hold (an aim).
-  // The pad has no such ambiguity, so it skips the threshold: the feedback for a short press is
-  // the shot itself, rather than the silence a sub-threshold press used to get.
+test('touch: a brush of the pad does nothing at all (B50)', () => {
+  // With the aim threshold gone, a one-frame brush fired an unaimed shot straight up. It always
+  // bit, and a bite takes BOTH hands off the wall -- with no rope (B43) that is a death from a
+  // stray touch while reaching for the stick. A press only becomes a shot once it commits.
   const rg = phone(), s = climber();
   frame(rg, s);
   padDown(rg);
-  const r = frame(rg, s);                        // ~17 ms, a tenth of WEB_AIM_HOLD
-  assert.ok(1000 / 60 < CFG.WEB_AIM_HOLD * 1000, 'this press really is under the desktop threshold');
-  assert.equal(s.web.mode, 'aiming', 'the pad aims immediately');
-  assert.ok(types(r.evs).includes('aim'), 'and the aim is announced, so the HUD can answer');
+  rg.tick(40);                                   // a brush: down and up well inside the tap window
+  padUp(rg);
+  const r = frames(rg, s, 30);
+  assert.equal(types(r.evs).length, 0, `a brush must produce no events, got [${types(r.evs)}]`);
+  assert.equal(s.web.mode, 'idle');
+  assert.equal(s.phase, 'climbing', 'and must certainly not take you off the wall');
+  assert.ok(s.hands.L.gripping && s.hands.R.gripping, 'both hands still on the rock');
+  assert.equal(s.web.cd, 0, 'and it costs no cooldown either');
+  rg.input.dispose();
+});
+
+test('touch: a press held past the tap window fires, undragged, straight up (B50)', () => {
+  const rg = phone(), s = climber();
+  frame(rg, s);
+  padDown(rg);
+  const r = frames(rg, s, 20);                   // ~333 ms, past the 250 ms tap window, no drag
+  assert.equal(s.web.mode, 'aiming', 'holding still is a deliberate aim');
+  assert.ok(types(r.evs).includes('aim'));
+  assert.ok(Math.abs(s.web.aimX) < 1e-9 && s.web.aimY > 0.9, `an undragged aim is straight up, got (${s.web.aimX}, ${s.web.aimY})`);
   padUp(rg);
   const r2 = frame(rg, s);
-  assert.equal(s.web.mode, 'flying', 'and a quick press-and-lift is a real shot');
+  assert.equal(s.web.mode, 'flying', 'and letting go fires it');
   assert.ok(types(r2.evs).includes('webshot'));
   rg.input.dispose();
 });
+
+test('touch: a quick drag-and-lift fires along the drag (B50)', () => {
+  // The drag is what commits it, so this is a shot even though it is over inside the tap window.
+  const rg = phone(), s = climber();
+  frame(rg, s);
+  padDown(rg);
+  padDrag(rg, -70, -40);                         // up and to the LEFT
+  rg.tick(60);
+  const r = frames(rg, s, 1);
+  assert.equal(s.web.mode, 'aiming');
+  assert.ok(s.web.aimX < -0.2, `aimed left, got ${s.web.aimX.toFixed(2)}`);
+  padUp(rg);
+  const r2 = frame(rg, s);
+  assert.equal(s.web.mode, 'flying', 'a dragged press is a shot however brief');
+  assert.ok(types([...r.evs, ...r2.evs]).includes('webshot'));
+  const sh = shoulder(s, 'R');
+  assert.ok(s.web.ax < sh.x, `the anchor is to the left of the shoulder: ${s.web.ax.toFixed(2)} vs ${sh.x.toFixed(2)}`);
+  rg.input.dispose();
+});
+
 
 test('touch: the right stick still steers the right hand while the other thumb aims (B50)', () => {
   const rg = phone(), s = climber();
@@ -290,4 +328,106 @@ test('desktop: the right button holds to aim, releases to fire, and clicks to le
   assert.equal(s.phase, 'falling');
   assert.ok(Math.hypot(s.body.vx, s.body.vy) > Math.hypot(v.x, v.y) * 0.9, 'and throws you with the speed you had');
   input.dispose();
+});
+
+test('touch: a tap cannot cut the bite it happens to span (B50)', () => {
+  // main.js hands ONE input object to every fixed sub-step of a rendered frame, clearing only the
+  // grip taps between them. A tap flag left standing is therefore read again on the next sub-step
+  // -- so when `flying -> attached` lands on a non-final sub-step, the step right after it saw
+  // the tap and cut: attached for one step, then the whole cliff. That is the exact failure this
+  // gesture was built to end, reappearing through the sub-step loop.
+  //
+  // Pinned deterministically: fly to one sub-step short of the anchor, THEN run a multi-sub-step
+  // frame carrying a tap, so the bite is guaranteed to land inside it. With the edge unconsumed
+  // this produces webhit, fall, webcut and phase 'falling' at every frame length tried.
+  for (const subSteps of [2, 4, 8, 12]) {
+    const rg = phone(), s = climber();
+    frame(rg, s);
+    padDown(rg); padDrag(rg, 40, -66); frames(rg, s, 12); padUp(rg);
+    frame(rg, s);
+    assert.equal(s.web.mode, 'flying', 'the shot is in the air');
+
+    // one sub-step at a time until the line is about to bite
+    let flown = 0;
+    while (s.web.mode === 'flying' && flown < 400) { frame(rg, s, 1000 / 120); flown++; }
+    assert.equal(s.web.mode, 'attached', 'sanity: the line does bite');
+    // ...now redo it, stopping one sub-step short
+    const rg2 = phone(), s2 = climber();
+    frame(rg2, s2);
+    padDown(rg2); padDrag(rg2, 40, -66); frames(rg2, s2, 12); padUp(rg2);
+    frame(rg2, s2);
+    for (let k = 0; k < flown - 1; k++) frame(rg2, s2, 1000 / 120);
+    assert.equal(s2.web.mode, 'flying', 'still in the air, one sub-step short of the anchor');
+
+    // tap the pad, then run one long frame that crosses the bite
+    padDown(rg2, 61); rg2.tick(60); padUp(rg2, 61);
+    const r = frame(rg2, s2, subSteps * 1000 / 120);
+    assert.ok(types(r.evs).includes('webhit'), `sub-steps=${subSteps}: the line bit in this frame`);
+    assert.ok(!types(r.evs).includes('webcut'), `sub-steps=${subSteps}: a tap must not cut the bite it spans, got [${types(r.evs)}]`);
+    assert.equal(s2.web.mode, 'attached', `sub-steps=${subSteps}: still on the line`);
+    assert.equal(s2.phase, 'swinging', `sub-steps=${subSteps}: not falling`);
+
+    // ...and the line is still cuttable afterwards, by a fresh tap.
+    padDown(rg2, 62); rg2.tick(60); padUp(rg2, 62);
+    const r2 = frames(rg2, s2, 2);
+    assert.ok(types(r2.evs).includes('webcut'), `sub-steps=${subSteps}: a later tap still lets go`);
+    rg.input.dispose(); rg2.input.dispose();
+  }
+});
+
+test('touch: a GRIP-R tap mid-swing grabs for rock, it does not cut the line (B50)', () => {
+  // The cut used to accept `tapR`, so reaching for rock with the right hand severed the line --
+  // and the tap was swallowed too, so the hand did not even arm. Both halves are wrong: a GRIP
+  // tap is a grab.
+  const rg = phone(), s = climber();
+  frame(rg, s);
+  padDown(rg); padDrag(rg, 40, -66); frames(rg, s, 12); padUp(rg);
+  frames(rg, s, 30);
+  assert.equal(s.phase, 'swinging');
+  assert.equal(s.hands.R.armed, false);
+
+  rg.hud.grips.R.fire('pointerdown', { pointerId: 71 });
+  const r = frame(rg, s);
+  assert.ok(!types(r.evs).includes('webcut'), 'reaching for rock does not drop the line');
+  assert.equal(s.phase, 'swinging');
+  assert.ok(types(r.evs).includes('arm'), 'and the tap reaches the hand, which arms');
+  assert.equal(s.hands.R.armed, true);
+  rg.input.dispose();
+});
+
+test('touch: a stolen pointer aborts the aim instead of firing it (B50)', () => {
+  // A system gesture, an incoming call, the browser taking the capture: none of them is a
+  // release, so none of them may loose a shot the player never let go of.
+  const rg = phone(), s = climber();
+  frame(rg, s);
+  padDown(rg); padDrag(rg, 40, -66);
+  frames(rg, s, 12);
+  assert.equal(s.web.mode, 'aiming');
+  rg.hud.webButton.fire('pointercancel', { pointerId: 9 });
+  const r = frames(rg, s, 4);
+  assert.equal(s.web.mode, 'idle', 'the aim is put away');
+  assert.ok(!types(r.evs).includes('webshot'), `nothing was fired, got [${types(r.evs)}]`);
+  assert.equal(s.web.cd, 0, 'and it costs no cooldown: you were not charged for a shot you never took');
+  assert.equal(s.phase, 'climbing');
+  assert.ok(s.hands.L.gripping && s.hands.R.gripping, 'both hands still on the rock');
+  rg.input.dispose();
+});
+
+test('touch: the gesture reaches the sim by either name main.js might forward (B50)', () => {
+  // input.js hands the same object out as `web` and as `R.web`. main.js now names `web` on its
+  // step literal, so that is the live path; `R.web` stays as the belt that survives an
+  // integrator which forwards field by field, which is exactly how B48 went missing.
+  const rg = phone(), s = climber();
+  frame(rg, s);
+  padDown(rg); padDrag(rg, 40, -66); frames(rg, s, 12); padUp(rg); frames(rg, s, 30);
+  assert.equal(s.phase, 'swinging');
+
+  // top-level `web` only: the R this literal forwards carries no gesture at all
+  padDown(rg, 81); rg.tick(60); padUp(rg, 81);
+  rg.tick(16);
+  const inp = rg.input.read();
+  assert.equal(inp.web.tap, true, 'the tap is on the top-level field');
+  step(s, { L: inp.L, R: { x: 0, y: 0, active: false }, tapL: false, tapR: false, holdL: false, holdR: inp.holdR, web: inp.web }, 1 / 120);
+  assert.ok(drainEvents(s).map((e) => e.type).includes('webcut'), 'top-level `web` alone reaches the sim');
+  rg.input.dispose();
 });

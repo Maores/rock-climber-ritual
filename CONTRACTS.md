@@ -71,7 +71,7 @@ Anything reading events must ignore types it does not know: the list grows.
 Input = { L:{x,y,active}, R:{x,y,active}, tapL:boolean, tapR:boolean,
           look:{ x, y, active },                           // look: hold-to-look; sim ignores it, the camera rig consumes it
           holdL:boolean, holdR:boolean,                    // grip currently HELD; the web-zip aims on a held right grip
-          web:{ x, y, active, tap } }                      // the web-zip gesture — see below
+          web:{ x, y, active, tap, cancel } }              // the web-zip gesture — see below
   // stick `active`: something is on that stick this frame — a finger, the mouse driving that hand, a movement key, or a
   // recenter (Escape / a grip key, for one read). It is how the sim tells a stick nobody is touching from one reading
   // zero (B45); an Input without the flag is read the old way, where only a non-zero vector steers.
@@ -81,9 +81,15 @@ Input = { L:{x,y,active}, R:{x,y,active}, tapL:boolean, tapR:boolean,
   //            aim shared that field the right stick was dead for as long as a thumb was on the pad, the hand could never
   //            park, and it did not in fact point at the anchor (`_stick` is a shoulder-relative offset that rotates with
   //            the body: measured 38–60° off through a swing). The pad aims; the stick still moves the hand.
-  //   active — a thumb is on the pad. The aim is live, and the sim skips WEB_AIM_HOLD (which only exists to tell a CLICK
-  //            of the shared right grip from a HOLD; the pad has no such ambiguity, so no press is too short to do anything).
-  //   tap    — press and lift inside 250 ms. This is what lets go of an ATTACHED line. Edge-triggered, one read.
+  //   active — the press has COMMITTED to being an aim: HELD past 250 ms, or DRAGGED past 0.15 of the pad radius. Only a
+  //            committed press is holdR, so a brush of the pad neither aims nor fires. WEB_AIM_HOLD still governs the
+  //            desktop right button, which shares its button with the grip; the pad disambiguates by commitment instead.
+  //   tap    — press and lift inside 250 ms with NO drag. This is the only thing that lets go of an ATTACHED line.
+  //   cancel — the browser took the pointer mid-aim. Not a release: the sim puts the aim away and charges no cooldown.
+  // `tap` and `cancel` are EDGES that the SIM consumes on first read. One input read feeds every fixed sub-step of a
+  // rendered frame, so a flag left standing is seen again on the next sub-step; a tap that outlived the bite cut the line
+  // one step after it attached. Consuming them in the sim, not the integrator, is deliberate: it must not depend on
+  // main.js's tap plumbing, which is going away with the GRIP buttons.
   // While the pad is held it IS holdR. `web` is handed out twice — as `Input.web` and as `Input.R.web`, the SAME object —
   // because an integrator that forwards the Input field by field drops new top-level fields on the floor, which is exactly
   // how B48 happened. `R` is the right hand's own control group and is forwarded by reference, so the gesture arrives.
@@ -110,7 +116,10 @@ the left stick pumps and reels, the right stick still steers the right hand towa
 click, lets go and throws you with the speed you had. Nothing about the swing is a dead-man's switch: the thumb that fired
 the shot is already off the pad, so "the pad is no longer held" cannot mean "cut the line" — it used to, and it severed the
 line one step after it attached, turning every shot on a phone into a fall. A press-and-hold on the pad while attached is
-NOT a release, so a thumb resting there is harmless. While swinging the body is clamped to `|x| ≤ SWING_MAX_X` (4.2, the
+NOT a release, so a thumb resting there is harmless. Nor is a GRIP tap: reaching for rock with the right hand while
+swinging is a grab, and it reaches the hand — it neither cuts the line nor is swallowed. A **brush** of the pad — pressed
+and lifted inside the tap window without a drag — does nothing at all: it used to fire an unaimed shot straight up, which
+always bit and took both hands off the wall, so with no rope a stray touch killed you. While swinging the body is clamped to `|x| ≤ SWING_MAX_X` (4.2, the
 same clamp the anchor gets): a long line pumped sideways used to carry the climber to x = 7.40, off a cliff 9 m wide.
 
 ## Interfaces

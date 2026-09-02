@@ -215,12 +215,16 @@ export function step(state, input, dt) {
 //   • The aim vector comes from `inp.web` when the WEB pad is supplying one, and from the right
 //     stick / the cursor otherwise. It is NOT the hand's steering: the pad aims, the stick still
 //     moves the hand, and the two no longer fight over one field.
-//   • WEB_AIM_HOLD only exists to tell a click of the shared right grip (a grab) from a hold
-//     (an aim). The pad is the web and nothing else, so `web.active` aims from the first frame:
-//     no press is too short to do anything, and the reticle appears the moment the thumb lands.
+//   • WEB_AIM_HOLD tells a click of the shared right grip (a grab) from a hold (an aim), and it
+//     still governs the desktop right button. The pad does not use it: input.js decides there,
+//     by only reporting `web.active` once the press has COMMITTED to being an aim — held past
+//     its tap window, or dragged past a dead radius. A brush of the pad therefore aims nothing
+//     and fires nothing. It used to fire an unaimed shot straight up, which always bit and took
+//     both hands off the wall: with no rope (B43), a death from a stray touch.
 //   • Letting go FIRES. That is why cutting an attached line cannot also be "let go": the thumb
 //     that fired is already off the pad, so the old `!holding` rule severed the line one step
-//     after it bit and dropped you down the cliff. Cutting is its own tap.
+//     after it bit and dropped you down the cliff. Cutting is its own tap — and only ever a
+//     completed one, on a line that was already out before this step began.
 //
 // While attached the body is a pendulum on a rigid line: gravity acts, then the position is
 // projected back onto the circle around the anchor and the radial part of the velocity is
@@ -238,14 +242,34 @@ function updateWeb(state, inp, dt) {
   // The WEB pad's gesture. input.js hands the same object out as `web` and as `R.web`; the second
   // is the one that survives an integrator which forwards the Input field by field (B48's bug).
   const g = inp.web || (inp.R && inp.R.web) || null;
-  const onPad = !!(g && g.active);            // a thumb is on the pad: its drag is the aim
+  const onPad = !!(g && g.active);            // the pad is committed to an aim: its drag is the vector
 
-  // Aim vector: the pad's drag while it is held, else whatever the right stick or the cursor is
-  // pushing, defaulting to straight up. Keeping the pad's aim out of `inp.R` is what lets the
+  // `tap` and `cancel` are EDGES, and the sim consumes them the first time it reads them. One
+  // input read feeds every fixed sub-step of a rendered frame, so a flag left standing is read
+  // again on the next sub-step — and a tap that outlived the bite would cut the line one step
+  // after it attached, which is the exact failure this whole gesture exists to end. Clearing it
+  // here rather than in main.js is deliberate: the integrator's tap plumbing is on its way out
+  // with the GRIP buttons, and this must not depend on it.
+  let tapped = false, cancelled = false;
+  if (g) {
+    tapped = !!g.tap; cancelled = !!g.cancel;
+    if (tapped) g.tap = false;
+    if (cancelled) g.cancel = false;
+  }
+  // Only a line that was ALREADY out when this step began may be cut: never a shot still in the
+  // air, and never the bite that happens during this very step.
+  const wasAttached = w.mode === 'attached';
+
+  // Aim vector: the pad's drag while it is committed, else whatever the right stick or the cursor
+  // is pushing, defaulting to straight up. Keeping the pad's aim out of `inp.R` is what lets the
   // right stick go on steering the right hand while the other thumb aims.
   const src = onPad ? g : inp.R;
   const ax = (src && +src.x) || 0, ay = (src && +src.y) || 0;
   if (Math.hypot(ax, ay) > 0.08) { w.aimX = ax; w.aimY = ay; }
+
+  // A stolen pointer is not a release, so it must not loose the shot: put the aim away and charge
+  // nothing for it. Without this, a system gesture or an incoming call fired an unaimed shot.
+  if (cancelled && (w.mode === 'aiming' || w.mode === 'idle')) { w.mode = 'idle'; w._hold = 0; return true; }
 
   if (w.mode === 'idle') {
     // A hand still on the rock may aim: you only let go when the line bites (see fire/'flying').
@@ -285,16 +309,22 @@ function updateWeb(state, inp, dt) {
       w.tipX += (dx / d) * stepLen;
       w.tipY += (dy / d) * stepLen;
     }
-    return !!inp.tapR;
+    // A tap cannot cut a shot that is still in the air, and a GRIP tap during the flight is a
+    // real grab attempt: let it reach the hand.
+    return false;
   }
 
   if (w.mode === 'attached') {
-    // Only an explicit gesture lets go: a tap on the WEB pad, or a click of the right button.
+    // Only one gesture lets go: a completed tap on the WEB pad, or a completed right CLICK.
     // NOT `!holding` — the thumb lifted to fire this very shot, so that rule cut the line one
     // step after it attached and turned every phone shot into a fall (B50). Nothing needs to be
     // held to keep swinging; the pad is free for the tap and the sticks are free to climb with.
-    if ((g && g.tap) || inp.tapR) { cutWeb(state); return true; }
-    return true;
+    //
+    // And NOT `tapR`: a GRIP tap is a grab, not a release. On a phone, tapping GRIP-R mid-swing
+    // cut the line AND was swallowed, so the hand never armed; on a desktop `tapR` fires on
+    // pointerDOWN, so the line went the instant the button touched rather than on the click.
+    if (tapped && wasAttached) { cutWeb(state); return true; }
+    return false;                              // a GRIP tap mid-swing is a grab: let it through
   }
   return false;
 }
