@@ -6,6 +6,10 @@
 // spring-damped toward targets, weight shifts on one-arm hangs, gravity acts only
 // while falling. Nothing catches a fall: it runs to the ground and ends the climb.
 //
+// There are no grip buttons (B51). A free hand that stays on a piece of rock for
+// HOVER_GRAB_DWELL closes on it; a gripping hand lets go when its own stick is pushed past
+// RELEASE_DEADZONE. Every control the sim has is two sticks.
+//
 // Hold ids must equal their index in route.holds (route.js guarantees this).
 
 export const CFG = Object.freeze({
@@ -21,10 +25,20 @@ export const CFG = Object.freeze({
   DRAIN_ONE: 0.085,     // stamina/s for the only gripping hand (~12 s of hanging, was ~5 s)
   REFILL_FREE: 0.30,    // stamina/s for a free hand: shaking out recovers you quickly
   REFILL_RUNE: 0.50,    // stamina/s for a hand gripping a rune (runes never drain)
-  ARM_TIME: 2.5,        // an armed hand grabs the first hold that comes within SNAP for this long
-  SKIP_TIME: 6.0,       // backstop only: a released hold is skipped until the hand actually leaves it
+  SKIP_CLEAR: 0.04,     // the hold a hand just came off is locked out until the hand is this far
+                        // outside its grab radius — a distance, never a timer (see updateHand)
   REGRIP_LOCK: 0.14,    // after letting go, a hand needs this long before it can take rock again
   MAX_DT: 1 / 20,
+
+  // --- the grab, without a button (B51) ------------------------------------------------
+  // There is no GRIP any more: a hand that hovers over rock closes on it, and a gripping hand
+  // lets go when its own stick is pushed. Both of these are FEEL constants — the owner may want
+  // them retuned once he has climbed on them; the grab radius itself must not move (B3, B5).
+  HOVER_GRAB_DWELL: 0.12,   // seconds a free hand must stay on a hold before the fingers close,
+                            // so a hand sweeping across rock does not snag it
+  RELEASE_DEADZONE: 0.35,   // fraction of full stick deflection past which a gripping hand lets
+                            // go. Below it a gripping hand does not move, so a resting thumb
+                            // (or a thumb reaching for the other stick) can never drop you.
 
   // --- feel ---------------------------------------------------------------------------
   SWAY: 0.05,           // one-hand hang: the body target leans this far past the loaded hold
@@ -74,7 +88,7 @@ export const CFG = Object.freeze({
 });
 
 const ZERO_STICK = Object.freeze({ x: 0, y: 0 });
-const ZERO_INPUT = Object.freeze({ L: ZERO_STICK, R: ZERO_STICK, tapL: false, tapR: false });
+const ZERO_INPUT = Object.freeze({ L: ZERO_STICK, R: ZERO_STICK });
 const SIGN = { L: -1, R: 1 };
 const OTHER = { L: 'R', R: 'L' };
 
@@ -86,11 +100,17 @@ const clamp01 = (v) => (v < 0 ? 0 : v > 1 ? 1 : v);
 function makeHand(side, hold) {
   return {
     side, x: hold.x, y: hold.y, vx: 0, vy: 0, tx: hold.x, ty: hold.y,
-    gripping: true, holdId: hold.id, armed: false,
+    gripping: true, holdId: hold.id,
+    // `armed` never becomes true since B51 (nothing arms: hovering grabs). It stays on the hand
+    // because world.js reads it for the hover ring; it is a constant false, not a state.
+    armed: false,
     stamina: 1, tremble: 0, curl: 1, hover: 1,
     nearId: hold.id, nearDist: 0,             // nearest hold (extra, read-only convenience)
-    _stick: { x: 0, y: 0 }, _armT: 0,               // internal; _stick is also where a free hand is parked
-    _skipId: null, _skipT: 0,                       // the hold just let go of, not re-grabbed at once
+    _stick: { x: 0, y: 0 },                         // internal; _stick is also where a free hand is parked
+    _hoverId: null, _hoverT: 0,                     // rock the fingers are on, and for how long (B51)
+    _relArm: false,                                 // the stick has been back at centre since this grab
+    _skipId: null, _slipped: false,                 // the hold just let go of, until the hand leaves it
+                                                    // (_slipped: the fingers failed there, they did not choose)
     _regripT: 0,                                    // brief beat after a release before rock can be taken
   };
 }
@@ -181,10 +201,12 @@ export function step(state, input, dt) {
   const live = state.phase === 'climbing' || state.phase === 'falling' || state.phase === 'swinging' ||
     state.phase === 'grounded';
 
-  const webTap = updateWeb(state, inp, dt);      // may swallow the right tap as a shot
+  updateWeb(state, inp, dt);
   if (live) {
-    if (inp.tapL) tap(state, state.hands.L);
-    if (inp.tapR && !webTap) tap(state, state.hands.R);
+    // Letting go is a stick push now, one stick per hand (B51). Done before the hands move so a
+    // release and the reach it starts land on the same frame.
+    releaseFromStick(state, state.hands.L, inp.L);
+    releaseFromStick(state, state.hands.R, inp.R);
     updateStamina(state, dt);
   }
   updateBody(state, dt, inp);
@@ -373,17 +395,27 @@ function canGrab(state) {
 }
 
 // A hand grabs anywhere on a hold's surface (its own radius plus a fingertip's overlap), so a
-// big rock is a big target and a crimp is a small one.
+// big rock is a big target and a crimp is a small one. Since B51 this is also the HOVER radius:
+// stay inside it for HOVER_GRAB_DWELL and the fingers close on their own.
 export function grabRadius(hold) {
   // Deliberately NOT floored at SNAP any more: a crimp is a small target and should feel like
   // one. You must have the hand on the rock, anywhere on it, and nowhere else.
   return (hold.size || 0.12) + CFG.GRAB_EDGE;
 }
 
-// An ARMED hand sweeping past the cliff uses a tighter radius than a deliberate tap. Without
-// this an armed hand snags rock it was never reaching for — including holds behind it.
-export function armRadius(hold) {
-  return (hold.size || 0.12) * 0.92;
+// Letting go, with no button to do it (B51): push this hand's own stick past the deadzone and
+// the fingers open, and the same push is already steering the hand where it is going. A stick
+// under the deadzone leaves a gripping hand exactly where it is. One stick, one hand — pushing
+// the left stick can never drop the right hand, so no single thumb can let go of the cliff.
+//
+// It is the PUSH that lets go, not the pushed stick: the stick has to come back inside the
+// deadzone before it can let go again. Without that latch the stick you steered a hand across
+// the wall with would drop that hand again the frame after it closed on the rock, for ever.
+function releaseFromStick(state, hand, stick) {
+  if (!hand.gripping) return;
+  const sx = (stick && +stick.x) || 0, sy = (stick && +stick.y) || 0;
+  if (Math.hypot(sx, sy) <= CFG.RELEASE_DEADZONE) { hand._relArm = true; return; }
+  if (hand._relArm) release(state, hand, 'release');
 }
 
 // Nearest decoy that has not crumbled yet.
@@ -403,38 +435,22 @@ export function nearestFake(state, x, y) {
 // re-try the same spot. It crumbles for good, so the cliff teaches you as you climb it.
 function crumble(state, hand, fake) {
   fake.broken = true;
-  hand.armed = false;
-  hand._armT = 0;
+  hand._hoverId = null;                    // whatever is under it now needs its own dwell
+  hand._hoverT = 0;
+  hand._regripT = CFG.REGRIP_LOCK;
   hand.tremble = Math.max(hand.tremble, 0.7);
   push(state, { type: 'crumble', hand: hand.side, holdId: fake.id });
 }
 
-// GRIP is a toggle: release when gripping; otherwise grab the nearest hold within its radius,
-// or arm the hand so it grabs the first hold that comes within SNAP during ARM_TIME.
-function tap(state, hand) {
-  if (hand.gripping) { release(state, hand, 'release'); return; }
-  // Straight after letting go the fingers are still open and moving: a tap can only arm, so a
-  // hand cannot snatch the rock it is drifting past (or the one it just left).
-  if (canGrab(state) && hand._regripT <= 0) {
-    const near = targetHold(state, hand);
-    const fake = nearestFake(state, hand.x, hand.y);
-    // A decoy wins the grab when the fingers are on it and it is the closer rock.
-    if (fake && fake.d <= grabRadius(fake.hold) && (!near || fake.d < near.d)) { crumble(state, hand, fake.hold); return; }
-    if (near && near.d <= grabRadius(near.hold)) { grab(state, hand, near.hold); return; }
-    // A hold was close but not close enough: a real miss (the HUD shakes). A tap in empty rock,
-    // or right after letting go while still on the old hold, is a deliberate pre-arm: 'arm' only.
-    if (near && near.d <= CFG.HOVER_RANGE) push(state, { type: 'miss', hand: hand.side });
-  }
-  hand.armed = true;
-  hand._armT = CFG.ARM_TIME;
-  push(state, { type: 'arm', hand: hand.side });
-}
-
-// While another hand still grips, the hold this hand just released is skipped so that a
-// quick second tap arms the hand instead of taking the same hold again. Once the climber
-// is falling every hold counts: a panic re-grab inside the grace window saves the fall.
+// The hold this hand just came off is locked out of it, so that a hand still sitting inside that
+// rock does not simply take it again — which under an automatic grab would mean never being able
+// to let go at all. Falling lifts the lock, because once you are off the wall every hold counts
+// and closing again on the rock you just let go of is the grace window's panic re-grab — but not
+// when that rock is what spat the hand off: fingers that have just failed there do not re-close
+// on it, and without that a spent hand would grab and slip and grab again on the spot.
 function skipId(state, hand) {
-  return state.phase === 'climbing' ? hand._skipId : null;
+  if (state.phase === 'falling' && !hand._slipped) return null;
+  return hand._skipId;
 }
 
 // The hold this hand may take next: the nearest one that is neither the hold it just let go of
@@ -442,6 +458,52 @@ function skipId(state, hand) {
 function targetHold(state, hand) {
   const other = state.hands[OTHER[hand.side]];
   return nearestHold(state, hand.x, hand.y, skipId(state, hand), other.gripping ? other.holdId : null);
+}
+
+// What the hand is visibly OVER, for Hand.nearId / Hand.hover and the glow the world draws from
+// them. The skipped hold counts here even though it cannot be taken: a hand resting on the rock
+// it just released must light THAT rock, not point at some other one across the wall.
+function cueHold(state, hand) {
+  const other = state.hands[OTHER[hand.side]];
+  return nearestHold(state, hand.x, hand.y, other.gripping ? other.holdId : null);
+}
+
+// The grab, with no button (B51). A free hand that stays on a piece of rock for HOVER_GRAB_DWELL
+// closes on it. The dwell is the whole difference between reaching for a hold and sweeping past
+// one; leaving the rock before the fingers close is the 'miss' the HUD shakes on, and is the only
+// miss there is now that nothing is tapped. Decoys are taken exactly like real rock (B10).
+function updateHoverGrab(state, hand, dt, cue) {
+  // Mid-fall the regrip beat is waived: the fingers have to be allowed to close on whatever they
+  // are still touching, which is the whole of the grace window now that nothing is tapped.
+  // And the right hand does not grab rock while the line is out — a hand that is aiming, or has
+  // just shot, must not snag a hold and cancel the shot out from under you.
+  const eligible = canGrab(state) &&
+    (state.phase === 'falling' || hand._regripT <= 0) &&
+    !(hand.side === 'R' && state.web.mode !== 'idle');
+  let hold = null, fake = false;
+  if (eligible) {
+    // the cue already found the nearest rock; only re-search when it is the one locked out
+    const skip = skipId(state, hand);
+    const near = cue && cue.hold.id === skip ? targetHold(state, hand) : cue;
+    const fk = nearestFake(state, hand.x, hand.y);
+    if (fk && fk.d <= grabRadius(fk.hold) && (!near || fk.d < near.d)) { hold = fk.hold; fake = true; }
+    else if (near && near.d <= grabRadius(near.hold)) hold = near.hold;
+  }
+  const id = hold ? hold.id : null;
+  if (id !== hand._hoverId) {
+    // came off the rock (or slid onto a different one) before the fingers closed
+    if (hand._hoverId !== null && eligible) push(state, { type: 'miss', hand: hand.side, holdId: hand._hoverId });
+    hand._hoverId = id;
+    hand._hoverT = 0;
+    return;
+  }
+  if (id === null) return;
+  hand._hoverT += dt;
+  if (hand._hoverT < CFG.HOVER_GRAB_DWELL) return;
+  hand._hoverId = null;
+  hand._hoverT = 0;
+  if (fake) crumble(state, hand, hold);
+  else grab(state, hand, hold);
 }
 
 function grab(state, hand, hold) {
@@ -454,8 +516,9 @@ function grab(state, hand, hold) {
   }
   hand.gripping = true;
   hand.holdId = hold.id;
-  hand.armed = false;
-  hand._armT = 0;
+  hand._hoverId = null;
+  hand._hoverT = 0;
+  hand._relArm = false;                // the stick that steered the hand here must not also drop it
   // Grip where the fingers actually landed: clamp the hand onto the rock's surface and keep
   // that contact point, so a wide rock can be held at its edge instead of always at its centre.
   {
@@ -494,10 +557,15 @@ function release(state, hand, type) {
   const holdId = hand.holdId;
   hand.gripping = false;
   hand.holdId = null;
-  // The arm relaxes to the rest offset (`_stick` was cleared on the grab): letting go of rock is
-  // your own move, and a hand left hovering inside the grab zone of the hold it just released
-  // would have to be steered off it before it could aim at anything.
-  if (type === 'release') { hand._skipId = holdId; hand._skipT = CFG.SKIP_TIME; hand._regripT = CFG.REGRIP_LOCK; }
+  hand._hoverId = null;
+  hand._hoverT = 0;
+  // Every way off a hold locks that hold out of this hand until the hand has left it — a slip and
+  // a sloper timing out included, because the fingers are still inside the rock's radius and an
+  // automatic grab would otherwise take it straight back and drop you again a moment later.
+  // The lock is a distance, not a timer: see updateHand.
+  hand._skipId = holdId;
+  hand._slipped = type === 'slip';
+  hand._regripT = CFG.REGRIP_LOCK;
   push(state, { type, hand: hand.side, holdId });
   if (state.phase === 'climbing' && !anyGripping(state)) beginFall(state);
 }
@@ -658,25 +726,21 @@ function updateHand(state, hand, stickIn, dt) {
       if (vout > 0) { hand.vx -= vout * nx; hand.vy -= vout * ny; }
     }
 
-    if (hand.armed) { hand._armT -= dt; if (hand._armT <= 0) { hand.armed = false; hand._armT = 0; } }
     if (hand._regripT > 0) hand._regripT = Math.max(0, hand._regripT - dt);
     if (hand._skipId !== null) {
-      hand._skipT -= dt;
       const sk = state._holdById.get(hand._skipId);
-      // Clear on distance, not on a timer: an armed hand must not re-take the hold it just
-      // let go of while the fingers are still inside that rock's grab zone.
-      if (!sk || hand._skipT <= 0 || Math.hypot(sk.x - hand.x, sk.y - hand.y) > grabRadius(sk) + 0.04) hand._skipId = null;
+      // Clear on DISTANCE ONLY — there is no timer behind it. With the grab automatic, a hand
+      // parked on the hold it just let go of would otherwise be taken back by that hold with no
+      // input at all, the moment any timer lapsed. It stays locked until the hand is actually off
+      // the rock, which is always one deliberate stick push away.
+      if (!sk || Math.hypot(sk.x - hand.x, sk.y - hand.y) > grabRadius(sk) + CFG.SKIP_CLEAR) hand._skipId = null;
     }
 
-    const near = targetHold(state, hand);
-    hand.nearId = near ? near.hold.id : null;
-    hand.nearDist = near ? near.d : Infinity;
-    hand.hover = near ? clamp01(1 - near.d / CFG.HOVER_RANGE) : 0;
-    if (hand.armed && canGrab(state) && hand._regripT <= 0) {
-      const fk = nearestFake(state, hand.x, hand.y);
-      if (fk && fk.d <= armRadius(fk.hold) && (!near || fk.d < near.d)) crumble(state, hand, fk.hold);
-      else if (near && near.d <= armRadius(near.hold)) grab(state, hand, near.hold);
-    }
+    const cue = cueHold(state, hand);
+    hand.nearId = cue ? cue.hold.id : null;
+    hand.nearDist = cue ? cue.d : Infinity;
+    hand.hover = cue ? clamp01(1 - cue.d / CFG.HOVER_RANGE) : 0;
+    updateHoverGrab(state, hand, dt, cue);
   }
 
   // Fingers curl onto a hold (a little anticipation when hovering); tremble grows as stamina fades.

@@ -40,32 +40,46 @@ test('playability: you can hang long enough to think', () => {
   }
 });
 
+// The two primitives of the control model (B51), the same pair the sim tests use: there are no
+// buttons, so a hand lets go when its own stick is pushed past CFG.RELEASE_DEADZONE and a free
+// hand takes rock by hovering over it for CFG.HOVER_GRAB_DWELL.
+const DT = 1 / 120;
+const inp = (o = {}) => ({ L: { x: 0, y: 0 }, R: { x: 0, y: 0 }, holdR: false, ...o });
+function steerToHold(state, side, hold) {
+  const sh = shoulder(state, side);
+  const v = { x: (hold.x - sh.x) / CFG.REACH, y: (hold.y - sh.y) / CFG.REACH };
+  const m = Math.hypot(v.x, v.y);
+  if (m > 1) { v.x /= m; v.y /= m; }
+  return v;
+}
+// A beat at the centre (a thumb lifting off does this by itself), then one frame of full
+// deflection toward `dir`: that push is the release, and it already aims the reach.
+function releaseHand(state, side, dir = { x: 0, y: 1 }) {
+  const m = Math.hypot(dir.x, dir.y) || 1;
+  step(state, inp({ [side]: { x: 0, y: 0 } }), DT);
+  step(state, inp({ [side]: { x: dir.x / m, y: dir.y / m } }), DT);
+}
+
 // The real check: a steady, human-paced bot has to get up the whole thing.
 function botClimb(state) {
-  const DT = 1 / 120;
   const H = state.route.holds;
-  const zero = () => ({ L: { x: 0, y: 0 }, R: { x: 0, y: 0 }, tapL: false, tapR: false, holdL: false, holdR: false });
-  const steer = (side, hold) => {
-    const sh = shoulder(state, side);
-    const v = { x: (hold.x - sh.x) / CFG.REACH, y: (hold.y - sh.y) / CFG.REACH };
-    const m = Math.hypot(v.x, v.y);
-    if (m > 1) { v.x /= m; v.y /= m; }
-    return v;
-  };
   let grabs = 0, misses = 0, falls = 0;
+  const count = () => {
+    // With the rope gone (B43) there is no fallCount to read, and counting the event is the
+    // stronger guard anyway: it fires even for a slip the grace window recovers. A 'miss' is now
+    // a hand that came off rock before the fingers closed on it — the same thing the HUD shakes on.
+    for (const e of drainEvents(state)) { if (e.type === 'miss') misses++; else if (e.type === 'fall') falls++; }
+  };
   for (let i = 2; i < H.length;) {
     const side = intendedHand(i), hand = state.hands[side], hold = H[i];
     const startHold = hand.holdId, t0 = state.t;
     for (;;) {
       if (hand.gripping && hand.holdId !== startHold) break;
       if (state.t - t0 > 8) return { stuck: i, grabs, misses, falls, t: state.t };
-      const input = zero();
-      if (hand.gripping) input['tap' + side] = true;
-      else { input[side] = steer(side, hold); if (!hand.armed) input['tap' + side] = true; }
-      step(state, input, DT);
-      // With the rope gone (B43) there is no fallCount to read, and counting the event is the
-      // stronger guard anyway: it fires even for a slip the grace window recovers.
-      for (const e of drainEvents(state)) { if (e.type === 'miss') misses++; else if (e.type === 'fall') falls++; }
+      const v = steerToHold(state, side, hold);
+      if (hand.gripping) releaseHand(state, side, v);   // push toward the next hold: that is letting go
+      else step(state, inp({ [side]: v }), DT);         // then keep steering; the dwell does the grab
+      count();
     }
     grabs++;
     i = hand.holdId >= i ? hand.holdId + 1 : i;

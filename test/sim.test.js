@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { CFG, createClimber, startClimb, step, drainEvents, shoulder, hangTarget, restingShoulder } from '../src/sim.js';
+import { CFG, createClimber, startClimb, step, drainEvents, shoulder, hangTarget, restingShoulder, grabRadius } from '../src/sim.js';
 import { ROUTE, generateRoute, intendedHand } from '../src/route.js';
 
 const DT = 1 / 120;
@@ -8,10 +8,41 @@ const near = (a, b, tol, msg) => assert.ok(Math.abs(a - b) <= tol, `${msg ?? ''}
 const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
 
 function inp(o = {}) {
-  return { L: { x: 0, y: 0 }, R: { x: 0, y: 0 }, tapL: false, tapR: false, ...o };
+  return { L: { x: 0, y: 0 }, R: { x: 0, y: 0 }, ...o };
 }
 function run(state, seconds, input = null) {
   for (let t = 0; t < seconds - 1e-9; t += DT) step(state, input, DT);
+}
+
+// ---------------------------------------------------------------------------------------
+// The two primitives of the control model (B51). There are no buttons: a free hand takes rock
+// by hovering over it for CFG.HOVER_GRAB_DWELL, and a gripping hand lets go when its own stick
+// is pushed past CFG.RELEASE_DEADZONE. Everything below (and the bots) is built out of these two.
+
+// The stick vector that points `side`'s hand at `hold` from its current shoulder — what a thumb
+// aims for. Re-read every frame: a stick aimed once goes stale as soon as the shoulder shifts.
+function steerToHold(state, side, hold) {
+  const sh = shoulder(state, side);
+  const v = { x: (hold.x - sh.x) / CFG.REACH, y: (hold.y - sh.y) / CFG.REACH };
+  const m = Math.hypot(v.x, v.y);
+  if (m > 1) { v.x /= m; v.y /= m; }
+  return v;
+}
+// Let go with `side`: a beat at the centre to re-arm the stick (a thumb lifting off does this by
+// itself), then one frame of full deflection toward `dir` — that push IS the release, and it is
+// already steering the hand where it is going.
+function releaseHand(state, side, dir = { x: 0, y: 1 }) {
+  const m = Math.hypot(dir.x, dir.y) || 1;
+  step(state, inp({ [side]: { x: 0, y: 0 } }), DT);
+  step(state, inp({ [side]: { x: dir.x / m, y: dir.y / m } }), DT);
+}
+// Steer `side` onto `hold` and keep the stick there until the fingers close on their own.
+function grabByHover(state, side, hold, maxSeconds = 6) {
+  const t0 = state.t;
+  while (!state.hands[side].gripping && state.t - t0 < maxSeconds) {
+    step(state, inp({ [side]: steerToHold(state, side, hold) }), DT);
+  }
+  return state.hands[side].holdId;
 }
 // A tiny route: the two start holds plus whatever extra holds a test needs.
 function mkRoute(extra = [], startY = 1.2, top = 40) {
@@ -29,16 +60,9 @@ function climber(extra, startY, top) {
   return s;
 }
 const types = (state) => drainEvents(state).map((e) => e.type);
-// Stick vector that points a free hand at `hold` from its current shoulder (what a player aims for).
-function steer(state, side, hold) {
-  const sh = shoulder(state, side);
-  const v = { x: (hold.x - sh.x) / CFG.REACH, y: (hold.y - sh.y) / CFG.REACH };
-  const m = Math.hypot(v.x, v.y);
-  if (m > 1) { v.x /= m; v.y /= m; }
-  return v;
-}
+const steer = steerToHold;
 // Hold the stick on `hold` for `seconds`, re-aiming every frame the way a thumb does while the
-// body is still moving. A stick aimed once goes stale as soon as the shoulder shifts.
+// body is still moving; the hand closes on the rock by itself once it has been on it long enough.
 function drive(state, side, hold, seconds) {
   for (let t = 0; t < seconds - 1e-9; t += DT) step(state, inp({ [side]: steer(state, side, hold) }), DT);
 }
@@ -65,9 +89,9 @@ test('createClimber: title phase, both hands on the start holds, full stamina, b
   assert.deepEqual(s.events, []);
 });
 
-test('startClimb: enters climbing once and emits start; title ignores taps and does not drain', () => {
+test('startClimb: enters climbing once and emits start; title ignores the sticks and does not drain', () => {
   const s = createClimber(mkRoute());
-  run(s, 1, inp({ tapL: true, tapR: true }));
+  run(s, 1, inp({ L: { x: 0, y: 1 }, R: { x: 0, y: 1 } }));
   assert.equal(s.phase, 'title');
   assert.equal(s.hands.L.gripping, true);
   assert.equal(s.hands.L.stamina, 1);
@@ -80,18 +104,19 @@ test('startClimb: enters climbing once and emits start; title ignores taps and d
 
 test('step: dt is clamped to 1/20 and non-finite dt is ignored', () => {
   const a = climber(), b = climber();
-  step(a, inp({ tapL: true }), 1.0);
-  step(b, inp({ tapL: true }), 1 / 20);
+  releaseHand(a, 'L'); releaseHand(b, 'L');          // identical two-frame start on both
+  step(a, inp({ L: { x: 0, y: 1 } }), 1.0);
+  step(b, inp({ L: { x: 0, y: 1 } }), 1 / 20);
   assert.deepEqual(a.body, b.body);
   assert.deepEqual(a.hands.L.x, b.hands.L.x);
-  near(a.t, 1 / 20, 1e-12);
+  near(a.t, 2 * DT + 1 / 20, 1e-12);
   step(a, inp(), NaN);
-  near(a.t, 1 / 20, 1e-12);
+  near(a.t, 2 * DT + 1 / 20, 1e-12);
 });
 
 test('reach clamp: a free hand never leaves the REACH circle and a full stick reaches its rim', () => {
   const s = climber();
-  step(s, inp({ tapL: true }), DT);            // release the left hand
+  releaseHand(s, 'L');                         // push the stick: that is letting go
   run(s, 2, inp({ L: { x: 1, y: 1 } }));       // diagonal, beyond the unit disc
   let sh = shoulder(s, 'L');
   const d = dist(s.hands.L, sh);
@@ -112,7 +137,7 @@ test('reach clamp: a free hand never leaves the REACH circle and a full stick re
 
 test('free hand: a released stick leaves the hand where it was steered (B45)', () => {
   const s = climber();
-  step(s, inp({ tapL: true }), DT);
+  releaseHand(s, 'L', { x: 0.5, y: 0.5 });
   run(s, 3, inp({ L: { x: 0.5, y: 0.5 } }));
   const p = { x: s.hands.L.x, y: s.hands.L.y };
   const off = { x: p.x - shoulder(s, 'L').x, y: p.y - shoulder(s, 'L').y };
@@ -131,7 +156,9 @@ test('free hand: a released stick leaves the hand where it was steered (B45)', (
 
 test('free hand: a hand that has not been steered since it left the rock hangs at the rest offset', () => {
   const s = climber();
-  step(s, inp({ tapL: true }), DT);                    // let go without ever touching the stick
+  s.hands.L.stamina = 0.001;                           // it slips off on its own: no stick, ever
+  run(s, 0.2, inp());
+  assert.equal(s.hands.L.gripping, false);
   run(s, 2, inp());
   const sh = shoulder(s, 'L');
   near(s.hands.L.x, sh.x - CFG.REST_X, 0.02, 'rest x');
@@ -141,11 +168,10 @@ test('free hand: a hand that has not been steered since it left the rock hangs a
 test('free hand: a parked hand rides with the body while the other hand climbs (B45)', () => {
   const s = climber([{ x: -0.30, y: 1.35 }]);          // a hold up and left of the two start holds
   const up = s.route.holds[2];
-  step(s, inp({ tapL: true }), DT);
-  drive(s, 'L', up, 1.5);
-  step(s, inp({ tapL: true, L: steer(s, 'L', up) }), DT);
+  releaseHand(s, 'L', steer(s, 'L', up));
+  grabByHover(s, 'L', up);                             // steering onto the rock is the whole grab
   assert.equal(s.hands.L.holdId, 2, 'the left hand made the move');
-  step(s, inp({ tapR: true }), DT);                    // the right hand comes off and is flicked out
+  releaseHand(s, 'R', { x: 0.8, y: -0.3 });            // the right hand comes off and is flicked out
   run(s, 0.25, inp({ R: { x: 0.8, y: -0.3 } }));
   const sh0 = shoulder(s, 'R');
   const off = { x: s.hands.R.tx - sh0.x, y: s.hands.R.ty - sh0.y };   // the parked target, as an offset
@@ -163,8 +189,9 @@ test('free hand: a parked hand rides with the body while the other hand climbs (
 test('free hand: standing at the base, a parked hand walks back under the route with you (B45)', () => {
   const s = climber();
   s.body.x = 0.9;                                      // standing off to one side of the route
-  step(s, inp({ tapL: true, tapR: true }), DT);        // both hands off with your feet down: not a fall
-  run(s, 0.5, inp({ L: { x: -0.7, y: 0.6 } }));        // steer the left hand out, then let the stick go
+  releaseHand(s, 'L', { x: -0.7, y: -0.6 });           // both hands off with your feet down: not a fall
+  releaseHand(s, 'R', { x: 1, y: -0.4 });              // parked low, clear of the start holds
+  run(s, 0.5, inp({ L: { x: -0.7, y: -0.6 } }));       // steer the left hand out, then let the stick go
   assert.equal(s.phase, 'grounded');
   const sh0 = shoulder(s, 'L');
   const off = { x: s.hands.L.tx - sh0.x, y: s.hands.L.ty - sh0.y };
@@ -188,54 +215,56 @@ test('free hand: a zero stick at the start of a climb does not move a hand off i
   assert.equal(s.hands.R.gripping, true);
 });
 
-test('free hand: steer, let go of the stick, THEN tap GRIP — the hand still arms and closes (B45)', () => {
+test('free hand: steer, let go of the stick, steer again — the parked hand still closes on the rock (B45)', () => {
   const s = climber([{ x: L_UP.x + 0.29, y: L_UP.y - 0.06 }]);   // rock a third of a metre off to the side
-  step(s, inp({ tapL: true }), DT);
+  releaseHand(s, 'L');
   run(s, 1.5, inp({ L: { x: 0, y: 1 } }));             // steer straight up, short of the hold
   run(s, 1.5, inp());                                  // thumb off the stick for a second and a half
   const parked = { x: s.hands.L.x, y: s.hands.L.y };
   const d = dist(s.hands.L, s.route.holds[2]);
-  assert.ok(d > CFG.SNAP && d <= CFG.HOVER_RANGE, `parked ${d.toFixed(2)} m from the hold, out of grab range`);
+  assert.ok(d > grabRadius(s.route.holds[2]) && d <= CFG.HOVER_RANGE, `parked ${d.toFixed(2)} m from the hold, out of grab range`);
+  assert.equal(s.hands.L.gripping, false, 'parked beside a hold is not on it: nothing grabs');
   assert.equal(s.hands.L.nearId, 2, 'nearId keeps updating while the hand is parked');
   assert.ok(s.hands.L.hover > 0, 'and so does hover');
   drainEvents(s);
-  step(s, inp({ tapL: true }), DT);                    // the tap comes after the thumb is off the stick
-  assert.equal(s.hands.L.armed, true);
-  assert.deepEqual(types(s), ['miss', 'arm']);
-  near(dist(s.hands.L, parked), 0, 0.02, 'the tap did not move the hand');
-  drive(s, 'L', s.route.holds[2], 1.2);                // steer the armed hand onto the rock
+  run(s, 2, inp());                                    // and it stays parked, for as long as you leave it
+  near(dist(s.hands.L, parked), 0, 0.01, 'the parked hand did not drift onto the hold by itself');
+  assert.deepEqual(types(s), []);
+  drive(s, 'L', s.route.holds[2], 1.2);                // pick the stick up again and steer onto the rock
   assert.equal(s.hands.L.gripping, true);
   assert.equal(s.hands.L.holdId, 2);
   assert.deepEqual(types(s), ['grab']);
 });
 
-test('grab: a tap grabs the nearest hold within SNAP, closes the hand onto it (no teleport) and curls the fingers', () => {
+test('grab: hovering over a hold closes the hand onto it (no teleport) and curls the fingers', () => {
   const s = climber([{ x: L_UP.x + 0.03, y: L_UP.y + 0.02 }]);
-  step(s, inp({ tapL: true }), DT);
-  run(s, 1.5, inp({ L: { x: 0, y: 1 } }));
-  assert.ok(s.hands.L.curl < 0.3, 'fingers open while free');
-  assert.ok(s.hands.L.hover > 0.8, 'hover rises next to the hold');
-  assert.equal(s.hands.L.nearId, 2);
-  drainEvents(s);
-  const before = { x: s.hands.L.x, y: s.hands.L.y };
   const hold = s.route.holds[2];
-  step(s, inp({ tapL: true, L: { x: 0, y: 1 } }), DT);
+  releaseHand(s, 'L');
+  // steer up and stop the moment the fingers are on the rock, a frame before they close
+  let before = null, curlBefore = 1;
+  for (let i = 0; i < 400 && !s.hands.L.gripping; i++) {
+    before = { x: s.hands.L.x, y: s.hands.L.y };
+    curlBefore = s.hands.L.curl;
+    step(s, inp({ L: { x: 0, y: 1 } }), DT);
+  }
+  assert.ok(curlBefore < 0.35, `fingers should still be open the frame before the grab (curl ${curlBefore.toFixed(2)})`);
   assert.equal(s.hands.L.gripping, true);
   assert.equal(s.hands.L.holdId, 2);
+  assert.equal(s.hands.L.nearId, 2);
+  const ev = drainEvents(s).filter((e) => e.type === 'grab');
+  assert.deepEqual(ev, [{ type: 'grab', hand: 'L', holdId: 2 }]);
   // The hand grips where the fingers landed: the target is a point ON the rock, not its centre.
   const off = Math.hypot(s.hands.L.tx - hold.x, s.hands.L.ty - hold.y);
   assert.ok(off <= hold.size, `the target is on the rock (off by ${off.toFixed(3)} of ${hold.size})`);
   assert.deepEqual([s.hands.L.tx, s.hands.L.ty], [hold.x + s.hands.L.gripDX, hold.y + s.hands.L.gripDY], 'the target is the contact point at once');
   const gripPt = { x: hold.x + s.hands.L.gripDX, y: hold.y + s.hands.L.gripDY };
   assert.ok(dist(s.hands.L, before) < 0.02, 'the hand is still where it was on the grab frame');
-  assert.deepEqual(drainEvents(s), [{ type: 'grab', hand: 'L', holdId: 2 }]);
-  // It closes onto the hold without overshoot and sits exactly on it within 0.2 s.
-  let d = dist(s.hands.L, hold);
+  // It settles onto the contact point and sits exactly on it within 0.2 s. The hand arrives with
+  // the momentum of the reach now (nothing is tapped, so the grab happens mid-move), so the wrist
+  // may carry a centimetre past it — but it may never fly off and it must end locked on.
   for (let t = 0; t < 0.2; t += DT) {
     step(s, inp(), DT);
-    const nd = dist(s.hands.L, gripPt);
-    assert.ok(nd <= d + 1e-9, `closing in (${nd} after ${d})`);
-    d = nd;
+    assert.ok(dist(s.hands.L, gripPt) < 0.03, `the hand left the hold it closed on (${dist(s.hands.L, gripPt).toFixed(3)} m)`);
   }
   assert.equal(s.hands.L.x, gripPt.x, 'settles exactly on the contact point');
   assert.equal(s.hands.L.y, gripPt.y);
@@ -246,9 +275,10 @@ test('grab: a tap grabs the nearest hold within SNAP, closes the hand onto it (n
 
 test('grab: the settle is stable at the largest step (1/20 s) and ends locked on the hold', () => {
   const s = climber([{ x: L_UP.x + 0.1, y: L_UP.y - 0.1 }]);
-  step(s, inp({ tapL: true }), DT);
-  run(s, 1.5, inp({ L: { x: 0, y: 1 } }));
-  step(s, inp({ tapL: true, L: { x: 0, y: 1 } }), 1 / 20);
+  step(s, inp({ L: { x: 0, y: 0 } }), 1 / 20);          // centre the stick, then push it: that lets go
+  step(s, inp({ L: { x: 0, y: 1 } }), 1 / 20);
+  assert.equal(s.hands.L.gripping, false);
+  for (let i = 0; i < 100 && !s.hands.L.gripping; i++) step(s, inp({ L: { x: 0, y: 1 } }), 1 / 20);
   assert.equal(s.hands.L.holdId, 2);
   const hold = s.route.holds[2];
   const grip = { x: hold.x + s.hands.L.gripDX, y: hold.y + s.hands.L.gripDY };
@@ -263,101 +293,155 @@ test('grab: the settle is stable at the largest step (1/20 s) and ends locked on
   assert.equal(s.hands.L.vx, 0);
 });
 
-test('grab: lifting the thumb off the stick and then tapping GRIP still takes the hold', () => {
+test('grab: the dwell does not need the thumb — a hand parked on the rock still closes on it', () => {
   const s = climber([{ x: L_UP.x, y: L_UP.y }]);
-  step(s, inp({ tapL: true }), DT);
-  run(s, 1.5, inp({ L: { x: 0, y: 1 } }));
-  run(s, 0.4, inp());                                  // thumb off the stick for 0.4 s
-  step(s, inp({ tapL: true }), DT);
-  assert.equal(s.hands.L.holdId, 2);
+  const hold = s.route.holds[2];
+  releaseHand(s, 'L');
+  // steer until the fingers are just on the rock, then take the thumb off the stick entirely
+  for (let i = 0; i < 400; i++) {
+    step(s, inp({ L: { x: 0, y: 1 } }), DT);
+    if (dist(s.hands.L, hold) <= grabRadius(hold)) break;
+  }
+  assert.equal(s.hands.L.gripping, false, 'it must not have closed yet');
+  run(s, CFG.HOVER_GRAB_DWELL + 2 * DT, inp());        // nothing on the stick at all
+  assert.equal(s.hands.L.holdId, 2, 'the hand it left on the rock still took it');
 });
 
-test('grab: a hand never takes the hold the other hand is holding', () => {
+test('grab: a hand never takes the hold the other hand is holding, however long it sits on it', () => {
   const s = climber();
-  step(s, inp({ tapL: true }), DT);                    // left free, right on hold 1
+  releaseHand(s, 'L');                                 // left free, right on hold 1
   const taken = s.route.holds[1];
-  for (let t = 0; t < 2; t += DT) step(s, inp({ L: steer(s, 'L', taken) }), DT);
-  assert.ok(dist(s.hands.L, taken) < CFG.SNAP, 'the free hand can hover over the other hand\'s hold');
+  drive(s, 'L', taken, 3);                             // three seconds parked on top of it
+  assert.ok(dist(s.hands.L, taken) < grabRadius(taken), 'the free hand can hover over the other hand\'s hold');
   assert.notEqual(s.hands.L.nearId, 1);
-  drainEvents(s);
-  step(s, inp({ tapL: true, L: steer(s, 'L', taken) }), DT);
-  assert.equal(s.hands.L.gripping, false);
-  assert.equal(s.hands.L.armed, true);
-  for (let t = 0; t < 1; t += DT) step(s, inp({ L: steer(s, 'L', taken) }), DT);   // armed on top of it: still no
   assert.equal(s.hands.L.gripping, false);
   assert.equal(s.hands.R.holdId, 1);
 });
 
-test('miss: a tap near a hold (within hover range) is a miss; a tap in empty rock only arms', () => {
-  const s = climber([{ x: L_UP.x, y: L_UP.y - 0.15 }]);
-  step(s, inp({ tapL: true }), DT);
-  run(s, 2, inp());                                    // at rest: ~0.30 m from hold 2
-  const d = dist(s.hands.L, s.route.holds[2]);
-  assert.ok(d > CFG.SNAP && d <= CFG.HOVER_RANGE, `rest distance ${d}`);
-  drainEvents(s);
-  step(s, inp({ tapL: true }), DT);
-  assert.deepEqual(types(s), ['miss', 'arm']);
-  run(s, 3, inp({ L: { x: -1, y: -0.3 } }));           // low and far out on the left: nothing within hover range
-  assert.equal(s.hands.L.hover, 0);
-  assert.equal(s.hands.L.armed, false);
-  drainEvents(s);
-  step(s, inp({ tapL: true, L: { x: -1, y: -0.3 } }), DT);
-  assert.deepEqual(types(s), ['arm']);
-});
-
-test('grab: a tap beyond SNAP misses and arms the hand; an armed hand grabs the first hold that comes within SNAP', () => {
+test('grab: the hand closes after the dwell and not a frame before it (B51)', () => {
   const s = climber([{ x: L_UP.x, y: L_UP.y }]);
-  step(s, inp({ tapL: true }), DT);
-  run(s, 2, inp());                                    // hand at rest, far from hold 2
-  assert.ok(dist(s.hands.L, s.route.holds[2]) > CFG.SNAP);
-  drainEvents(s);
-  step(s, inp({ tapL: true }), DT);
-  assert.equal(s.hands.L.gripping, false);
-  assert.equal(s.hands.L.armed, true);
-  assert.deepEqual(types(s), ['miss', 'arm']);
-  run(s, 1.5, inp({ L: { x: 0, y: 1 } }));            // steer onto the hold, no second tap
-  assert.equal(s.hands.L.gripping, true);
+  const hold = s.route.holds[2];
+  releaseHand(s, 'L');
+  let onRockAt = null;
+  for (let i = 0; i < 600 && !s.hands.L.gripping; i++) {
+    step(s, inp({ L: { x: 0, y: 1 } }), DT);
+    if (onRockAt === null && dist(s.hands.L, hold) <= grabRadius(hold)) onRockAt = s.t;
+    if (onRockAt !== null && !s.hands.L.gripping) {
+      assert.ok(s.t - onRockAt <= CFG.HOVER_GRAB_DWELL + 2 * DT, 'it should not still be open this long after arriving');
+    }
+  }
+  assert.equal(s.hands.L.gripping, true, 'a hand held on the rock takes it, with nothing tapped');
   assert.equal(s.hands.L.holdId, 2);
-  assert.equal(s.hands.L.armed, false);
-  assert.deepEqual(types(s), ['grab']);
+  const dwelt = s.t - onRockAt;
+  assert.ok(dwelt >= CFG.HOVER_GRAB_DWELL - 1e-9, `closed after only ${dwelt.toFixed(3)} s on the rock`);
+  assert.ok(dwelt <= CFG.HOVER_GRAB_DWELL + 2 * DT, `took ${dwelt.toFixed(3)} s to close`);
 });
 
-test('grab: arming expires after ARM_TIME without a hold', () => {
-  const s = climber();
-  step(s, inp({ tapL: true }), DT);
-  run(s, 2, inp());
-  step(s, inp({ tapL: true }), DT);
-  assert.equal(s.hands.L.armed, true);
-  run(s, CFG.ARM_TIME - 0.2, inp());
-  assert.equal(s.hands.L.armed, true);
-  run(s, 0.4, inp());
-  assert.equal(s.hands.L.armed, false);
+test('grab: a hand sweeping across a hold does not snag it — and reports the miss (B51)', () => {
+  // A small hold crossed at speed on the way somewhere else: the fingers are on it for less than
+  // the dwell, so it is not taken. This is the only 'miss' the sim reports now.
+  const LEFT = { x: -0.35, y: 0.94 }, RIGHT = { x: 0.35, y: 0.94 };   // one flick across the top of the reach
+  const s = climber([{ x: 0.11, y: 1.547, size: 0.10 }]);
+  const hold = s.route.holds[2];
+  releaseHand(s, 'L', LEFT);
+  run(s, 2, inp({ L: LEFT }));                         // parked out to the left of it, clear of everything
+  assert.ok(dist(s.hands.L, hold) > grabRadius(hold), 'parked clear of the hold to begin with');
   assert.equal(s.hands.L.gripping, false);
+  drainEvents(s);
+  let inside = 0, closest = Infinity;
+  for (let i = 0; i < 60; i++) {                       // sweep across it in one flick of the stick
+    step(s, inp({ L: RIGHT }), DT);
+    const d = dist(s.hands.L, hold);
+    closest = Math.min(closest, d);
+    if (d <= grabRadius(hold)) inside++;
+  }
+  assert.ok(closest <= grabRadius(hold), `the sweep never touched the hold (closest ${closest.toFixed(3)} m)`);
+  assert.ok(inside > 0 && inside * DT < CFG.HOVER_GRAB_DWELL,
+    `the hand was on the rock for ${(inside * DT).toFixed(3)} s: that is not a sweep past it`);
+  assert.equal(s.hands.L.gripping, false, 'sweeping across a hold must not take it');
+  const ev = types(s);
+  assert.ok(ev.includes('miss'), 'coming off rock before the fingers close is the miss');
+  assert.ok(!ev.includes('grab'));
 });
 
-test('release: a tap on a gripping hand lets go and emits release', () => {
+test('release: a stick pushed past the deadzone lets go, and the hand follows the stick (B51)', () => {
   const s = climber();
-  step(s, inp({ tapR: true }), DT);
+  step(s, inp({ R: { x: 1, y: 0 } }), DT);             // full deflection, but the stick was never centred
+  assert.equal(s.hands.R.gripping, true, 'a stick that has not been at centre since the grab cannot let go');
+  step(s, inp({ R: { x: 0, y: 0 } }), DT);             // thumb off: the stick re-arms
+  step(s, inp({ R: { x: 1, y: 0 } }), DT);
   assert.equal(s.hands.R.gripping, false);
   assert.equal(s.hands.R.holdId, null);
   assert.deepEqual(drainEvents(s), [{ type: 'release', hand: 'R', holdId: 1 }]);
   assert.equal(s.phase, 'climbing');
+  const sh0 = shoulder(s, 'R');
+  near(s.hands.R.tx - sh0.x, CFG.REACH, 1e-9, 'and the hand is already headed where the stick points');
+  run(s, 1, inp({ R: { x: 1, y: 0 } }));
+  const sh1 = shoulder(s, 'R');
+  near(s.hands.R.x - sh1.x, CFG.REACH, 0.02, 'the hand follows the stick out');
 });
 
-test('release then tap: the second tap arms the hand instead of re-taking the same hold', () => {
+test('release: a stick under the deadzone never lets go, however long it is held there', () => {
   const s = climber();
-  step(s, inp({ tapR: true }), DT);
-  step(s, inp({ tapR: true }), DT);                    // still on top of hold 1
+  const m = CFG.RELEASE_DEADZONE - 0.02;
+  run(s, 3, inp({ L: { x: m, y: 0, active: true }, R: { x: 0, y: -m, active: true } }));
+  assert.equal(s.hands.L.gripping, true, 'a thumb resting on the ring must never drop you');
+  assert.equal(s.hands.R.gripping, true);
+  assert.equal(s.hands.L.holdId, 0);
+  assert.equal(s.hands.R.holdId, 1);
+  assert.ok(!types(s).includes('release'));
+});
+
+test('release: one stick only ever lets go of its own hand (B51)', () => {
+  const s = climber();
+  step(s, inp(), DT);                                  // a thumb lands on the left ring at centre...
+  run(s, 3, inp({ L: { x: -0.9, y: 0.4 } }));          // ...and buries it for three seconds
+  assert.equal(s.hands.L.gripping, false, 'the left hand let go');
+  assert.equal(s.hands.R.gripping, true, 'and the right hand is still on the rock');
+  assert.equal(s.hands.R.holdId, 1);
+  assert.equal(s.phase, 'climbing', 'so one thumb can never drop the whole climber');
+});
+
+test('decoy: a hovering hand takes a decoy exactly like rock, and it gives way (B10)', () => {
+  const s = climber();
+  const fake = { id: 10000, x: L_UP.x, y: L_UP.y, size: 0.14, kind: 'hold', lit: false, angle: 0 };
+  s.route.fakes = [fake];
+  releaseHand(s, 'L');
+  for (let i = 0; i < 400 && !fake.broken; i++) step(s, inp({ L: { x: 0, y: 1 } }), DT);   // steer onto it; nothing is tapped
+  assert.equal(fake.broken, true, 'the decoy took the grab');
+  assert.equal(s.hands.L.gripping, false, 'and gave way: the hand comes off it with nothing');
+  const ev = drainEvents(s);
+  assert.deepEqual(ev.filter((e) => e.type === 'crumble'), [{ type: 'crumble', hand: 'L', holdId: 10000 }]);
+  assert.ok(!ev.some((e) => e.type === 'grab'), 'a decoy is never a hold');
+  assert.ok(s.hands.L.tremble > 0.5, 'it costs you: the hand shakes');
+  run(s, 3, inp({ L: { x: 0, y: 1 } }));                // it is gone for good — the same spot is bare rock
+  assert.equal(s.hands.L.gripping, false);
+  assert.ok(!types(s).includes('crumble'));
+});
+
+test('release: the hold just let go of is not taken back while the hand is still on it (B51)', () => {
+  const s = climber();
+  releaseHand(s, 'R', { x: 0, y: 1 });
   assert.equal(s.hands.R.gripping, false);
-  assert.equal(s.hands.R.armed, true);
-  assert.equal(s.hands.R.hover < 1, true);
-  assert.deepEqual(types(s), ['release', 'arm']);      // a deliberate pre-arm, not a miss: no pill shake
-  run(s, 0.4, inp());                                  // armed and lingering on the old hold: still no grab
-  assert.equal(s.hands.R.gripping, false);
-  run(s, CFG.SKIP_TIME, inp());                        // the skip expires; a tap takes the hold again if it is still in reach
-  const d = dist(s.hands.R, s.route.holds[1]);
-  step(s, inp({ tapR: true }), DT);
-  assert.equal(s.hands.R.gripping, d <= CFG.SNAP);
+  const hold = s.route.holds[1];
+  // steer the hand back onto the rock it just left and leave it there
+  drive(s, 'R', hold, 1.5);
+  assert.ok(dist(s.hands.R, hold) <= grabRadius(hold), 'the hand is sitting on the hold it released');
+  assert.equal(s.hands.R.gripping, false, 'and it is not taken back');
+  assert.equal(s.hands.R.nearId, 1, 'the hover cue still points at the rock the hand is actually on');
+  assert.ok(s.hands.R.hover > 0.7, `the cue should be lit on the rock under the hand (hover ${s.hands.R.hover.toFixed(2)})`);
+  drainEvents(s);
+  run(s, 10, inp());                                   // ten seconds parked on it, with no input at all
+  assert.equal(s.hands.R.gripping, false, 'a parked hand must never take a hold on its own');
+  assert.ok(!types(s).includes('grab'));
+  // A deliberate return does take it: steer off the rock (that clears the lock), then come back.
+  const t0 = s.t;
+  for (let i = 0; i < 600 && s.hands.R._skipId !== null; i++) step(s, inp({ R: { x: 0.2, y: -1 } }), DT);
+  assert.equal(s.hands.R._skipId, null, 'leaving the rock unlocks it');
+  const left = s.t - t0;
+  grabByHover(s, 'R', hold, 3);
+  assert.equal(s.hands.R.holdId, 1, 'and coming back takes it again');
+  assert.ok(s.t - t0 < 2, `the deliberate return took ${(s.t - t0).toFixed(2)} s (${left.toFixed(2)} s of it getting off the rock)`);
 });
 
 test('body: two gripping hands → mean of the holds minus HANG_TWO', () => {
@@ -371,7 +455,7 @@ test('body: two gripping hands → mean of the holds minus HANG_TWO', () => {
 
 test('body: one gripping hand → hold minus HANG_ONE, swaying toward the loaded arm', () => {
   const s = climber();
-  step(s, inp({ tapL: true }), DT);
+  releaseHand(s, 'L', { x: -1, y: 0.2 });
   let maxX = -Infinity;
   for (let t = 0; t < 3; t += DT) { step(s, inp(), DT); maxX = Math.max(maxX, s.body.x); }
   near(s.body.x, 0.25 + CFG.SWAY, 0.01, 'body x');
@@ -383,13 +467,14 @@ test('body: one gripping hand → hold minus HANG_ONE, swaying toward the loaded
 
 test('body: no gripping hand → falling under gravity with a fall event', () => {
   const s = climber([], 10);
-  step(s, inp({ tapL: true, tapR: true }), DT);
+  releaseHand(s, 'L', { x: -1, y: 0.2 });
+  releaseHand(s, 'R', { x: 1, y: 0.2 });               // the second hand off is the whole cliff (B43)
   assert.equal(s.phase, 'falling');
   assert.deepEqual(types(s), ['release', 'release', 'fall']);
   assert.equal(hangTarget(s), null);
   const y0 = s.body.y;
   run(s, 0.1, inp());
-  assert.ok(s.body.vy < -0.9 && s.body.vy > -1.1, `vy ${s.body.vy}`);
+  near(s.body.vy, -CFG.GRAVITY * s._fall.t, 0.08, 'the plunge is plain gravity');
   assert.ok(s.body.y < y0);
 });
 
@@ -403,8 +488,8 @@ test('stamina: both hands gripping drain 0.05/s each', () => {
 test('stamina: the only gripping hand drains 0.20/s while the free hand refills 0.18/s', () => {
   const s = climber();
   s.hands.L.stamina = 0.5;
-  step(s, inp({ tapL: true }), DT);
-  run(s, 1 - DT, inp());
+  releaseHand(s, 'L', { x: -1, y: 0.2 });
+  run(s, 1 - 2 * DT, inp());
   near(s.hands.R.stamina, 1 - CFG.DRAIN_ONE, 0.003, 'gripping hand');
   near(s.hands.L.stamina, 0.5 + CFG.REFILL_FREE, 0.003, 'free hand');
   run(s, 5, inp());
@@ -420,7 +505,7 @@ test('stamina: a rune hold never drains and refills 0.50/s', () => {
   s.hands.L.stamina = 0.2;
   run(s, 1, inp());
   near(s.hands.L.stamina, 0.2 + CFG.REFILL_RUNE, 0.003);
-  step(s, inp({ tapR: true }), DT);                    // hang from the rune alone
+  releaseHand(s, 'R', { x: 1, y: 0.2 });               // hang from the rune alone
   run(s, 2, inp());
   assert.equal(s.hands.L.stamina, 1);
 });
@@ -439,7 +524,7 @@ test('stamina: reaching zero forces a release with a slip event, the other hand 
 
 test('stamina: slipping off the last hold starts a fall', () => {
   const s = climber([], 10);
-  step(s, inp({ tapL: true }), DT);
+  releaseHand(s, 'L', { x: -1, y: 0.2 });
   s.hands.R.stamina = 0.01;
   run(s, 0.3, inp());
   assert.equal(s.phase, 'falling');
@@ -449,7 +534,8 @@ test('stamina: slipping off the last hold starts a fall', () => {
 test('fall: nothing catches you — the plunge runs to the ground and ends the climb', () => {
   const s = climber([], 10);
   const from = s.body.y;
-  step(s, inp({ tapL: true, tapR: true }), DT);
+  releaseHand(s, 'L', { x: -1, y: 0.2 });
+  releaseHand(s, 'R', { x: 1, y: 0.2 });
   let hitAt = null, maxSpeed = 0;
   for (let t = 0; t < 8 && hitAt === null; t += DT) {
     step(s, inp(), DT);
@@ -472,14 +558,21 @@ test('fall: nothing catches you — the plunge runs to the ground and ends the c
   assert.equal(s.hands.R.gripping, false);
 });
 
-test('fall: a grab inside the grace window saves it, and nothing is counted', () => {
+test('fall: a hand still on the rock inside the grace window saves it, and nothing is counted', () => {
+  // The grace window is unchanged (CFG.GRACE): what a hand has to do inside it is hold on, not tap.
+  // Let the last hand go without moving it off the hold and the fingers find the rock again — the
+  // panic re-grab. The lock on the hold you just released is lifted only while falling.
   const s = climber([], 10);
-  step(s, inp({ tapL: true, tapR: true }), DT);
-  run(s, 0.12, inp());
+  const hold = s.route.holds[1];
+  releaseHand(s, 'L', { x: -1, y: 0.2 });
+  run(s, 0.6, inp({ L: { x: -1, y: 0.2 } }));          // the left hand is well clear of everything
+  releaseHand(s, 'R', steer(s, 'R', hold));            // let go without leaving the rock
   assert.equal(s.phase, 'falling');
-  step(s, inp({ tapL: true }), DT);                    // the left hand is still next to hold 0
-  assert.equal(s.phase, 'climbing');
-  assert.equal(s.hands.L.holdId, 0);
+  const t0 = s.t;
+  for (let i = 0; i < 200 && s.phase === 'falling'; i++) step(s, inp({ R: steer(s, 'R', hold) }), DT);
+  assert.equal(s.phase, 'climbing', 'the hand found rock in time');
+  assert.equal(s.hands.R.holdId, 1);
+  assert.ok(s.t - t0 <= CFG.GRACE + 1e-9, `saved after ${(s.t - t0).toFixed(3)} s, past the ${CFG.GRACE} s window`);
   const ev = types(s);
   assert.ok(!ev.includes('catch'));
   assert.ok(!ev.includes('fallen'), 'saved in time: the climb goes on');
@@ -487,11 +580,12 @@ test('fall: a grab inside the grace window saves it, and nothing is counted', ()
 
 test('fall: past the grace window nothing can be grabbed, all the way to the ground', () => {
   const s = climber([{ x: -0.25, y: 10 - 0.8 }], 10);  // a hold the falling left hand passes at ~0.4 s
-  step(s, inp({ tapL: true, tapR: true }), DT);
-  run(s, 0.3, inp());
-  step(s, inp({ tapL: true }), DT);                    // arms only: past the grace window
-  assert.equal(s.hands.L.armed, true);
-  assert.ok(!types(s).includes('miss'));
+  releaseHand(s, 'L', { x: -1, y: 0.2 });
+  releaseHand(s, 'R', { x: 1, y: 0.2 });
+  run(s, CFG.GRACE + 0.05, inp());                     // past the window before the hold comes by
+  const hold = s.route.holds[2];
+  for (let i = 0; i < 120; i++) step(s, inp({ L: steer(s, 'L', hold) }), DT);
+  assert.equal(s.hands.L.gripping, false, 'nothing may be taken once the window has closed');
   run(s, 6, inp());
   assert.equal(s.phase, 'fallen');
   assert.equal(s.hands.L.gripping, false, 'the hold it passed must not save it');
@@ -502,8 +596,9 @@ test('fall: letting go with your feet on the ground is not a fall', () => {
   const s = climber();
   s.body.x = 0.6;                                      // even when the body was off to one side
   assert.ok(s.body.y <= CFG.FLOOR + CFG.HANG_TWO, 'the start hang is within standing height');
-  step(s, inp({ tapL: true, tapR: true }), DT);
-  run(s, 4, inp());
+  releaseHand(s, 'L', { x: -1, y: 0.2 });
+  releaseHand(s, 'R', { x: 1, y: 0.2 });
+  run(s, 4, inp({ L: { x: -1, y: 0.2 }, R: { x: 1, y: 0.2 } }));
   assert.equal(s.phase, 'grounded', 'you were standing, so you stay standing');
   near(s.body.y, CFG.FLOOR, 0.03);
   assert.ok(!types(s).includes('fallen'), 'no death screen for stepping off the ground');
@@ -513,20 +608,17 @@ test('fall: letting go with your feet on the ground is not a fall', () => {
 
 test('rune: grabbing a rune lights it once, sets the checkpoint and emits rune', () => {
   const s = climber([{ x: L_UP.x, y: L_UP.y, kind: 'rune' }]);
-  step(s, inp({ tapL: true }), DT);
+  releaseHand(s, 'L');
   run(s, 1.5, inp({ L: { x: 0, y: 1 } }));
-  step(s, inp({ tapL: true }), DT);
-  run(s, 0.1, inp());
   assert.equal(s.hands.L.holdId, 2);
   assert.equal(s.route.holds[2].lit, true);
   assert.equal(s.checkpoint, 2);
   assert.deepEqual(s.runesLit, [2]);
   const ev = drainEvents(s);
   assert.deepEqual(ev.filter((e) => e.type === 'rune'), [{ type: 'rune', hand: 'L', holdId: 2 }]);
-  step(s, inp({ tapL: true }), DT);                    // let go, drift away, come back: no second rune event
-  run(s, 1.0, inp());
-  run(s, 1.5, inp({ L: { x: 0, y: 1 } }));
-  step(s, inp({ tapL: true }), DT);
+  releaseHand(s, 'L', { x: -1, y: -0.4 });             // let go, drift away, come back: no second rune event
+  run(s, 1.0, inp({ L: { x: -1, y: -0.4 } }));
+  run(s, 2.0, inp({ L: { x: 0, y: 1 } }));
   assert.equal(s.hands.L.holdId, 2);
   assert.ok(!types(s).includes('rune'));
   assert.deepEqual(s.runesLit, [2]);
@@ -535,16 +627,14 @@ test('rune: grabbing a rune lights it once, sets the checkpoint and emits rune',
 
 test('summit: grabbing the summit hold completes the ritual', () => {
   const s = climber([{ x: L_UP.x, y: L_UP.y, kind: 'summit', size: 0.24 }]);
-  step(s, inp({ tapL: true }), DT);
+  releaseHand(s, 'L');
   run(s, 1.5, inp({ L: { x: 0, y: 1 } }));
-  step(s, inp({ tapL: true }), DT);
-  run(s, 0.1, inp());
   assert.equal(s.phase, 'summit');
   assert.equal(s.route.holds[2].lit, true);
   const ev = drainEvents(s);
   assert.ok(ev.some((e) => e.type === 'summit' && e.hand === 'L' && e.holdId === 2));
   const st = s.hands.R.stamina;
-  run(s, 2, inp({ tapL: true, tapR: true }));          // input is ignored once the ritual is complete
+  run(s, 2, inp({ L: { x: -1, y: -1 }, R: { x: 1, y: -1 } }));   // input is ignored once the ritual is complete
   assert.equal(s.phase, 'summit');
   assert.equal(s.hands.L.gripping, true);
   assert.equal(s.hands.R.stamina, st);
@@ -556,14 +646,15 @@ test('derived: height, maxHeight and night follow the body', () => {
   assert.equal(s.height, s.body.y);
   near(s.night, s.body.y / 2, 1e-9);
   assert.ok(s.maxHeight >= s.height);
-  step(s, inp({ tapL: true, tapR: true }), DT);
+  releaseHand(s, 'L', { x: -1, y: 0.2 });
+  releaseHand(s, 'R', { x: 1, y: 0.2 });
   run(s, 2, inp());
   assert.ok(s.maxHeight > s.height, 'maxHeight remembers the high point');
 });
 
 test('hands: hover measures proximity to the nearest hold, tremble follows low stamina', () => {
   const s = climber([{ x: L_UP.x, y: L_UP.y + 0.3 }]);
-  step(s, inp({ tapL: true }), DT);
+  releaseHand(s, 'L');
   run(s, 1.5, inp({ L: { x: 0, y: 1 } }));
   assert.equal(s.hands.L.nearId, 2);
   near(s.hands.L.hover, 1 - 0.3 / CFG.HOVER_RANGE, 0.08);
@@ -581,8 +672,11 @@ test('hands: hover measures proximity to the nearest hold, tremble follows low s
 
 test('events: drainEvents returns and clears; undrained events are capped', () => {
   const s = climber();
-  for (let i = 0; i < 200; i++) step(s, inp({ tapL: true }), DT);
-  assert.ok(s.events.length <= CFG.EVENT_CAP);
+  for (let i = 0; i < CFG.EVENT_CAP; i++) s.events.push({ type: 'filler' });
+  releaseHand(s, 'L', { x: -1, y: 0.2 });              // real events on top of a full queue
+  releaseHand(s, 'R', { x: 1, y: 0.2 });
+  run(s, 1, inp());
+  assert.ok(s.events.length <= CFG.EVENT_CAP, `${s.events.length} events queued`);
   const ev = drainEvents(s);
   assert.ok(ev.length > 0);
   assert.deepEqual(s.events, []);
@@ -591,9 +685,10 @@ test('events: drainEvents returns and clears; undrained events are capped', () =
 // ---------------------------------------------------------------------------------------
 // Autopilot: plays the generated route through the public Input interface only.
 
-// Drive `side` toward hold `holdId` (release first if it holds something else, tap to arm,
-// steer, let the armed hand take the hold). Like a player, it keeps whatever hold the armed
-// hand actually closes on; returns that hold's id.
+// Drive `side` toward hold `holdId` with the two primitives and nothing else: push the stick
+// toward the next hold (that is the release), then keep steering until the hand comes to rest on
+// rock and closes on it. Like a player, it keeps whatever hold the hand actually takes; returns
+// that hold's id.
 function botGrab(state, holdId, side, log) {
   const hand = state.hands[side], other = state.hands[side === 'L' ? 'R' : 'L'];
   const hold = state.route.holds[holdId];
@@ -602,20 +697,18 @@ function botGrab(state, holdId, side, log) {
   for (;;) {
     if (hand.gripping && hand.holdId !== startHold) return hand.holdId;
     if (state.t - t0 > 8) throw new Error(`stuck reaching hold ${holdId} with ${side} (phase ${state.phase}, hand at ${hand.x.toFixed(2)},${hand.y.toFixed(2)})`);
-    const input = inp();
+    const v = steerToHold(state, side, hold);
     if (hand.gripping) {
       if (!other.gripping && state.phase === 'climbing') throw new Error(`bot would fall releasing ${side} for hold ${holdId}`);
-      input[`tap${side}`] = true;
+      releaseHand(state, side, v);
     } else {
-      input[side] = steer(state, side, hold);
-      if (!hand.armed) input[`tap${side}`] = true;
+      step(state, inp({ [side]: v }), DT);
     }
-    step(state, input, DT);
     for (const e of drainEvents(state)) log.push(e.type);
   }
 }
-// Alternate hands up the route from hold `from` to hold `to`. An armed hand may close on a
-// different hold of its side on the way: a higher one skips ahead, a lower one is retried.
+// Alternate hands up the route from hold `from` to hold `to`. A hand may close on a different
+// hold of its side on the way: a higher one skips ahead, a lower one is retried.
 function botClimb(state, from, to, log) {
   let retries = 0;
   for (let i = from; i <= to;) {
@@ -653,8 +746,10 @@ test('autopilot: a fall from anywhere on the route runs to the ground and ends t
     const from = s.body.y;
     assert.ok(from > CFG.FLOOR + CFG.HANG_TWO, `hold ${fallAt} is above standing height`);
     drainEvents(s);
-    step(s, inp({ tapL: true, tapR: true }), DT);      // both hands off, and past the grace window
-    run(s, 0.4, inp());
+    const away = { L: { x: -1, y: -0.5 }, R: { x: 1, y: -0.5 } };
+    releaseHand(s, 'L', away.L);                       // both hands off, pushed clear of the rock
+    releaseHand(s, 'R', away.R);
+    run(s, 0.4, inp(away));                            // ...and past the grace window
     assert.equal(s.phase, 'falling', `fall from hold ${fallAt}`);
     // Nothing may stop it: not a hold it passes, not a rune, not the height it started from.
     run(s, 12, inp());

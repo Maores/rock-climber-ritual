@@ -1,39 +1,40 @@
 // src/input.js — touch, mouse and keyboard → Input for sim.step.
 //
-// read() returns { L:{x,y,active}, R:{x,y,active}, tapL, tapR }. Stick vectors are in the unit
+// read() returns { L:{x,y,active}, R:{x,y,active}, look, holdR }. Stick vectors are in the unit
 // disc and use the WORLD convention: +x right, +y UP (a thumb pushed up the screen gives y > 0).
 // hud.setStick(side, x, y) receives the same vector every read, so the HUD must negate y
 // when it converts to CSS translate.
 //
-// `active` is true while something is actually on that stick this frame — a finger, the mouse
-// driving that hand, a movement key, or a recenter command. The sim parks a free hand where the
-// last steer left it (B45), so it has to be able to tell a stick reading zero from a stick
-// nobody is touching; the vector alone cannot say that.
+// There are no grip buttons and no taps (B51): the two sticks are the whole climb. A stick push
+// past CFG.RELEASE_DEADZONE is how a hand lets go, and a hand that hovers over rock grabs it, so
+// everything this module has to deliver is where each thumb is pointing.
 //
-// Touch / mouse (pointer events on hud.sticks.L/R and hud.grips.L/R):
+// `active` is true while something is actually on that stick this frame — a finger, the mouse
+// driving that hand, or a movement key. The sim parks a free hand where the last steer left it
+// (B45), so it has to be able to tell a stick reading zero from a stick nobody is touching; the
+// vector alone cannot say that.
+//
+// Touch / mouse (pointer events on hud.sticks.L/R):
 //   stick = (pointer − ring center) / ring radius, clamped to the unit disc; position
 //   mapping, zero the moment the pointer lifts (and `active` false with it: the hand keeps
 //   the target it was steered to). One pointer per stick; the pointer is captured so dragging
-//   past the ring keeps working. GRIP taps fire on pointerdown and are edge-triggered: true
-//   for exactly one read().
+//   past the ring keeps working.
 // Keyboard: W/A/S/D drive a virtual left stick and the arrow keys the right one, each
 //   axis integrating at KEY_RATE units/s and holding its value while no key is down — which
-//   is the same parked hand the touch sticks now give.
-//   Q toggles the left grip and Enter or Slash the right one; a grip toggle also recenters
-//   that hand's virtual stick. Escape recenters both sticks. A recenter is a command, not a
-//   release, so it reads `active` for that one frame and the hand returns to its rest offset.
+//   is the same parked hand the touch sticks give. Escape zeroes both virtual sticks: a touch
+//   stick recentres itself when the thumb lifts, and this is how the keyboard does the same,
+//   which is also how you re-arm the release after a grab.
 
 const KEY_RATE = 2.5;          // virtual stick units per second per axis
 const MOVE_KEYS = {
   KeyW: ['L', 0, 1], KeyS: ['L', 0, -1], KeyA: ['L', -1, 0], KeyD: ['L', 1, 0],
   ArrowUp: ['R', 0, 1], ArrowDown: ['R', 0, -1], ArrowLeft: ['R', -1, 0], ArrowRight: ['R', 1, 0],
 };
-const GRIP_KEYS = { KeyQ: 'L', Enter: 'R', NumpadEnter: 'R', Slash: 'R' };
 // Fallback from `key` to `code` for synthetic events and browsers without `code`.
 const KEY_TO_CODE = {
-  w: 'KeyW', a: 'KeyA', s: 'KeyS', d: 'KeyD', q: 'KeyQ', '/': 'Slash',
+  w: 'KeyW', a: 'KeyA', s: 'KeyS', d: 'KeyD',
   ArrowUp: 'ArrowUp', ArrowDown: 'ArrowDown', ArrowLeft: 'ArrowLeft', ArrowRight: 'ArrowRight',
-  Enter: 'Enter', Escape: 'Escape',
+  Escape: 'Escape',
 };
 
 const defaultNow = () => (typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now());
@@ -45,7 +46,7 @@ function clampDisc(v) {
 }
 
 function keyCode(e) {
-  if (e.code && (MOVE_KEYS[e.code] || GRIP_KEYS[e.code] || e.code === 'Escape')) return e.code;
+  if (e.code && (MOVE_KEYS[e.code] || e.code === 'Escape')) return e.code;
   const k = typeof e.key === 'string' ? (e.key.length === 1 ? e.key.toLowerCase() : e.key) : '';
   return KEY_TO_CODE[k] || e.code || '';
 }
@@ -55,9 +56,7 @@ export function createInput({ hud = null, keyboard = true, win, now = defaultNow
   const pointer = { L: { x: 0, y: 0 }, R: { x: 0, y: 0 } };   // position-mapped sticks
   const active = { L: null, R: null };                         // pointerId holding each stick
   const virtual = { L: { x: 0, y: 0 }, R: { x: 0, y: 0 } };   // keyboard sticks
-  const taps = { L: false, R: false };
-  const recenter = { L: false, R: false };  // Escape / a grip key: send the hand back to rest, once
-  const holds = { L: false, R: false };   // grip currently held down (the spider hand aims on a hold)
+  const holds = { R: false };   // the right mouse button: the spider hand aims while it is down
   const held = new Set();
   const cleanups = [];
   let lastT = now();
@@ -105,29 +104,12 @@ export function createInput({ hud = null, keyboard = true, win, now = defaultNow
     if (el.style) el.style.touchAction = 'none';
   }
 
-  function bindGrip(side, el) {
-    on(el, 'pointerdown', (e) => {
-      if (e.preventDefault) e.preventDefault();
-      taps[side] = true;
-    });
-    on(el, 'contextmenu', prevent);
-    if (el.style) el.style.touchAction = 'none';
-  }
-
   function onKeyDown(e) {
     const code = keyCode(e);
     if (code === 'Escape') {
+      // Both keyboard sticks back to centre. It does NOT pull the hands home: a parked hand is
+      // only moved by a steer or by taking rock (B45), and nothing here quietly overrides that.
       virtual.L.x = virtual.L.y = virtual.R.x = virtual.R.y = 0;
-      recenter.L = recenter.R = true;
-      return;
-    }
-    if (GRIP_KEYS[code]) {
-      if (e.preventDefault) e.preventDefault();
-      if (e.repeat) return;
-      const side = GRIP_KEYS[code];
-      taps[side] = true;
-      virtual[side].x = virtual[side].y = 0;
-      recenter[side] = true;
       return;
     }
     if (MOVE_KEYS[code]) {
@@ -141,7 +123,6 @@ export function createInput({ hud = null, keyboard = true, win, now = defaultNow
   if (hud) {
     for (const side of ['L', 'R']) {
       if (hud.sticks && hud.sticks[side]) bindStick(side, hud.sticks[side]);
-      if (hud.grips && hud.grips[side]) bindGrip(side, hud.grips[side]);
     }
   }
   if (keyboard && target) {
@@ -164,13 +145,14 @@ export function createInput({ hud = null, keyboard = true, win, now = defaultNow
   }
 
   // ---------------------------------------------------------------------------------------
-  // Desktop mouse: the cursor IS the free hand, and the two buttons are the two grips.
+  // Desktop mouse: the cursor IS the free hand.
   //
   // The pointer's offset from the middle of the view maps straight onto that hand's reach
-  // circle (the same position mapping the thumb sticks use), so the hand goes where you point.
-  // Left button toggles the left grip, right button the right one. Whichever hand is hanging
-  // free follows the cursor; with both hands on the rock the cursor does nothing until you
-  // let one go, which is exactly the rhythm of the climb.
+  // circle (the same position mapping the thumb sticks use), so the hand goes where you point,
+  // and holding it over a hold takes it. Whichever hand is hanging free follows the cursor; with
+  // both hands on the rock the cursor does nothing until W/A/S/D or the arrows let one go, which
+  // is exactly the rhythm of the climb. The buttons no longer grip (B51: nothing does) — the
+  // right one is only the web-zip's hold-to-aim, which is what it already was on a phone.
   const mousePos = { x: 0, y: 0, has: false };
   let mouseSide = 'R';                       // which hand the cursor drives when both are free
   const mouseVec = { x: 0, y: 0 };
@@ -200,23 +182,19 @@ export function createInput({ hud = null, keyboard = true, win, now = defaultNow
     });
     on(el, 'pointerdown', (e) => {
       if (e.pointerType && e.pointerType !== 'mouse') return;
-      if (e.button !== 0 && e.button !== 2) return;
+      if (e.button !== 2) return;             // right button only: hold to aim the web
       prevent(e);
-      const side = e.button === 0 ? 'L' : 'R';
-      mouseSide = side;
-      taps[side] = true;
-      holds[side] = true;
+      mouseSide = 'R';                        // with both hands free the cursor is the aim
+      holds.R = true;
     });
     const up = (e) => {
       if (e.pointerType && e.pointerType !== 'mouse') return;
-      if (e.button === 0) holds.L = false;
-      else if (e.button === 2) holds.R = false;
-      else holds.L = holds.R = false;
+      if (e.button === 2 || e.button === undefined) holds.R = false;
     };
     on(el, 'pointerup', up);
-    on(el, 'pointercancel', () => { holds.L = holds.R = false; });
-    on(target || el, 'blur', () => { holds.L = holds.R = false; });
-    on(el, 'contextmenu', prevent);           // the right button is a grip, not a menu
+    on(el, 'pointercancel', () => { holds.R = false; });
+    on(target || el, 'blur', () => { holds.R = false; });
+    on(el, 'contextmenu', prevent);           // the right button aims the web, it is not a menu
   }
   if (mouse) bindMouse(mouse);
 
@@ -265,9 +243,11 @@ export function createInput({ hud = null, keyboard = true, win, now = defaultNow
   }
 
   // The web pad: the same one-thumb drag as LOOK. Holding it IS the held right grip the sim
-  // waits on, and the drag is the aim, so releasing fires. Without this the only way to aim on
-  // a phone would be to hold the GRIP pill and aim with the same thumb, which is the mistake
-  // the LOOK button already made once.
+  // waits on, and the drag is the aim, so releasing fires.
+  //
+  // The pad's vector is a full deflection of the right stick, so pressing it also lets the right
+  // hand go (B51) — which is what has to happen anyway, since the web only charges with that hand
+  // free. Mind that it costs you the right hand even if you never fire.
   const webVec = { x: 0, y: 1 };
   let webActive = false, webId = null, webCx = 0, webCy = 0;
   if (hud && hud.webButton) {
@@ -298,8 +278,7 @@ export function createInput({ hud = null, keyboard = true, win, now = defaultNow
     const dt = Math.min(0.1, Math.max(0, (t - lastT) / 1000));
     lastT = t;
     integrateKeys(dt);
-    const out = { L: { x: 0, y: 0, active: false }, R: { x: 0, y: 0, active: false }, tapL: taps.L, tapR: taps.R };
-    taps.L = taps.R = false;
+    const out = { L: { x: 0, y: 0, active: false }, R: { x: 0, y: 0, active: false } };
     const keyed = { L: false, R: false };
     for (const code of held) keyed[MOVE_KEYS[code][0]] = true;
     const mSide = mouse && mousePos.has ? freeSide() : null;
@@ -311,8 +290,8 @@ export function createInput({ hud = null, keyboard = true, win, now = defaultNow
       look.x = src.x; look.y = src.y;
     } else { look.x = 0; look.y = 0; }
     out.look = look;
-    // while the web pad is held, it IS the right grip; its drag is the aim, applied after the loop
-    out.holdL = holds.L;
+    // while the web pad is held, it IS the held right grip the sim aims on; its drag is the aim,
+    // applied after the loop
     out.holdR = holds.R || webActive;
     for (const side of ['L', 'R']) {
       // Looking: nothing counts as on the stick, so the hand keeps the target it already has.
@@ -322,7 +301,7 @@ export function createInput({ hud = null, keyboard = true, win, now = defaultNow
         : (side === mSide ? mouseVec : virtual[side]);
       out[side].x = v.x;
       out[side].y = v.y;
-      out[side].active = active[side] !== null || side === mSide || keyed[side] || recenter[side];
+      out[side].active = active[side] !== null || side === mSide || keyed[side];
       if (hud && typeof hud.setStick === 'function') hud.setStick(side, v.x, v.y);
     }
     // The WEB pad's drag IS the aim, and it has to be written AFTER the loop: the loop rewrites
@@ -337,7 +316,6 @@ export function createInput({ hud = null, keyboard = true, win, now = defaultNow
     // aim at once), and it is marked `active`, so under B45 the arm parks along the line it just
     // shot instead of dropping back to rest: the spider hand stays pointing at its anchor.
     if (webActive) { out.R.x = webVec.x; out.R.y = webVec.y; out.R.active = true; }
-    recenter.L = recenter.R = false;
     return out;
   }
 
