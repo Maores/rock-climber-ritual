@@ -10,7 +10,7 @@
 // detected from state transitions, or from the drained event list when the integrator passes it as
 // the optional fourth argument.
 //
-// Public surface (CONTRACTS.md): createCameraRig(camera) → rig; rig.update(dt, state, wallZ[, events]); rig.setPortrait(isPortrait)
+// Public surface (CONTRACTS.md): createCameraRig(camera) → rig; rig.update(dt, state, wallZ[, events, lookIn, aim]); rig.setPortrait(isPortrait)
 
 import * as THREE from 'three';
 
@@ -44,6 +44,7 @@ const ROPE_PULL = 0.16;
 
 const _v = new THREE.Vector3();
 const _look = new THREE.Vector3();
+const _aim = new THREE.Vector3();   // the gaze after the look-around turn; `look` itself stays unrotated
 
 /** Semi-implicit damped spring step; mutates s = { x, v }. */
 function spring(s, target, omega, zeta, dt) {
@@ -67,24 +68,29 @@ function noise(t, seed) {
 }
 
 // --- looking around ---------------------------------------------------------------------
-// With one hand on the rock and one hand free you can turn your head. The arc you can reach
-// depends on which hand is free: hanging off your right arm you can crane left, and the other
-// way round. Straight down is allowed on purpose — the drop is the point.
+// The view is dragged on the screen itself (B47), and it is allowed whatever your hands are
+// doing. `lookIn.x` and `lookIn.y` arrive from input.js as DEGREES of yaw and pitch, already
+// clamped to how far you can really see right now — which is what your hands change:
+//
+//   both hands on the rock  the neck alone: 60 deg either way, 40 up, 55 down
+//   one hand free           the body turns with the free arm: 180 deg across (35 in, 145 out),
+//                           62 up, 85 down — hanging off your right you can crane left (B22)
+//   no hands (fall, swing)  nothing holds you: the same 180 across, symmetric
+//
+// Those numbers live in input.js, next to the accumulator that has to clamp itself to them, so
+// there is exactly one copy of them. This file only decides how fast the head follows, and
+// straight down is allowed on purpose — the drop is the point.
 const LOOK = {
-  yawInward: THREE.MathUtils.degToRad(35),    // toward the gripping arm
-  yawOutward: THREE.MathUtils.degToRad(145),  // toward the free arm: 180 deg of arc together
-  pitchUp: THREE.MathUtils.degToRad(62),
-  pitchDown: THREE.MathUtils.degToRad(85),    // nearly straight down into the pit
-  rate: 8,                                    // how fast the head follows the input
-  recenter: 3.2,                              // how fast it returns when you let go
-  vertigoFov: 9,                              // the lens creeps wider the longer you stare down
+  rate: 8,          // how fast the head follows a finger on the screen
+  settle: 5,        // ...and how fast it eases when nothing is dragging
+  hurry: 25,        // ...while the input is easing home: it is already smooth, so do not ease twice
+  vertigoFov: 9,    // the lens creeps wider the longer you stare down
   vertigoRate: 0.5,
 };
 
 export function createCameraRig(camera) {
   let portrait = null;                      // null until setPortrait is called → inferred from aspect
   let lookYaw = 0, lookPitch = 0, vertigo = 0;
-  const clamp1 = (v) => (v > 1 ? 1 : v < -1 ? -1 : (+v || 0));
   camera.near = 0.05;
   camera.far = Math.max(camera.far || 0, 900);
   camera.fov = FOV_PORTRAIT;
@@ -323,32 +329,41 @@ export function createCameraRig(camera) {
       camera.position.z += s * 0.5 * noise(t, 8.0);
     }
     // --- look around ------------------------------------------------------------------------
-    // Only while exactly one hand holds the rock: the other arm is what lets you turn.
-    const freeSide = (L && !L.gripping && R && R.gripping) ? 'L' : (R && !R.gripping && L && L.gripping) ? 'R' : null;
-    const canLook = !!freeSide && (state.phase === 'climbing' || state.phase === 'grounded');
-    const wantX = canLook && lookIn && lookIn.active ? clamp1(lookIn.x) : 0;
-    const wantY = canLook && lookIn && lookIn.active ? clamp1(lookIn.y) : 0;
-    const outSign = freeSide === 'L' ? -1 : 1;                 // free left arm turns you left
-    const yawWant = wantX >= 0
-      ? wantX * (outSign > 0 ? LOOK.yawOutward : LOOK.yawInward)
-      : wantX * (outSign > 0 ? LOOK.yawInward : LOOK.yawOutward);
-    const pitchWant = wantY >= 0 ? wantY * LOOK.pitchUp : wantY * LOOK.pitchDown;
-    const k = (wantX || wantY) ? LOOK.rate : LOOK.recenter;
-    lookYaw = approach(lookYaw, canLook ? yawWant : 0, k, dt);
-    lookPitch = approach(lookPitch, canLook ? pitchWant : 0, k, dt);
-    // staring down widens the lens a little, so the drop opens up under you
-    const down = Math.max(0, -lookPitch / LOOK.pitchDown);
+    // The drag lives in input.js and arrives already clamped to what the hands allow, in degrees;
+    // all this does is follow it. While the input is easing itself home the rig hurries, because
+    // that value is already smooth and easing it a second time doubled the time home (0.8 s
+    // against the 0.4 s the ease is written for).
+    const yawWant = THREE.MathUtils.degToRad(lookIn ? (+lookIn.x || 0) : 0);
+    const pitchWant = THREE.MathUtils.degToRad(lookIn ? (+lookIn.y || 0) : 0);
+    const k = lookIn && lookIn.active ? LOOK.rate : (lookIn && lookIn.homing ? LOOK.hurry : LOOK.settle);
+    lookYaw = approach(lookYaw, yawWant, k, dt);
+    lookPitch = approach(lookPitch, pitchWant, k, dt);
+    // Staring down widens the lens a little, so the drop opens up under you. Measured against the
+    // arc that is live: with both hands on the rock the whole arc is 55 degrees down, and dividing
+    // by the 85 of the loose arc capped the common case at 42% of the effect.
+    const downLimit = THREE.MathUtils.degToRad(lookIn && lookIn.down > 1 ? lookIn.down : 85);
+    const down = Math.max(0, -lookPitch / downLimit);
     vertigo = approach(vertigo, down * down, LOOK.vertigoRate, dt);
 
+    // The turn goes into a separate vector. It used to be written back into `look`, which is the
+    // smoothed gaze target: the next frame only eased that rotated point part of the way back to
+    // the wall and then turned it again, so the turn compounded and 60 degrees of yaw came out as
+    // 172 on the screen (measured). Rotating a copy applies it exactly once, which is what makes
+    // the arc constants above mean the degrees they say.
+    _aim.copy(look);
     if (Math.abs(lookYaw) > 1e-4 || Math.abs(lookPitch) > 1e-4) {
-      const d = look.clone().sub(camera.position);
+      const d = _v.copy(look).sub(camera.position);
       const len = Math.max(0.35, d.length());
-      const az = Math.atan2(d.x, d.z) + lookYaw;               // rotate about the world up axis
-      const el = Math.asin(THREE.MathUtils.clamp(d.y / len, -1, 1)) + lookPitch;
-      const ce = Math.cos(THREE.MathUtils.clamp(el, -1.5, 1.5));
-      look.set(
+      // Rotate about the world up axis. The eye faces the wall, i.e. -z, so az sits at pi and a
+      // POSITIVE azimuth step swings the gaze to -x: subtracting lookYaw is what makes a positive
+      // look.x turn you to your RIGHT, and what puts the wide arc on the side of the free arm the
+      // way B22 always said it was. It was added here, so both were mirrored (measured, B47).
+      const az = Math.atan2(d.x, d.z) - lookYaw;
+      const el = THREE.MathUtils.clamp(Math.asin(THREE.MathUtils.clamp(d.y / len, -1, 1)) + lookPitch, -1.5, 1.5);
+      const ce = Math.cos(el);
+      _aim.set(
         camera.position.x + len * ce * Math.sin(az),
-        camera.position.y + len * Math.sin(THREE.MathUtils.clamp(el, -1.5, 1.5)),
+        camera.position.y + len * Math.sin(el),
         camera.position.z + len * ce * Math.cos(az),
       );
     }
@@ -365,7 +380,7 @@ export function createCameraRig(camera) {
       + Math.sin(tumble * 0.9) * 0.5 * doom                       // the world turns over
       + THREE.MathUtils.degToRad(9) * impact * noise(t, 23.0);    // and slams still
     camera.up.set(Math.sin(rollNow), Math.cos(rollNow), 0);
-    camera.lookAt(look);
+    camera.lookAt(_aim);
 
     let fov = fov0 + fovKick.x + 6 * fallBlend + LOOK.vertigoFov * vertigo + 22 * doom - 10 * impact - 7 * yank + 14 * aimPull;
     if (summitT >= 0) fov -= 8 * (1 - Math.exp(-summitT / SUMMIT_TAU));

@@ -18,6 +18,7 @@
 // which hand is free when you arrive.
 
 import { canReach, REACH_LINK } from '../src/route.js';
+import { CFG, restingShoulder } from '../src/sim.js';
 
 export const OTHER = { L: 'R', R: 'L' };
 export const stateKey = (anchor, side) => anchor * 2 + (side === 'L' ? 0 : 1);
@@ -27,7 +28,8 @@ export const stateKey = (anchor, side) => anchor * 2 + (side === 'L' ? 0 : 1);
 export function reachGraph(route) {
   const H = route.holds;
   const out = H.map(() => ({ L: [], R: [] }));
-  const lo = -(0.42 + REACH_LINK), hi = REACH_LINK - 0.42;   // how far a target can sit from H
+  const drop = CFG.HANG_ONE - CFG.SHOULDER_DY;               // the resting shoulder, below the hold
+  const lo = -(drop + REACH_LINK), hi = REACH_LINK - drop;   // how far a target can sit from H
   let first = 0;
   for (let i = 0; i < H.length; i++) {
     while (first < H.length && H[first].y < H[i].y + lo) first++;
@@ -80,10 +82,22 @@ export function connectivity(route, graph = reachGraph(route)) {
   return { ok: true, failed: null, legs };
 }
 
-// What a move costs the bot: one move, plus a nudge toward tall moves and big holds, so that
-// among equally short ways up it picks the one a person would — fewer, bigger, more upward.
-const moveCost = (from, to) =>
-  1 + 0.8 * Math.max(0, (0.2 - (to.y - from.y)) / 0.2) + 0.6 * (0.16 - Math.min(0.16, to.size));
+// What a move costs the bot: one move, plus nudges so that among equally short ways up it picks
+// the one a person would — fewer, bigger, more upward, and well inside the reach circle.
+//
+// COMFORT is the one that earns its place. A hold at 0.9·REACH from the SETTLED one-arm shoulder
+// is reachable by the contract, but the body is still on its way down to that shoulder when the
+// hand goes out, so at the rim the move often cannot be made at all. The bot may still take one
+// when there is nothing else; it just stops routing through them by preference.
+const COMFORT = 0.80;
+export const moveCost = (from, to, side) => {
+  const sh = restingShoulder(from, side);
+  const reach = Math.hypot(to.x - sh.x, to.y - sh.y) / CFG.REACH;
+  return 1
+    + 0.8 * Math.max(0, (0.2 - (to.y - from.y)) / 0.2)
+    + 0.6 * (0.16 - Math.min(0.16, to.size))
+    + 6 * Math.max(0, reach - COMFORT);
+};
 
 // Cost from every state to arriving on `goalId`, by Dijkstra run backwards from the goal.
 // One of these per goal is all the bot needs: wherever a grab actually lands it, the next move
@@ -115,10 +129,57 @@ export function costToGoal(route, graph, inE, goalId) {
     const j = k >> 1, t = (k & 1) ? 'R' : 'L';
     const s = OTHER[t];                                 // the hand that made the move into j
     for (const a of inE[j][s]) {
-      const nd = d + moveCost(H[a], H[j]);
+      const nd = d + moveCost(H[a], H[j], s);
       const ka = stateKey(a, s);
       if (nd < dist[ka]) { dist[ka] = nd; push(nd, ka); }
     }
   }
   return dist;
+}
+
+// The next move, given where the two hands actually are: the reachable hold with the lowest
+// cost onward to the goal `dist` was built for. `refused` holds the moves the sim could not
+// actually make, so the bot stops proposing them.
+//
+// Stamina is part of the choice, not an afterthought. Whichever hand moves, the OTHER one hangs
+// alone and burns; steer by cost alone and the bot will spend its last hand holding a crimp
+// while the fresh one goes shopping, and then fall off. So a tired anchor is expensive, and the
+// cheapest way to make it cheap again is to move THAT hand and let it rest.
+// A hand this tired must not be the one left hanging: it is the one that has to move next, so
+// that it comes off the rock and shakes out. Only a free hand refills.
+const SPENT = 0.45;
+export function chooseMove(state, route, graph, dist, refused = new Set(), lastSide = null) {
+  const pick = (rested) => {
+    let best = null;
+    for (const side of ['L', 'R']) {
+      const anchor = state.hands[OTHER[side]];
+      if (!anchor.gripping) continue;
+      if (rested && anchor.stamina < SPENT) continue;
+      // climbing is alternation: taking the same hand twice leaves the other hanging twice as long
+      // ...and what it hangs FROM matters. A crimp burns a hand nearly three times as fast as a
+      // jug, so the hand on the crimp is the one that should be moving.
+      const q = CFG.HOLD_KINDS[route.holds[anchor.holdId].grip] || CFG.HOLD_KINDS.edge;
+      const rhythm = (side === lastSide ? 1.5 : 0) + 1.2 * (q.drain - 0.65);
+      for (const j of graph[anchor.holdId][side]) {
+        // never "move" a hand to the rock it is already on, nor onto the other hand's
+        if (j === anchor.holdId || j === state.hands[side].holdId) continue;
+        if (refused.has(`${anchor.holdId}:${side}:${j}`)) continue;
+        // A move that gets no nearer the goal is still a move, and sometimes it is the only one
+        // worth making: it takes the tired hand off the rock so it can shake out. Costed high
+        // enough that it is never preferred to actual progress.
+        const onward = dist[stateKey(j, OTHER[side])];
+        // How far this hand has to travel. It matters most when the hand is already out in the
+        // air because the last reach failed: the anchor is burning, and the answer is the
+        // nearest rock, not the best rock.
+        const hand = state.hands[side];
+        const travel = Math.hypot(route.holds[j].x - hand.x, route.holds[j].y - hand.y) / CFG.REACH;
+        const urgency = hand.gripping ? 0.5 : 3 + 12 * Math.max(0, 0.5 - anchor.stamina);
+        const d = (onward === Infinity ? 200 : onward)
+          + moveCost(route.holds[anchor.holdId], route.holds[j], side) + rhythm + urgency * travel;
+        if (!best || d < best.d) best = { side, j, d, from: anchor.holdId };
+      }
+    }
+    return best;
+  };
+  return pick(true) || pick(false);
 }

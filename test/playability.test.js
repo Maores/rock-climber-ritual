@@ -18,7 +18,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { CFG, createClimber, startClimb, step, drainEvents, shoulder, grabRadius } from '../src/sim.js';
 import { generateRoute, ROUTE, SEEDS, DEFAULT_SEED } from '../src/route.js';
-import { reachGraph, inEdges, costToGoal, connectivity, stateKey, OTHER } from './climb-graph.js';
+import { reachGraph, inEdges, costToGoal, connectivity, chooseMove } from './climb-graph.js';
 
 const route = generateRoute(7);
 const climbing = route.holds.filter((h) => h.kind === 'hold');
@@ -85,6 +85,9 @@ test('playability: and on every seed from 1 to 40, with the decoys taken out', (
 // hand takes rock by hovering over it for CFG.HOVER_GRAB_DWELL. Everything below them is route
 // geometry — the path-finder never touches the sim except through these two.
 const DT = 1 / 120;
+// A move a person would have given up on. That it is SHORT matters: whichever hand is moving,
+// the other one is hanging alone and burning, and eight seconds of that is a fall.
+const MOVE_LIMIT = 1.5;
 const inp = (o = {}) => ({ L: { x: 0, y: 0 }, R: { x: 0, y: 0 }, holdR: false, ...o });
 function steerToHold(state, side, hold) {
   const sh = shoulder(state, side);
@@ -93,12 +96,13 @@ function steerToHold(state, side, hold) {
   if (m > 1) { v.x /= m; v.y /= m; }
   return v;
 }
-// A beat at the centre (a thumb lifting off does this by itself), then one frame of full
-// deflection toward `dir`: that push is the release, and it already aims the reach.
+// A beat at the centre (a thumb lifting off does this by itself), then full deflection toward
+// `dir` held past CFG.RELEASE_CONFIRM: that push is the release, and it already aims the reach.
 function releaseHand(state, side, dir = { x: 0, y: 1 }) {
   const m = Math.hypot(dir.x, dir.y) || 1;
+  const push = inp({ [side]: { x: dir.x / m, y: dir.y / m } });
   step(state, inp({ [side]: { x: 0, y: 0 } }), DT);
-  step(state, inp({ [side]: { x: dir.x / m, y: dir.y / m } }), DT);
+  for (let t = 0; t <= CFG.RELEASE_CONFIRM + 1e-9 && state.hands[side].gripping; t += DT) step(state, push, DT);
 }
 
 // One move, as one gesture: push toward the hold (that is the release), keep steering, and the
@@ -109,7 +113,7 @@ function moveHand(state, side, hold, log) {
   const startHold = hand.holdId, t0 = state.t;
   for (;;) {
     if (hand.gripping && hand.holdId !== startHold) return hand.holdId;
-    if (state.t - t0 > 8) return null;
+    if (state.t - t0 > MOVE_LIMIT) return null;
     const v = steerToHold(state, side, hold);
     if (hand.gripping) releaseHand(state, side, v);
     else step(state, inp({ [side]: v }), DT);
@@ -133,33 +137,27 @@ function botClimb(state) {
   const inE = inEdges(graph);
   const goals = r.holds.filter((h) => h.kind === 'rune' || h.kind === 'summit').sort((a, b) => a.y - b.y);
   const log = { misses: 0, falls: 0, crumbles: 0 };
-  let grabs = 0, offPlan = 0;
+  const refused = new Set();          // moves the hand could not actually complete in time
+  let grabs = 0, offPlan = 0, timeouts = 0, lastSide = null;
 
   for (const goal of goals) {
     const dist = costToGoal(r, graph, inE, goal.id);
-    for (let move = 0; move < 400; move++) {
+    for (let move = 0; move < 500; move++) {
       const { L, R } = state.hands;
       if (L.holdId === goal.id || R.holdId === goal.id) break;
-      // Either hand may move; the anchor is the other hand's hold. Take the cheaper option.
-      let best = null;
-      for (const side of ['L', 'R']) {
-        const anchor = state.hands[OTHER[side]];
-        if (!anchor.gripping) continue;
-        for (const j of graph[anchor.holdId][side]) {
-          if (j === anchor.holdId) continue;
-          const d = dist[stateKey(j, OTHER[side])];
-          if (d === Infinity) continue;
-          if (!best || d < best.d) best = { side, j, d };
-        }
-      }
-      if (!best) return { stuck: goal.id, grabs, offPlan, ...log, t: state.t };
+      const best = chooseMove(state, r, graph, dist, refused, lastSide);
+      if (!best) return { stuck: goal.id, grabs, offPlan, timeouts, ...log, t: state.t };
       const got = moveHand(state, best.side, r.holds[best.j], log);
-      if (got === null) return { stuck: best.j, grabs, offPlan, ...log, t: state.t };
+      // A hold sitting at the very edge of the reach circle is reachable on paper and can
+      // still take longer than a person would spend on it. A player picks another hold; so
+      // does this. Refusals are counted, because a field full of them is a broken field.
+      if (got === null) { refused.add(`${best.from}:${best.side}:${best.j}`); timeouts++; continue; }
       grabs++;
+      lastSide = best.side;
       if (got !== best.j) offPlan++;
     }
   }
-  return { stuck: null, grabs, offPlan, ...log, t: state.t };
+  return { stuck: null, grabs, offPlan, timeouts, ...log, t: state.t };
 }
 
 function assertClimb(seed, at) {
@@ -174,6 +172,9 @@ function assertClimb(seed, at) {
   assert.ok(out.t > 30, `${at}: the climb took only ${out.t.toFixed(0)} s: something is skipping the route`);
   assert.ok(out.misses < out.grabs * 0.35,
     `${at}: ${out.misses} misses over ${out.grabs} grabs: aiming at a hold should usually land it`);
+  assert.equal(out.crumbles, 0, `${at}: ${out.crumbles} decoys taken — a planned line should not need them`);
+  assert.ok(out.timeouts < out.grabs * 0.05,
+    `${at}: ${out.timeouts} moves the hand could not finish, over ${out.grabs} grabs: the field is promising reaches the sim cannot make`);
   return out;
 }
 

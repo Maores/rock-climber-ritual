@@ -232,46 +232,17 @@ button:focus-visible { outline: 2px solid var(--rune); outline-offset: 2px; }
   color: var(--muted);
 }
 
-/* Nothing that only makes sense mid-climb belongs on top of a full-screen overlay. Both pads
-   now live inside #hud, which an overlay covers anyway, but the rule costs nothing. */
-body.overlay-up #look, body.overlay-up #web { display: none; }
+/* Nothing that only makes sense mid-climb belongs on top of a full-screen overlay. The pad
+   now lives inside #hud, which an overlay covers anyway, but the rule costs nothing. */
+body.overlay-up #web { display: none; }
 
-/* The two pads are the top of their own control stacks: LOOK above the left stick, WEB above the
-   right one (B51 took the GRIP pills that used to sit between them out). They used to be fixed
-   over the middle at z-index 40, which put them inside the bottom of the stick rings and let them
-   steal a thumb sliding down (B34). Stacked in the column they are the cluster's own width and
-   can never overlap it again. */
-#look {
-  pointer-events: auto;
-  width: var(--stick);
-  padding: 9px 0;
-  text-align: center;
-  border-radius: 999px;
-  border: 1px solid rgba(241, 230, 216, 0.24);
-  background: rgba(20, 14, 11, 0.52);
-  color: var(--muted);
-  font: 600 11px/1 'Inter', system-ui, sans-serif;
-  letter-spacing: 0.16em;
-  text-transform: uppercase;
-  cursor: pointer;
-  touch-action: none;
-  -webkit-user-select: none; user-select: none;
-  -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
-  -webkit-appearance: none; appearance: none;
-  transition: color 0.18s, border-color 0.18s, background 0.18s, opacity 0.25s;
-  opacity: 0.45;
-}
-#look.can { opacity: 1; }
-#look.on, #look:active {
-  color: #0b1a1f;
-  background: var(--rune);
-  border-color: var(--rune);
-}
-#look[hidden] { display: none; }
-
-/* The web pad: same one-thumb drag as LOOK, on the right hand, whose ability it is. Only once
-   unlocked -- and because the cluster is anchored at its bottom, hiding it leaves the stick
-   exactly where it was, so the two columns stay level. */
+/* The WEB pad is the top of its own control stack: WEB above the right stick, and just the stick
+   on the left (B47 took the LOOK button away -- looking is a drag on the screen itself now; B51
+   took the GRIP pills that used to sit under each pad). It used to be fixed over the middle at
+   z-index 40, which put it inside the bottom of the stick ring and let it steal a thumb sliding
+   down (B34). Stacked in the column it is the cluster's own width and can never overlap it again.
+   Only once unlocked -- and because the cluster is anchored at its bottom, hiding it leaves the
+   stick exactly where it was, so the two columns stay level. */
 #web {
   pointer-events: auto;
   width: var(--stick);
@@ -594,8 +565,15 @@ body.overlay-up #menuBtn { display: none; }
 /* The hand's own state, on the ring it is steered with (B51 -- there is no GRIP pill to put it
    on any more). A lit gold knob is a hand on the rock; red and pulsing is a hand about to go;
    the ring shakes when the fingers come off rock they were on. */
-.stick.gripping {
-  box-shadow: inset 0 0 0 1px rgba(255, 220, 170, 0.42), inset 0 0 36px rgba(217, 154, 91, 0.2), 0 10px 32px rgba(0, 0, 0, 0.4), 0 0 22px rgba(217, 154, 91, 0.32);
+/* The gold ring of a hand on the rock lives on its OWN layer, not in the stick's box-shadow: the
+   crit pulse animates that shadow, so a gripping hand on a spent arm simply stopped looking held.
+   Here the two stack — red pulse around a gold ring — and the shake moves both together. */
+.stick.gripping::after {
+  content: '';
+  position: absolute; inset: 0;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1.5px rgba(255, 220, 170, 0.5), inset 0 0 36px rgba(217, 154, 91, 0.22), 0 0 22px rgba(217, 154, 91, 0.34);
+  pointer-events: none;
 }
 .stick.gripping .knob {
   background: radial-gradient(circle at 38% 32%, #fff6e6 0%, #edb473 44%, #a86a35 100%);
@@ -607,6 +585,10 @@ body.overlay-up #menuBtn { display: none; }
   animation: slip 0.32s linear infinite;
 }
 .stick.miss { animation: shake 0.36s ease-in-out; }
+/* `animation` is one property: the shake would otherwise replace the crit pulse for its 0.36 s
+   and the ring would go quiet exactly when the arm is in trouble. They animate different things
+   (box-shadow, transform), so they can run together — but only if they are named together. */
+.stick.crit.miss { animation: critring 0.6s ease-in-out infinite, shake 0.36s ease-in-out; }
 
 /* ---- overlays: title + end ------------------------------------------------------ */
 .overlay {
@@ -979,7 +961,7 @@ kbd {
   #custom .close { margin-top: 10px; padding: 10px; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .sigil, .tap, .stick.slipping .knob, .stick .arc.crit, .stick.crit, #vig.beat, #runes .dot.pop, .card .mini-ring.push i { animation: none; }
+  .sigil, .tap, .stick.slipping .knob, .stick .arc.crit, .stick.crit, .stick.miss, .stick.crit.miss, #vig.beat, #runes .dot.pop, .card .mini-ring.push i { animation: none; }
 }
 </style>
 </head>
@@ -1010,7 +992,6 @@ kbd {
   </div>
   <div id="msg"></div>
   <div id="ctl-l" class="ctl">
-    <button id="look" type="button" aria-label="Look around" title="Hold to look around (Shift)">Look</button>
     <div id="stick-l" class="stick" role="slider" aria-label="Left hand">
       <svg viewBox="0 0 136 136"><circle class="track" cx="68" cy="68" r="63"/><circle class="arc" cx="68" cy="68" r="63"/></svg>
       <span class="side">L</span>

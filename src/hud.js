@@ -11,7 +11,8 @@
 //     without a double flash.
 //
 // Integration notes for main.js (everything beyond CONTRACTS.md is optional):
-//   • hud.update(state[, events]) — the event list is optional; misses are also detected from state.
+//   • hud.update(state[, events]) — the event list is optional, but a miss only arrives on it: the
+//     sim's `miss` event is the one signal for it now that nothing arms (B51).
 //   • hud.onMute(cb) wires the mute button to audio.setMuted; without it the button reaches
 //     window.__ritual.audio. hud.onRestart(cb) replaces the default location.reload() of "Climb again".
 //   • hud.onMenu(cb) is asked to put the game back on the title screen; without it Menu reloads the
@@ -438,7 +439,6 @@ export function createHud(root) {
   // ---- update -----------------------------------------------------------------------------------------------
   function update(state, events) {
     if (!state) return;
-    updateLookBtn(state);
     updateWeb(state);
     if (state.phase !== 'title' && !cache.hudOn && !endShown) showHud();
 
@@ -490,9 +490,8 @@ export function createHud(root) {
   let titleShown = false;
   let started = false;
 
-  // The LOOK and WEB pads are fixed to the bottom of the screen above everything, which put them
-  // on top of the title's tap line in landscape and over the end screen's credits in both. They
-  // belong to the climb, so they go away whenever a full-screen overlay is up.
+  // The WEB pad belongs to the climb, so it goes away whenever a full-screen overlay is up: it
+  // used to sit on top of the title's tap line in landscape and over the end screen's credits.
   function syncOverlayFlag() {
     const up = titleShown || endShown || !!(customEl && !customEl.hidden) || !!(confirmEl && !confirmEl.hidden);
     if (doc.body && doc.body.classList) doc.body.classList.toggle('overlay-up', up);
@@ -514,7 +513,7 @@ export function createHud(root) {
         '</div>' +
         '<div class="mini"><span class="mini-pill lit">Held</span>' + ring(false, 58) + '<b>Right</b></div>' +
         '</div>' +
-        '<p class="hint">Hanging drains a hand — the arc around its stick shows how much is left. <b>Nothing catches you</b>, and not every rock holds.</p>'
+        '<p class="hint">Hanging drains a hand — the arc around its stick shows how much is left. <b>Nothing catches you</b>, and not every rock holds. <b>Drag to look around.</b></p>'
       );
     }
     return (
@@ -522,9 +521,9 @@ export function createHud(root) {
       '<div class="row">' +
       '<div class="hand"><b>Left hand</b><div class="keys"><kbd>W A S D</kbd><span class="sep">push to let go, and to reach</span></div></div>' +
       '<div class="hand"><b>Right hand</b><div class="keys"><kbd>Arrows</kbd><span class="sep">push to let go, and to reach</span></div></div>' +
-      '<p class="hint"><em>Move the mouse</em> and the hand that is hanging free follows it. <em>Hold a hand over a rock</em> and it takes it by itself; push that hand\'s keys again to let go.</p>' +
+      '<p class="hint"><em>Move the mouse</em> and the hand that is hanging free follows it. <em>Hold a hand over a rock</em> and it takes it by itself; push that hand\'s keys again to let go. <em>Shift-drag</em> to look around — the view stays where you leave it.</p>' +
       '</div>' +
-      '<p class="hint">Hanging drains a hand — rest on the <i>glowing runes</i>. <b>Nothing catches you</b>: one fall is the whole cliff. Not every rock holds. <kbd>M</kbd> mutes.</p>'
+      '<p class="hint">Hanging drains a hand — rest on the <i>glowing runes</i>. <b>Nothing catches you</b>: one fall is the whole cliff. Not every rock holds. <kbd>Esc</kbd> re-centres the sticks, <kbd>M</kbd> mutes.</p>'
     );
   }
   function footHtml() {
@@ -860,18 +859,10 @@ export function createHud(root) {
     clearTimeout(endTimer);
   }
 
-  // LOOK: input.js binds hold-to-look to this button; it only lights up when a hand is free.
-  const lookBtn = doc.getElementById('look');
+  // B47: there is no LOOK button. Looking is a drag on the screen itself, which input.js binds to
+  // the canvas, so the HUD has nothing to show and nothing to say about it.
   const webBtn = doc.getElementById('web');
-  let canLookNow = null;
   let webBtnState = '';
-  function updateLookBtn(state) {
-    if (!lookBtn) return;
-    const L = state.hands && state.hands.L, R = state.hands && state.hands.R;
-    const can = !!L && !!R && (L.gripping !== R.gripping)
-      && (state.phase === 'climbing' || state.phase === 'grounded');
-    if (can !== canLookNow) { canLookNow = can; lookBtn.classList.toggle('can', can); }
-  }
 
   // ---- customisation ----------------------------------------------------------------------
   // Only exists once the code has been typed. Choosing a glove reloads the hands, which is the
@@ -901,18 +892,14 @@ export function createHud(root) {
     customEl.addEventListener('pointerdown', (e) => { if (e.target === customEl) closeCustom(); });
   }
   if (customBtn) customBtn.addEventListener('click', openCustom);
-  // Pressing LOOK with both hands on the rock does nothing by design — you need a free arm to
-  // turn — so say that rather than leaving the button feeling broken.
-  if (lookBtn) lookBtn.addEventListener('pointerdown', () => {
-    if (!canLookNow) message('Let a hand go to look around', 1800);
-  });
   refreshCustomBtn();
 
   // ---- the web-zip's state, on the WEB pad ------------------------------------------------
   // Without this the ability is invisible: no cooldown, no aim state, no sign it exists. It used
-  // to live on the right GRIP pill; with the pills gone (B51) every mark moved onto the pad,
-  // which is the thing you actually press.
+  // to live on the right GRIP pill as well; with the pills gone (B51) the pad is the only place
+  // left, which is right — it is the control your thumb is on.
   let webCache = '';
+  let webHinted = false;                       // the one-line gesture hint, once per session
   function updateWeb(state) {
     const w = state.web;
     if (!w) return;
@@ -921,9 +908,26 @@ export function createHud(root) {
       if (w.mode === 'aiming') mark = 'aim';
       else if (w.mode === 'flying' || w.mode === 'attached') mark = 'web';
       else if (w.cd > 0) mark = 'cool';
-      else if (!state.hands.R.gripping) mark = 'ready';
+      // 'ready' mirrors the sim's own rule, which no longer wants a free right hand: you may aim
+      // with both hands on the rock and only let go when the line bites (B50). Saying 'ready'
+      // only when the hand was already off was the HUD half of "the pad does nothing".
+      else if (state.phase === 'climbing' || state.phase === 'falling') mark = 'ready';
     }
     const cd = w.unlocked && w.cd > 0 ? Math.min(1, w.cd / 3) : 0;
+    const st = !w.unlocked ? 'off' : mark === 'cool' ? 'cool' : (mark === 'ready' || mark === 'aim' || mark === 'web') ? 'can' : 'idle';
+
+    // The gesture is not guessable from a pad that just says WEB, so say it once, the first time
+    // the pad is actually usable. Once per session, and not in the opening seconds: the climb's
+    // own "light every rune" message is on screen then and would simply replace this.
+    //
+    // This is evaluated BEFORE the cache check on purpose. On a plain climb the pad is 'ready'
+    // from the first frame and nothing about it ever changes, so the key never moves and the
+    // early return below meant the hint could not fire on the one flow that needs it most.
+    if (!webHinted && st === 'can' && state.phase === 'climbing' && state.t > 6) {
+      webHinted = true;
+      message('Hold WEB, drag to aim, let go to fire — tap it again to release the line', 4200);
+    }
+
     // `unlocked` belongs in the key: it flips false -> true when the climb starts, and with both
     // hands still on the rock nothing else changes, so without it the pad stayed hidden until the
     // first time the right hand came off.
@@ -931,25 +935,30 @@ export function createHud(root) {
     if (key === webCache) return;
     webCache = key;
 
-    // the pad only exists once unlocked, dims while the shot is cooling, and carries the ready /
-    // aiming / line-out marks and the cooldown drain the right pill used to show
+    // The pad only exists once unlocked, dims while the shot is cooling, and carries the four
+    // marks and the cooldown drain that used to be split with the right pill (B50 put them here
+    // too; B51 took the pill away, so this is now the only place they live). `web-*` are B50's
+    // names, kept so nothing that learned them breaks; `can` / `cool` / `aim` / `out` are the
+    // ones the #web CSS actually paints.
     if (webBtn) {
-      const st = !w.unlocked ? 'off' : mark === 'cool' ? 'cool' : (mark === 'ready' || mark === 'aim' || mark === 'web') ? 'can' : 'idle';
+      webBtn.classList.toggle('web-aim', mark === 'aim');
+      webBtn.classList.toggle('web-out', mark === 'web');
+      webBtn.classList.toggle('web-cool', mark === 'cool');
+      webBtn.classList.toggle('web-ready', mark === 'ready');
+      webBtn.classList.toggle('aim', mark === 'aim');
+      webBtn.classList.toggle('out', mark === 'web');
+      webBtn.style.setProperty('--cd', cd.toFixed(3));
       if (st !== webBtnState) {
         webBtnState = st;
         webBtn.hidden = st === 'off';
         webBtn.classList.toggle('can', st === 'can');
         webBtn.classList.toggle('cool', st === 'cool');
       }
-      webBtn.classList.toggle('aim', mark === 'aim');
-      webBtn.classList.toggle('out', mark === 'web');
-      webBtn.style.setProperty('--cd', cd.toFixed(3));
     }
   }
 
   const hud = {
     sticks,
-    lookButton: lookBtn,
     webButton: webBtn,
     openCustom, closeCustom, refreshCustomBtn,
     onSkinChange(cb) { if (typeof cb === 'function') skinCbs.push(cb); },

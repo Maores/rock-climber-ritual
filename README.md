@@ -5,7 +5,7 @@ joystick and its own GRIP button: steer a hand to a hold, tap GRIP, then move th
 Hanging drains a hand and the glowing runes are rests. **Nothing catches you**: lose both hands
 and you fall the whole cliff. Light every rune and reach the summit altar.
 
-**Find your own way.** The cliff is a field of holds, not a path: about 1900 of them scattered
+**Find your own way.** The cliff is a field of holds, not a path: about 1965 of them scattered
 over 7.2 m of the wall and 24 m of height, at spacing you can always climb. There is no correct
 line. The three glowing runes and the summit altar are the only fixed points — everything between
 them is your choice of rock. Every hold has somewhere to go from it, and start → each rune → the
@@ -14,9 +14,9 @@ altar is proved reachable for every seed by a graph check in the tests.
 **Four routes.** The title screen offers Ritual, Ladder, Serpent and Ordeal. Generation is
 deterministic per seed, so each name is a fixed cliff, not a shuffle. Being honest about what
 that now means: with 1900 holds drawn from the same distribution the four are close to identical
-in difficulty — the grip mix is within 2%, and poor rock up high is 50-52% on all of them. What a
+in difficulty — poor rock up high is 49-56% on all of them, against 13-15% low. What a
 seed still decides is where the three runes sit, and so how far across the face a climb has to
-travel: Ordeal is the widest at 8.5 m of side-to-side, Serpent the most direct at 5.7 m. Picking
+travel: Ordeal is the widest at 8.48 m of side-to-side, Serpent the most direct at 5.71 m. Picking
 one reloads the page with `?seed=` in the URL, so a link opens the same climb for anyone. Any
 other `?seed=<n>` generates under the same rules — seeds 1 to 40 are all checked by the tests.
 
