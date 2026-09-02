@@ -347,6 +347,7 @@ function start() {
   perf.minFps = Infinity;
   if (query.has('auto')) debug.autopilot(true);
   state.web.unlocked = spiderUnlocked();       // the egg, if the code has been typed
+  hud.refreshCustomBtn();
 }
 
 function restart() {
@@ -493,4 +494,20 @@ boot().catch((err) => {
   console.error('[ritual] boot failed', err);
   hud.showTitle({ touch });
   hud.message('Could not load the cliff — ' + (err && err.message ? err.message : err), 12000);
+});
+
+// Changing the glove rebuilds the hands. A skinned mesh carries its material through its clone,
+// so the honest way to re-skin is to build the arms again with the new choice.
+hud.onSkinChange(async () => {
+  if (!arms || !scene) return;
+  try {
+    const next = await createArms({
+      scene, tier, shoulder,
+      holdZ: (hold) => (world ? world.holdZ(hold) : 0),   // module-level `world`; worldRef is scoped to boot
+    });
+    if (arms && arms.dispose) arms.dispose();
+    else if (arms && arms.group) scene.remove(arms.group);
+    arms = next;
+    state.web.unlocked = spiderUnlocked();
+  } catch (err) { console.error('re-skin failed', err); }
 });

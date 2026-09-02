@@ -40,6 +40,8 @@ export function intendedHand(holdId) {
   return holdId % 2 === 0 ? 'L' : 'R';
 }
 
+const clamp01 = (v) => (v < 0 ? 0 : v > 1 ? 1 : v);
+
 // mulberry32 — small, fast, deterministic.
 function mulberry32(seed) {
   let a = (seed >>> 0) || 0x9e3779b9;
@@ -64,8 +66,30 @@ export function generateRoute(seed = 7) {
   const RM = R.REACH_USE * CFG.REACH;
   const holds = [];
 
+  // Hold quality, and how it hardens with height. Low on the route it is mostly buckets; by the
+  // summit it is mostly edges and crimps, with the odd sloper that will quietly drop you. Runes
+  // and the altar are always jugs, because they are the rests.
+  const gripFor = (y, size) => {
+    const t = clamp01(y / R.TOP);                       // 0 at the base, 1 at the altar
+    const roll = rnd();
+    if (size >= 0.17) return 'jug';                     // a bucket is a bucket at any height
+    const crimpOdds = 0.05 + 0.45 * t * t;              // crimps arrive late and then dominate
+    const sloperOdds = 0.04 + 0.16 * t;
+    const jugOdds = Math.max(0.06, 0.42 - 0.36 * t);
+    if (roll < crimpOdds) return 'crimp';
+    if (roll < crimpOdds + sloperOdds) return 'sloper';
+    if (roll < crimpOdds + sloperOdds + jugOdds) return 'jug';
+    return 'edge';
+  };
+
   const add = (x, y, size, kind) => {
-    const h = { id: holds.length, x: r4(x), y: r4(y), size: r4(size), kind, lit: false, angle: r4(rnd() * Math.PI * 2) };
+    const grip = (kind === 'rune' || kind === 'summit') ? 'jug' : gripFor(y, size);
+    // A jug reads as a bucket and a crimp as a sliver, so the wall can be read before it is
+    // touched. Holds only ever shrink here: the generator already fitted this size against its
+    // neighbours, so growing one would let it overlap the rock beside it.
+    const scale = grip === 'jug' ? 1.0 : grip === 'edge' ? 0.90 : grip === 'sloper' ? 0.84 : 0.68;
+    const sized = (kind === 'rune' || kind === 'summit') ? size : Math.max(0.068, size * scale);
+    const h = { id: holds.length, x: r4(x), y: r4(y), size: r4(sized), grip, kind, lit: false, angle: r4(rnd() * Math.PI * 2) };
     holds.push(h);
     return h;
   };

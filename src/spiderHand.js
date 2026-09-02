@@ -30,6 +30,20 @@ export function relockSpider() {
   try { localStorage.removeItem(UNLOCK_KEY); } catch (e) {}
 }
 
+// Which glove is worn. Chosen in the customisation panel, remembered per device.
+const SKIN_KEY = 'ritual.spider.skin';
+export const SPIDER_SKINS = ['classic', 'stealth', 'bare'];
+export function spiderSkin() {
+  try {
+    const v = localStorage.getItem(SKIN_KEY);
+    return SPIDER_SKINS.includes(v) ? v : 'classic';
+  } catch (e) { return 'classic'; }
+}
+export function setSpiderSkin(v) {
+  if (!SPIDER_SKINS.includes(v)) return;
+  try { localStorage.setItem(SKIN_KEY, v); } catch (e) {}
+}
+
 export const SPIDER_VARIANTS = {
   classic: {
     label: 'Classic red and blue',
@@ -95,6 +109,7 @@ const WEB = /* glsl */`
  * Returns a dispose() that restores nothing (callers clone the hand first).
  */
 export function applySpiderSkin(root, { variant = 'classic', width = 0.075, bump = 0.16 } = {}) {
+  if (variant === 'bare') return { materials: [], dispose() {} };   // wear nothing: the plain hand
   const v = SPIDER_VARIANTS[variant] || SPIDER_VARIANTS.classic;
   const red = new THREE.Color(v.red).convertSRGBToLinear();
   const blue = new THREE.Color(v.blue).convertSRGBToLinear();

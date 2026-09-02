@@ -59,8 +59,9 @@ test('route: regular moves spend nearly the whole reach (median gain ≥ 0.18 m)
   assert.ok(H.length <= 230, `hold count ${H.length}`);
 });
 
-test('route: sizes are 0.10–0.24 and no two holds overlap', () => {
-  for (const h of H) assert.ok(h.size >= 0.10 - 1e-9 && h.size <= 0.24 + 1e-9, `hold ${h.id} size ${h.size}`);
+test('route: sizes are 0.068–0.24 and no two holds overlap', () => {
+  // crimps are deliberately small: the lower bound is the crimp floor, not the old one-size-fits-all
+  for (const h of H) assert.ok(h.size >= 0.068 - 1e-9 && h.size <= 0.24 + 1e-9, `hold ${h.id} size ${h.size}`);
   for (let i = 0; i < H.length; i++) {
     for (let j = i + 1; j < H.length && H[j].y - H[i].y < 1.5; j++) {
       assert.ok(dist(H[i], H[j]) >= H[i].size + H[j].size + 0.02, `holds ${i} and ${j} overlap`);
@@ -112,5 +113,26 @@ test('route: reachability, spacing, runes and summit hold for other seeds too', 
     assert.equal(hs.filter((h) => h.kind === 'rune').length, EXPECTED_RUNES, `seed ${seed} runes`);
     assert.equal(hs[hs.length - 1].kind, 'summit');
     assert.ok(Math.abs(r.top - ROUTE.TOP) < 0.5);
+  }
+});
+
+test('route: hold quality hardens with height, and the rests are always jugs', () => {
+  const grips = H.filter((h) => h.kind === 'hold');
+  const kinds = new Set(grips.map((h) => h.grip));
+  assert.ok(kinds.size >= 3, `the wall should mix hold types, saw ${[...kinds].join(', ')}`);
+
+  const low = grips.filter((h) => h.y < ROUTE.TOP * 0.35);
+  const high = grips.filter((h) => h.y > ROUTE.TOP * 0.65);
+  const hard = (set) => set.filter((h) => h.grip === 'crimp' || h.grip === 'sloper').length / Math.max(1, set.length);
+  assert.ok(hard(high) > hard(low) + 0.1,
+    `the top should be harder: ${(hard(low) * 100).toFixed(0)}% poor down low vs ${(hard(high) * 100).toFixed(0)}% up high`);
+
+  for (const r of H.filter((h) => h.kind === 'rune' || h.kind === 'summit')) {
+    assert.equal(r.grip, 'jug', 'a rest has to be a bucket');
+  }
+  // a crimp is visibly smaller than a jug, so the wall can be read before it is touched
+  const avg = (k) => { const g = grips.filter((h) => h.grip === k); return g.reduce((a, h) => a + h.size, 0) / Math.max(1, g.length); };
+  if (grips.some((h) => h.grip === 'crimp') && grips.some((h) => h.grip === 'jug')) {
+    assert.ok(avg('crimp') < avg('jug') * 0.85, `crimps ${avg('crimp').toFixed(3)} vs jugs ${avg('jug').toFixed(3)}`);
   }
 });

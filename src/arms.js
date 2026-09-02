@@ -12,7 +12,7 @@
 // Optional injections: shoulder = sim.shoulder (else the CFG offsets are mirrored here), holdZ = world.holdZ (front z of a hold blob).
 
 import * as THREE from 'three';
-import { applySpiderSkin, spiderUnlocked } from './spiderHand.js';
+import { applySpiderSkin, spiderUnlocked, spiderSkin } from './spiderHand.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { clone as cloneSkeleton } from 'three/addons/utils/SkeletonUtils.js';
 
@@ -500,7 +500,7 @@ export async function createArms({ scene, tier, shoulder, holdZ } = {}) {
     });
     // The Easter egg: once the code has been typed, the RIGHT hand wears the glove. It is a
     // repaint of this same skinned mesh, so the rig, the curl and the tremble are untouched.
-    if (side === 'R' && spiderUnlocked()) applySpiderSkin(model, { variant: 'classic' });
+    if (side === 'R' && spiderUnlocked()) applySpiderSkin(model, { variant: spiderSkin() });
 
     // Finger curl: sample the Grab clip per bone, blended out of the bind pose near curl = 0.
     const curlTracks = [];
@@ -549,7 +549,7 @@ export async function createArms({ scene, tier, shoulder, holdZ } = {}) {
 
     arms.sides[side] = {
       side, sgn, handRoot, mirror, model, skinned, curlTracks, cuff, plug, forearm, elbow, upper, shoulderBall,
-      curl: 0.15, tremble: 0, grip: 0, tilt: 0,
+      curl: 0.15, tremble: 0, grip: 0, tilt: 0, horns: 0,
       quat: new THREE.Quaternion(), pos: new THREE.Vector3(), forearmDir: new THREE.Vector3(0, 1, 0),
       S: new THREE.Vector3(), E: new THREE.Vector3(), W: new THREE.Vector3(),
       pole: new THREE.Vector3(sgn * 0.55, -1, 0.35).normalize(),
@@ -649,6 +649,11 @@ export async function createArms({ scene, tier, shoulder, holdZ } = {}) {
       A.grip = approach(A.grip, gripping ? 1 : 0, gripping ? 18 : 9, dt);
       const curlTarget = THREE.MathUtils.clamp(hand.curl != null ? hand.curl : (gripping ? 1 : 0.25 * hover), 0, 1);
       A.curl = approach(A.curl, curlTarget, curlTarget > A.curl ? 16 : 8, dt);
+      // the shooter pose comes up quickly while aiming and drops away once the web is out
+      const web = state.web;
+      const wantHorns = (side === 'R' && web && web.unlocked &&
+        (web.mode === 'aiming' || web.mode === 'flying')) ? 1 : 0;
+      A.horns = approach(A.horns, wantHorns, wantHorns ? 14 : 7, dt);
       A.tremble = approach(A.tremble, THREE.MathUtils.clamp(hand.tremble || 0, 0, 1), 6, dt);
 
       // Hand centre: a free palm floats 2 cm (plus a little hover lift) off the rock; a gripping
@@ -730,10 +735,15 @@ export async function createArms({ scene, tier, shoulder, holdZ } = {}) {
       // the rest of the range closes from tStart to a hooked crimp at tHook.
       if (A.curlTracks.length && T.clip) {
         const w = THREE.MathUtils.smoothstep(A.curl, 0.0, 0.1);
+        // The 🤘: while the web is being aimed, the middle and ring fingers fold onto the
+        // shooter and everything else stays out. Same clip, applied to two fingers only.
+        const horns = side === 'R' ? A.horns : 0;
         for (const ct of A.curlTracks) {
+          const isFolded = /^(middle|ring)/i.test(ct.bone.name);
           // tired fingers open a touch and flutter around it
           const flutter = tr * 0.12 * jitter(time * 3.7, ct.seed);
-          const c = THREE.MathUtils.clamp(A.curl - tr * 0.08 + flutter, 0, 1);
+          let c = THREE.MathUtils.clamp(A.curl - tr * 0.08 + flutter, 0, 1);
+          if (horns > 0) c = THREE.MathUtils.lerp(c, isFolded ? 1 : 0.05, horns);
           const t = c < 0.3
             ? THREE.MathUtils.lerp(0, T.tStart, c / 0.3)
             : THREE.MathUtils.lerp(T.tStart, T.tHook * arms.hookScale, (c - 0.3) / 0.7);

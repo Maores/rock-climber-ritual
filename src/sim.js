@@ -12,7 +12,7 @@ export const CFG = Object.freeze({
   // --- contract constants -------------------------------------------------------------
   REACH: 0.72,          // shoulder → fingertips; free hands never leave this circle
   SNAP: 0.16,           // floor for the grab radius; real radius is grabRadius(hold) below
-  GRAB_EDGE: 0.06,      // a grab succeeds anywhere on the rock, plus this much fingertip overlap
+  GRAB_EDGE: 0.015,     // the rock itself is the target: only a fingertip's width of forgiveness
   SHOULDER_DX: 0.19, SHOULDER_DY: 0.08,
   HANG_TWO: 0.42,       // body hangs this far below the mean of two gripped holds
   HANG_ONE: 0.50,       // ...and this far below a single gripped hold
@@ -33,8 +33,9 @@ export const CFG = Object.freeze({
   REST_Y: 0.30,
   LINGER: 0.50,         // after the stick is released the hand keeps its place this long (lift the thumb, tap GRIP)...
   DRIFT_TAU: 0.25,      // ...then drifts toward the rest offset with this time constant
-  HAND_OMEGA: 16, HAND_ZETA: 0.85,          // hand spring: quick, slightly under-damped = weight
-  GRAB_OMEGA: 45,       // a grabbed hand closes onto its hold at this critically damped rate (~0.15 s, no teleport)...
+  HAND_OMEGA: 8.5, HAND_ZETA: 1.0,          // hand spring: slow and critically damped — an arm has mass,
+                                            // and it never overshoots the point you aimed at
+  GRAB_OMEGA: 22,       // closing onto a hold takes ~0.3 s: the fingers arrive, they are not magneted in...
   GRAB_LOCK: 0.002,     // ...and locks exactly onto it once this close
   BODY_OMEGA: 7, BODY_ZETA_Y: 0.85, BODY_ZETA_X: 0.55,   // body: settles vertically, sways sideways
   ROPE_OMEGA: 8, ROPE_ZETA: 0.40,           // rope stretch after a catch: one visible bounce
@@ -46,6 +47,19 @@ export const CFG = Object.freeze({
   CURL_RATE: 12, TREMBLE_RATE: 6,
   ROPE_ANCHOR_UP: 1.6,  // rope anchor sits this far above the summit hold
   EVENT_CAP: 64,        // undrained events are dropped beyond this
+
+  // --- hold quality ---------------------------------------------------------------------
+  // Not every rock is the same rock. A jug is a bucket you can hang off; a crimp is an edge
+  // that eats your forearm; a sloper has nothing to pull against and quietly slips.
+  //
+  //   drain  — multiplier on how fast this hold burns the hand that holds it
+  //   slip   — seconds of hanging before a hold this poor gives way on its own (0 = never)
+  HOLD_KINDS: Object.freeze({
+    jug:    { drain: 0.65, slip: 0 },
+    edge:   { drain: 1.00, slip: 0 },
+    crimp:  { drain: 1.85, slip: 0 },
+    sloper: { drain: 1.35, slip: 9.0 },
+  }),
 
   // --- the web-zip (the unlocked spider hand only) -------------------------------------
   WEB_RANGE: 7.0,       // furthest a shot reaches
@@ -348,13 +362,15 @@ function canGrab(state) {
 // A hand grabs anywhere on a hold's surface (its own radius plus a fingertip's overlap), so a
 // big rock is a big target and a crimp is a small one.
 export function grabRadius(hold) {
-  return Math.max(CFG.SNAP, (hold.size || 0.12) + CFG.GRAB_EDGE);
+  // Deliberately NOT floored at SNAP any more: a crimp is a small target and should feel like
+  // one. You must have the hand on the rock, anywhere on it, and nowhere else.
+  return (hold.size || 0.12) + CFG.GRAB_EDGE;
 }
 
 // An ARMED hand sweeping past the cliff uses a tighter radius than a deliberate tap. Without
 // this an armed hand snags rock it was never reaching for — including holds behind it.
 export function armRadius(hold) {
-  return Math.max(CFG.SNAP, (hold.size || 0.12));
+  return (hold.size || 0.12) * 0.92;
 }
 
 // Nearest decoy that has not crumbled yet.
@@ -442,6 +458,7 @@ function grab(state, hand, hold) {
   hand._stick.x = hand._stick.y = 0;   // the next release starts from a neutral stick
   hand._linger = 0;
   hand._skipId = null;
+  hand._onT = 0;                       // how long this hand has been on this rock (slopers time out)
   push(state, { type: 'grab', hand: hand.side, holdId: hold.id });
   if (hold.kind === 'rune') {
     state.checkpoint = hold.id;
@@ -487,7 +504,11 @@ function updateStamina(state, dt) {
       hand.stamina = Math.min(1, hand.stamina + CFG.REFILL_RUNE * dt);   // rest holds
       continue;
     }
-    hand.stamina -= (both ? CFG.DRAIN_TWO : CFG.DRAIN_ONE) * dt;
+    // Poor rock costs more, and a sloper eventually shrugs you off however fresh you are.
+    const q = (hold && CFG.HOLD_KINDS[hold.grip]) || CFG.HOLD_KINDS.edge;
+    hand.stamina -= (both ? CFG.DRAIN_TWO : CFG.DRAIN_ONE) * q.drain * dt;
+    hand._onT = (hand._onT || 0) + dt;
+    if (q.slip > 0 && hand._onT > q.slip) { release(state, hand, 'slip'); continue; }
     if (hand.stamina <= 0) { hand.stamina = 0; release(state, hand, 'slip'); }
   }
 }

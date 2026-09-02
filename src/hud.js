@@ -19,7 +19,7 @@
 //   • The keystroke that starts the climb is stopped in the capture phase on window, so input.js never
 //     sees it as a grip toggle; pointer starts never reach the sticks (the overlay is above them).
 
-import { SPIDER_CODE, spiderUnlocked, unlockSpider } from './spiderHand.js';
+import { SPIDER_CODE, spiderUnlocked, unlockSpider, spiderSkin, setSpiderSkin } from './spiderHand.js';
 
 const MUTE_KEY = 'ritual.muted';
 const ARC_R = 63;                              // radius of the SVG stamina arc in index.html
@@ -520,6 +520,8 @@ export function createHud(root) {
     const sig = titleEl && titleEl.querySelector('.sigil');
     if (sig) { sig.classList.remove('code-hit'); void sig.offsetWidth; sig.classList.add('code-hit'); }
     message(already ? 'The web answers again' : 'The web answers', 2600, 'rune');
+    refreshCustomBtn();
+    setTimeout(openCustom, 900);        // the reward is a choice, not a surprise
   }
 
   function onTitleKey(e) {
@@ -709,10 +711,41 @@ export function createHud(root) {
     if (can !== canLookNow) { canLookNow = can; lookBtn.classList.toggle('can', can); }
   }
 
+  // ---- customisation ----------------------------------------------------------------------
+  // Only exists once the code has been typed. Choosing a glove reloads the hands, which is the
+  // honest way to re-skin a skinned mesh, so the caller supplies that.
+  const customEl = doc.getElementById('custom');
+  const customBtn = doc.getElementById('customBtn');
+  const skinCbs = [];
+  function markSkin() {
+    const cur = spiderSkin();
+    if (!customEl) return;
+    customEl.querySelectorAll('.skin').forEach((b) => b.classList.toggle('on', b.dataset.skin === cur));
+  }
+  function openCustom() { if (customEl) { markSkin(); customEl.hidden = false; } }
+  function closeCustom() { if (customEl) customEl.hidden = true; }
+  function refreshCustomBtn() { if (customBtn) customBtn.hidden = !spiderUnlocked(); }
+  if (customEl) {
+    customEl.querySelectorAll('.skin').forEach((b) => b.addEventListener('click', () => {
+      const v = b.dataset.skin;
+      if (v === spiderSkin()) return;
+      setSpiderSkin(v);
+      markSkin();
+      for (const cb of skinCbs) { try { cb(v); } catch (e) { console.error(e); } }
+    }));
+    const cl = doc.getElementById('customClose');
+    if (cl) cl.addEventListener('click', closeCustom);
+    customEl.addEventListener('pointerdown', (e) => { if (e.target === customEl) closeCustom(); });
+  }
+  if (customBtn) customBtn.addEventListener('click', openCustom);
+  refreshCustomBtn();
+
   const hud = {
     sticks,
     grips,
     lookButton: lookBtn,
+    openCustom, closeCustom, refreshCustomBtn,
+    onSkinChange(cb) { if (typeof cb === 'function') skinCbs.push(cb); },
     root: hudEl,
     elements: { hud: hudEl, title: titleEl, end: endEl, msg: msgEl, height: heightEl, runes: runesEl, falls: fallsEl, mute: muteBtn, vignette: vigEl },
     update,

@@ -30,8 +30,10 @@ export async function createWorld({ renderer, scene, route, tier }) {
   const seed = (route && route.seed) || 7;
   const holds = (route && route.holds) || [];
   const fakes = (route && route.fakes) || [];
-  // The hover ring is off for this build: the rock should be read, not labelled.
+  // Off for this build: the rock should be read, not labelled. The waymark glyphs went with
+  // the ring — scattered teal marks beside the route read as a UI overlay painted on the stone.
   const HOVER_CUE = false;
+  const WAYMARKS = false;
   const rnd = mulberry32(seed * 7919 + 13);
   const noise = new SimplexNoise({ random: mulberry32(seed) });
   const summit = holds.find((h) => h.kind === 'summit') || null;
@@ -321,7 +323,7 @@ export async function createWorld({ renderer, scene, route, tier }) {
   // merged additive mesh; per-glyph brightness lives in the vertex colours.
   const waymarks = [];
   let waymarkMesh = null;
-  {
+  if (WAYMARKS) {
     let lastY = -Infinity;
     for (const h of holds) {
       if (h.kind !== 'hold' || h.y - lastY < WAYMARK_EVERY) continue;
