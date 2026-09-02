@@ -895,9 +895,10 @@ export function createHud(root) {
 
   // ---- the web-zip's state, on the WEB pad ------------------------------------------------
   // Without this the ability is invisible: no cooldown, no aim state, no sign it exists. It used
-  // to live on the right GRIP pill; with the pills gone (B51) every mark moved onto the pad,
-  // which is the thing you actually press.
+  // to live on the right GRIP pill as well; with the pills gone (B51) the pad is the only place
+  // left, which is right — it is the control your thumb is on.
   let webCache = '';
+  let webHinted = false;                       // the one-line gesture hint, once per session
   function updateWeb(state) {
     const w = state.web;
     if (!w) return;
@@ -906,9 +907,26 @@ export function createHud(root) {
       if (w.mode === 'aiming') mark = 'aim';
       else if (w.mode === 'flying' || w.mode === 'attached') mark = 'web';
       else if (w.cd > 0) mark = 'cool';
-      else if (!state.hands.R.gripping) mark = 'ready';
+      // 'ready' mirrors the sim's own rule, which no longer wants a free right hand: you may aim
+      // with both hands on the rock and only let go when the line bites (B50). Saying 'ready'
+      // only when the hand was already off was the HUD half of "the pad does nothing".
+      else if (state.phase === 'climbing' || state.phase === 'falling') mark = 'ready';
     }
     const cd = w.unlocked && w.cd > 0 ? Math.min(1, w.cd / 3) : 0;
+    const st = !w.unlocked ? 'off' : mark === 'cool' ? 'cool' : (mark === 'ready' || mark === 'aim' || mark === 'web') ? 'can' : 'idle';
+
+    // The gesture is not guessable from a pad that just says WEB, so say it once, the first time
+    // the pad is actually usable. Once per session, and not in the opening seconds: the climb's
+    // own "light every rune" message is on screen then and would simply replace this.
+    //
+    // This is evaluated BEFORE the cache check on purpose. On a plain climb the pad is 'ready'
+    // from the first frame and nothing about it ever changes, so the key never moves and the
+    // early return below meant the hint could not fire on the one flow that needs it most.
+    if (!webHinted && st === 'can' && state.phase === 'climbing' && state.t > 6) {
+      webHinted = true;
+      message('Hold WEB, drag to aim, let go to fire — tap it again to release the line', 4200);
+    }
+
     // `unlocked` belongs in the key: it flips false -> true when the climb starts, and with both
     // hands still on the rock nothing else changes, so without it the pad stayed hidden until the
     // first time the right hand came off.
@@ -916,19 +934,25 @@ export function createHud(root) {
     if (key === webCache) return;
     webCache = key;
 
-    // the pad only exists once unlocked, dims while the shot is cooling, and carries the ready /
-    // aiming / line-out marks and the cooldown drain the right pill used to show
+    // The pad only exists once unlocked, dims while the shot is cooling, and carries the four
+    // marks and the cooldown drain that used to be split with the right pill (B50 put them here
+    // too; B51 took the pill away, so this is now the only place they live). `web-*` are B50's
+    // names, kept so nothing that learned them breaks; `can` / `cool` / `aim` / `out` are the
+    // ones the #web CSS actually paints.
     if (webBtn) {
-      const st = !w.unlocked ? 'off' : mark === 'cool' ? 'cool' : (mark === 'ready' || mark === 'aim' || mark === 'web') ? 'can' : 'idle';
+      webBtn.classList.toggle('web-aim', mark === 'aim');
+      webBtn.classList.toggle('web-out', mark === 'web');
+      webBtn.classList.toggle('web-cool', mark === 'cool');
+      webBtn.classList.toggle('web-ready', mark === 'ready');
+      webBtn.classList.toggle('aim', mark === 'aim');
+      webBtn.classList.toggle('out', mark === 'web');
+      webBtn.style.setProperty('--cd', cd.toFixed(3));
       if (st !== webBtnState) {
         webBtnState = st;
         webBtn.hidden = st === 'off';
         webBtn.classList.toggle('can', st === 'can');
         webBtn.classList.toggle('cool', st === 'cool');
       }
-      webBtn.classList.toggle('aim', mark === 'aim');
-      webBtn.classList.toggle('out', mark === 'web');
-      webBtn.style.setProperty('--cd', cd.toFixed(3));
     }
   }
 
