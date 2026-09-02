@@ -319,7 +319,8 @@ export async function createWorld({ renderer, scene, route, tier }) {
   // rule that a hold of PROTO.bigSize or over gets the finer icosahedron, so the triangle bill per
   // hold is what it always was. Only the combinations a route actually uses are ever built.
   const TIERS = 2;
-  const protoKey = (fam, hold) => (fam * TIERS + (hold.size >= PROTO.bigSize ? 1 : 0)) * PROTO.variants;
+  // first key of a (family, size tier) — the variant is added by the caller
+  const protoKey = (fam, size) => (fam * TIERS + (size >= PROTO.bigSize ? 1 : 0)) * PROTO.variants;
   function holdProto(key) {
     const fam = FAMILIES[Math.floor(key / (TIERS * PROTO.variants))];
     const big = Math.floor(key / PROTO.variants) % TIERS === 1;
@@ -344,7 +345,7 @@ export async function createWorld({ renderer, scene, route, tier }) {
   // A hold's prototype: its own grip family, its own size tier, one of PROTO.variants shapes.
   const protoOf = (hold) => {
     const f = FAMILY_OF[hold.grip] !== undefined ? FAMILY_OF[hold.grip] : 1;   // no grip → edge
-    return protoKey(f, hold) + (hold.id % PROTO.variants);
+    return protoKey(f, hold.size) + (hold.id % PROTO.variants);
   };
   // A decoy carries no grip at all — the sim never asks one for a stamina cost — so it would
   // otherwise always be an edge, and a shape you could learn to spot. Draw its family from the
@@ -355,7 +356,7 @@ export async function createWorld({ renderer, scene, route, tier }) {
     if (!pool.length) pool = plainHolds;
     const like = pool.length ? pool[Math.floor(r() * pool.length)] : null;
     const f = like && FAMILY_OF[like.grip] !== undefined ? FAMILY_OF[like.grip] : 1;
-    return protoKey(f, fake) + Math.floor(r() * PROTO.variants);
+    return protoKey(f, fake.size) + Math.floor(r() * PROTO.variants);
   }
 
   // Where one instance sits. `holdZ` is untouched by all of this — same single wallZ sample the
@@ -761,7 +762,9 @@ export async function createWorld({ renderer, scene, route, tier }) {
 
   // A burst: grit thrown out of the socket, mostly sideways and down, with the puff hanging
   // where the rock was. Oldest particles are recycled, so a second decoy never grows the pool.
-  function burstDust(x, y, z) {
+  // `up` biases the throw upward: a decoy sheds grit downward out of its socket (the default), a
+  // body hitting the ground kicks it up out of the dirt (B53).
+  function burstDust(x, y, z, up = 0) {
     for (let n = 0; n < DUST_PER; n++) {
       const i = dustNext;
       dustNext = (dustNext + 1) % DUST_MAX;
@@ -772,7 +775,7 @@ export async function createWorld({ renderer, scene, route, tier }) {
       dust.positions[k + 1] = y + Math.sin(a) * 0.05;
       dust.positions[k + 2] = z + 0.02 + Math.random() * 0.05;
       dustVel[k] = Math.cos(a) * sp;
-      dustVel[k + 1] = Math.sin(a) * sp * 0.55 - 0.25;      // biased downward: the rock is falling
+      dustVel[k + 1] = Math.sin(a) * sp * 0.55 - 0.25 + up; // biased downward: the rock is falling
       dustVel[k + 2] = 0.25 + Math.random() * 0.5;          // out of the face, toward the climber
       dustAge[i] = 0;
       dustLife[i] = 0.55 + Math.random() * 0.55;
@@ -804,6 +807,148 @@ export async function createWorld({ renderer, scene, route, tier }) {
     root.add(glow);
     hoverRings[side] = { mesh: m, glow, k: 0 };
   }
+
+  // =========================================================================================
+  // B53 — THE GROUND. Everything from here to END OF GROUND is the floor of the world.
+  //
+  // WHY IT IS AT -0.55. The sim's `CFG.FLOOR` (0.75) is the body point — the SHOULDER — when you
+  // stand at the base with nothing held, and the eye sits at body.y + 0.30. So the dirt has to be
+  // a shoulder's height below FLOOR, not at it: GROUND.y = FLOOR - 1.30 puts the standing eye at
+  // 1.05, which is 1.60 m above the open terrace and 1.40 m above the scree banked against the
+  // rock — a person, either way. Anything shallower and the climber is a child staring at his own
+  // knees, and the start holds at y ≈ 1.2 stop reading as something you reach up to. It is the far
+  // end of the range the row allowed (FLOOR minus 0.75 to 1.30), taken because that is the end
+  // where the numbers come out as a human.
+  //
+  // WHY THERE IS NO SEAM. Nothing is skirted and `wallZ` is untouched: the wall plane already runs
+  // from y = -8 to 43.5 (WALL.height/yCenter), so it passes 7.45 m THROUGH the ground and out the
+  // bottom. The join is a real intersection, and what sells it is scree — the ground banks up
+  // against the rock (GROUND.talus) and darkens into the corner (the vertex colours below).
+  const GROUND = {
+    y: -0.55,
+    halfX: 15, back: -6, front: 24,   // 30 × 30 m: under the whole 9 m face, out past the camera
+    seg: 96,                          // 0.31 m cells — the near ground is where you die
+    tile: WALL.tile,                  // the same 3 m of stone as the wall, and the same textures
+    rim: 3.4,                         // the outer ring of the terrace falls away into the cloud sea
+    rimFrom: 0.72,                    // ...starting at this fraction of the half-extent
+    talus: 0.12, talusRun: 1.4,       // scree banked against the foot of the rock. Kept small on
+                                      // purpose: it is banked exactly where the climber stands, so
+                                      // every centimetre of it comes off his height
+    boulders: 12,                     // ONE InstancedMesh of ONE prototype. Measured at tier phone:
+                                      // the whole ground is +3 draw calls and +30,432 triangles
+                                      // standing at the base (the third call is the boulders' own
+                                      // shadow pass), +1 and +18,432 from 12 m up, nothing above ~20
+  };
+  const GROUND_ZMID = (GROUND.back + GROUND.front) / 2;
+  const GROUND_ZHALF = (GROUND.front - GROUND.back) / 2;
+  // How far a point on the terrace is toward the edge, 0 at the middle and 1 at the rim.
+  function groundEdge(x, z) {
+    return Math.max(Math.abs(x) / GROUND.halfX, Math.abs(z - GROUND_ZMID) / GROUND_ZHALF);
+  }
+  // The ground's surface. Three octaves of the same noise the wall is made of, plus the talus, less
+  // the rim roll-off. Exported on `world` so the camera knows where to put a head that has landed.
+  function groundAt(x, z) {
+    let h = GROUND.y
+      + 0.155 * noise.noise(x * 0.11 + 210, z * 0.11 - 90)
+      + 0.070 * noise.noise(x * 0.43 + 60, z * 0.43 + 130)
+      + 0.028 * noise.noise(x * 1.35 + 5, z * 1.35 + 22);
+    const out = Math.max(0, z - wallZ(x, GROUND.y));          // metres out from the rock face
+    h += GROUND.talus * Math.exp(-Math.pow(out / GROUND.talusRun, 2));
+    const rim = smoothstep(GROUND.rimFrom, 1, groundEdge(x, z));
+    return h - GROUND.rim * rim * rim;
+  }
+  // The camera rig is handed `world.wallZ` by the integrator and nothing else, so the one number it
+  // needs from down here rides along on the function. (CONTRACTS: world-light → arms-camera.)
+  wallZ.groundY = GROUND.y;
+
+  const groundGeo = new THREE.PlaneGeometry(GROUND.halfX * 2, GROUND_ZHALF * 2, GROUND.seg, GROUND.seg);
+  groundGeo.rotateX(-Math.PI / 2);
+  groundGeo.translate(0, 0, GROUND_ZMID);
+  {
+    const pos = groundGeo.attributes.position;
+    const uv = groundGeo.attributes.uv;
+    const col = new Float32Array(pos.count * 3);
+    for (let i = 0; i < pos.count; i++) {
+      const x = pos.getX(i), z = pos.getZ(i);
+      pos.setY(i, groundAt(x, z));
+      uv.setXY(i, x / GROUND.tile, z / GROUND.tile);
+      // Dust and bare stone in patches, fine grit over both, the corner at the foot of the wall in
+      // shadow (this is what hides the join more than any geometry does), the rim rolling to dark.
+      const patch = smoothstep(-0.15, 0.45, noise.noise(x * 0.33 + 410, z * 0.33 - 260));
+      const grit = 0.5 + 0.5 * noise.noise(x * 1.7 + 13, z * 1.7 + 77);
+      const out = Math.max(0, z - wallZ(x, GROUND.y));
+      let k = (0.68 + 0.30 * patch) * (0.90 + 0.10 * grit);
+      // The corner has to be dark enough to read as a corner and no darker: it is the first metre
+      // in front of the climber's boots and the last thing he sees, and at 0.55 over 0.9 m the
+      // ground he lands on came out nearly black.
+      k *= 1 - 0.34 * Math.exp(-Math.pow(out / 0.7, 2));
+      k *= 1 - 0.40 * smoothstep(GROUND.rimFrom, 1, groundEdge(x, z));
+      // Dust is paler and greyer than the wall's iron red; bare stone keeps the wall's own colour,
+      // which is what stops the floor reading as more wall lying down.
+      col[i * 3] = lerp(0.99, 1.10, patch) * k;
+      col[i * 3 + 1] = lerp(0.95, 1.07, patch) * k;
+      col[i * 3 + 2] = lerp(0.91, 1.05, patch) * k;
+    }
+    groundGeo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+    groundGeo.setAttribute('uv1', new THREE.BufferAttribute(uv.array.slice(), 2));
+    groundGeo.computeVertexNormals();
+    groundGeo.computeBoundingSphere();
+  }
+  // The same material as the wall, so the ground is the same stone under the same dusk → night
+  // schedule with no second copy of it: env.update drives the lights, the fog and the exposure, and
+  // this picks all three up for free. Only the normal scale drops — the wall is read head-on, the
+  // ground at a grazing angle, where 1.45 boils into sparkle.
+  const groundMat = wallMat.clone();
+  groundMat.normalScale = new THREE.Vector2(0.85, 0.85);
+  const ground = new THREE.Mesh(groundGeo, groundMat);
+  ground.name = 'ground';
+  ground.receiveShadow = true;      // no castShadow: there is nothing under it to cast onto
+  ground.matrixAutoUpdate = false;
+  root.add(ground);
+
+  // Scree and boulders, so the floor is not a carpet. Twelve instances of ONE hold prototype — the
+  // sloper family, the one with the least chalk on it — laid on its back so the blob's flat front
+  // face is the weathered top and its stretched back is buried. One draw call for all twelve.
+  let boulders = null;
+  {
+    // The sloper family's first small-tier variant: the same blob B53 laid on its back, asked
+    // for the way anything asks for one now that a prototype is a (family, size tier, variant)
+    // and is built the first time a route wants it.
+    const proto = protoFor(protoKey(FAMILY_OF.sloper, 0));
+    const brnd = mulberry32(seed * 2654435761 + 991);
+    const mesh = new THREE.InstancedMesh(proto.geo, holdMat, GROUND.boulders);
+    mesh.name = 'ground-boulders';
+    mesh.castShadow = true; mesh.receiveShadow = true;
+    const m = new THREE.Matrix4();
+    const p = new THREE.Vector3(), q = new THREE.Quaternion(), s = new THREE.Vector3();
+    const lay = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), -Math.PI / 2);
+    const c = new THREE.Color();
+    for (let i = 0; i < GROUND.boulders; i++) {
+      // The first five are scree banked into the corner where the ground meets the rock; the rest
+      // are boulders out on the terrace, kept back from where the climber lands so a rock cannot
+      // end up inside the lens on the last frame of a fall.
+      const near = i < 5;
+      const x = (brnd() - 0.5) * (near ? 11 : 22);
+      const z = near ? wallZ(x, GROUND.y) + 0.18 + brnd() * 0.75
+        : (Math.abs(x) < 3.2 ? 2.6 : 1.5) + brnd() * 6.5;
+      const size = near ? 0.15 + brnd() * 0.16 : 0.34 + brnd() * 0.5;
+      p.set(x, groundAt(x, z) + size * 0.14, z);
+      q.setFromEuler(new THREE.Euler((brnd() - 0.5) * 0.36, brnd() * Math.PI * 2, (brnd() - 0.5) * 0.36, 'YXZ'));
+      q.multiply(lay);
+      s.set(size * (0.9 + brnd() * 0.4), size * (0.9 + brnd() * 0.4), size * (0.7 + brnd() * 0.5));
+      mesh.setMatrixAt(i, m.compose(p, q, s));
+      // duller and a shade cooler than the rock on the wall: these have been down here in the shade
+      const k = 0.60 + brnd() * 0.28;
+      c.setRGB(k * 0.98, k, k * 1.06);
+      mesh.setColorAt(i, c);
+    }
+    mesh.instanceMatrix.needsUpdate = true;
+    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+    mesh.computeBoundingSphere();
+    root.add(mesh);
+    boulders = mesh;
+  }
+  // END OF GROUND ===========================================================================
 
   // ---------------------------------------------------------------------------------------
   // Per-frame
@@ -963,6 +1108,24 @@ export async function createWorld({ renderer, scene, route, tier }) {
       if (fp.fall > 4 || fp.group.position.y < -60) fp.group.visible = false;
     }
 
+    // --- B53: the ground ---------------------------------------------------------------------
+    // Two things only. (1) The ground you hit: the sim's `impact` is the frame the body reaches
+    // CFG.FLOOR, and it throws a puff of grit out of the dirt from the existing dust pool — the
+    // screen is cutting to black over the next 80 ms, and this is what the last of those frames
+    // shows. `grounded` (letting go with your feet on the ground) never fires `impact`, so it
+    // never puffs. (2) The boulders leave the shadow pass once the climber is above the shadow
+    // camera's box, exactly as the holds do; the ground plane itself is never hidden, because
+    // looking down the drop from 30 m up is the whole point of it being there.
+    if (events && events.length) {
+      for (let i = 0; i < events.length; i++) {
+        const e = events[i];
+        if (!e || e.type !== 'impact') continue;
+        const gz = wallZ(body.x, GROUND.y) + 0.85;      // half a metre past the eye, not in it
+        burstDust(body.x, groundAt(body.x, gz) + 0.08, gz, 1.1);
+      }
+    }
+    if (boulders) boulders.castShadow = body.y < GROUND.y + PROTO.shadowBand;
+
     // --- decoy dust ------------------------------------------------------------------------
     if (dustLive > 0) {
       const p = dust.positions, a = dust.alphas;
@@ -1052,6 +1215,10 @@ export async function createWorld({ renderer, scene, route, tier }) {
 
   return {
     wallZ, holdZ, update, setTier,
+    // B53: the floor of the world. `groundY` is the nominal plane the row settled on; `groundAt`
+    // is the surface itself (relief + the talus banked against the rock), for anything that has to
+    // put something down on it. The camera reads `wallZ.groundY`, which is the same number.
+    groundY: GROUND.y, groundAt, ground, boulders,
     // `holds` is the group the instanced rock hangs in (B52); `holdMeshes` is one InstancedMesh
     // per prototype blob, in case anything ever needs to reach past the group.
     env, root, wall, holds: holdsGroup, holdMeshes, chalk: chalkMesh, runes, altar, waymarks: waymarkMesh, embers, hoverRings,

@@ -151,6 +151,11 @@ export function createClimber(route) {
     // body somewhere the line's circle does not pass through, so it is off the line this frame.
     web: { mode: 'idle', ax: 0, ay: 0, tipX: 0, tipY: 0, len: 0, cd: 0, aimX: 0, aimY: 1, unlocked: false, grounded: false, walled: false },
     runesLit: [], checkpoint: null, night: 0,
+    // B54: a TEMPORARY per-climb testing default, not a redesign — main.js sets this from the
+    // `?stamina` query flag (default true = unlimited, while the controls are being reworked).
+    // When true, updateStamina() below early-outs: no drain, no forced release, no hold-quality
+    // slip timer. The real mechanic (B2/B3/B8) is untouched and this is how you switch it back on.
+    unlimitedStamina: false,
     route, events: [],
     _fall: { t: 0, from: 0 },
     _holdById: new Map(holds.map((h) => [h.id, h])),
@@ -726,6 +731,12 @@ function beginFall(state) {
 
 function updateStamina(state, dt) {
   const { L, R } = state.hands;
+  // B54: unlimited stamina, a TEMPORARY testing default (see `state.unlimitedStamina` in
+  // createClimber and `UNLIMITED_STAMINA` in main.js). Pin both hands full and skip drain,
+  // forced release at 0, and the per-kind hang timer (HOLD_KINDS[x].slip, e.g. a sloper's 9 s)
+  // entirely — that timer lives in the loop below and never runs while this early-out is taken.
+  // Decoys are rock, not stamina, and crumble under a hovering hand regardless (see `crumble`).
+  if (state.unlimitedStamina) { L.stamina = 1; R.stamina = 1; return; }
   const both = L.gripping && R.gripping;
   for (const hand of [L, R]) {
     if (!hand.gripping) { hand.stamina = Math.min(1, hand.stamina + CFG.REFILL_FREE * dt); continue; }
