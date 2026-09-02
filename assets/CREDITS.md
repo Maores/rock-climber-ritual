@@ -26,7 +26,8 @@ All textures and HDRIs here are CC0 from Poly Haven (https://polyhaven.com):
     fits the 6 MB budget; no other change (no cuts, no level or dynamics processing, no added parts). It is the night
     track (B61): loaded beside the theme, it takes over in a 2 s crossfade once the climb passes `state.night` 0.55,
     about the second rune, and is raised 1.8× in the graph (it is 5 LU quieter than the theme as published).
-- Attribution for both tracks is shown in-game on the title screen footer (`src/hud.js`, footHtml()).
+- Attribution for the tracks is shown in-game on the title screen footer (`src/hud.js`, footHtml(), from its CREDITS
+  list; B61's entry for the second track is the integrator's to add there, alongside the one for "Ritual").
 
 ## Hand model
 

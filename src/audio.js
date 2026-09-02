@@ -12,8 +12,11 @@
 // track that lives beside it (NIGHT_URL, assets/audio/theme2.mp3). The night track is a second
 // element that runs SILENTLY under the theme from the same gesture, so iOS has already let it play
 // by the time it is wanted. Past state.night 0.55 (about the second rune) the two cross-fade over
-// 2 s; a new climb — night back under 0.45 while climbing — fades the theme back in; setMusic(null),
-// the title, stops both. Both sit under one bus that the wind ducks (B26) and the mute silences.
+// 2 s; a NEW climb (a fresh state from restart()) seen under 0.45 while climbing fades the theme back
+// in, and the same climb never hands back on its own; setMusic(null), the title, stops both. The
+// fade only advances while the night track can be heard, so the theme never fades into silence, and
+// a night track that fails outright is written off and the climb stays on the theme. Both sit under
+// one bus that the wind ducks (B26) and the mute silences.
 //
 // Integration notes for main.js: setMusic(url, { night, decode }) may be called before or after
 // unlock(). If a track stays silent on a device (e.g. iPhone Safari against a LAN server without
@@ -30,7 +33,7 @@ const MAX_CUES_PER_FRAME = 6;
 // track lives and main.js keeps calling setMusic(url) with the theme alone.
 const NIGHT_URL = new URL('../assets/audio/theme2.mp3', import.meta.url).href;
 const NIGHT_AT = 0.55;        // state.night where the night track takes over: about the second rune
-const NIGHT_BACK = 0.45;      // and under which a NEW climb brings the theme back (a fall never does)
+const NIGHT_BACK = 0.45;      // and under which a NEW climb brings the theme back (the same climb never does)
 const XFADE_S = 2.0;          // the crossfade, both ways
 // The night track is 5 LU quieter than the theme as shipped (-22.9 against -17.7 LUFS integrated,
 // ffmpeg's ebur128 over the two files in assets/audio), so it is levelled in the graph rather than
@@ -58,6 +61,7 @@ function makeTrack(name) {
     checkTimer: 0,
     pendingDecode: false, // setMusic(url, { decode: true }) before unlock
     deferred: false,      // the night track's decode waits until the fade wants it
+    dead: false,          // gave up (a media error and a failed decode): the climb stays on the theme
   };
 }
 
@@ -75,6 +79,7 @@ export function createAudio() {
   let musicGain = null;      // the shared bus
   let retryArmed = false;
   let xfade = 0, xfadeTo = 0, xfadeSent = -1;
+  let lastState = null, armedBack = false;   // a fresh climber arms the hand-back; going up disarms it
   let meter = null;          // AnalyserNode on the master bus, for tests and evidence only
   let meterBuf = null;
 
@@ -106,9 +111,10 @@ export function createAudio() {
         muted: audio.muted,
         wind: wind ? { level: +wind.level.toFixed(3), gain: +wind.gBp.gain.value.toFixed(3), rumble: +wind.gLp.gain.value.toFixed(3), hz: Math.round(wind.bp.frequency.value) } : null,
         music: day.el ? { url: day.url, playing: trackPlaying(day), time: +day.el.currentTime.toFixed(1), duration: isFinite(day.el.duration) ? +day.el.duration.toFixed(1) : null, gain: musicGain ? +musicGain.gain.value.toFixed(3) : null, readyState: day.el.readyState, fallback: !!day.fallback } : null,
-        night: night.el ? { url: night.url, playing: trackPlaying(night), time: +night.el.currentTime.toFixed(1), duration: isFinite(night.el.duration) ? +night.el.duration.toFixed(1) : null, readyState: night.el.readyState, fallback: !!night.fallback } : null,
+        night: night.el ? { url: night.url, playing: trackPlaying(night), time: +night.el.currentTime.toFixed(1), duration: isFinite(night.el.duration) ? +night.el.duration.toFixed(1) : null, readyState: night.el.readyState, fallback: !!night.fallback, dead: night.dead } : null,
         track: xfadeTo ? 'night' : 'day',
         xfade: +xfade.toFixed(3),
+        nightReady: nightReady(),
         fades: { day: day.fade ? +day.fade.gain.value.toFixed(3) : null, night: night.fade ? +night.fade.gain.value.toFixed(3) : null },
         nightTrim: NIGHT_TRIM,
         duck: +duck.toFixed(3),
@@ -444,18 +450,23 @@ export function createAudio() {
     musicGain.gain.setTargetAtTime(g, now(), 0.08);
   }
 
-  // The switch (B61). Past NIGHT_AT the night track takes over; a new climb, back under NIGHT_BACK
-  // while climbing (or standing at the foot), hands the theme back. A plunge runs the whole cliff
-  // and so runs `night` back down to 0, but the ground is not a new climb: the fall keeps its track
-  // until restart() starts one, and the title (setMusic(null)) resets everything anyway.
+  // The switch (B61). Past NIGHT_AT the night track takes over. A NEW climb — restart() hands the
+  // module a fresh state — seen under NIGHT_BACK while climbing (or standing at the foot) hands the
+  // theme back; the same climb never does on its own, so swinging down under the line and climbing
+  // again keeps the night track, and a plunge, which runs `night` to 0, keeps it too. The title
+  // (setMusic(null)) resets everything anyway. The fade towards the night track only advances while
+  // that track can be heard (nightReady), so a slow one holds the theme until it is ready and the
+  // theme never fades into silence; one that fails outright is written off (`dead`).
   function updateMusic(state, dt) {
-    if (tracks.night.url) {
+    if (state !== lastState) { lastState = state; armedBack = true; }
+    const n = tracks.night;
+    if (n.url && !n.dead) {
       const night = clamp(state.night || 0, 0, 1);
       const ph = state.phase;
       if (xfadeTo === 0 && night >= NIGHT_AT && ph !== 'title') switchTo(1);
-      else if (xfadeTo === 1 && night < NIGHT_BACK && (ph === 'climbing' || ph === 'grounded')) switchTo(0);
+      else if (xfadeTo === 1 && armedBack && night < NIGHT_BACK && (ph === 'climbing' || ph === 'grounded')) switchTo(0);
     } else if (xfadeTo !== 0) switchTo(0);
-    if (xfade !== xfadeTo) {
+    if (xfade !== xfadeTo && (xfadeTo === 0 || nightReady())) {
       const step = dt / XFADE_S;
       xfade = xfadeTo > xfade ? Math.min(xfadeTo, xfade + step) : Math.max(xfadeTo, xfade - step);
       if (Math.abs(xfade - xfadeTo) < 1e-6) xfade = xfadeTo;     // land exactly, not a rounding error away
@@ -464,13 +475,29 @@ export function createAudio() {
   }
   function switchTo(to) {
     xfadeTo = to;
-    if (to === 1 && tracks.night.deferred) fallbackTrack(tracks.night);   // the decoded path waited for this
+    if (to !== 1) return;
+    armedBack = false;                          // this climb has gone up: only a new one hands back
+    const n = tracks.night;
+    if (n.deferred) {
+      // the decoded path waited for this — unless the element recovered on its own meanwhile
+      if (n.el && !n.el.error && n.el.readyState >= 2 && !n.el.paused) n.deferred = false;
+      else fallbackTrack(n);
+    }
+  }
+  // Can the night track be heard right now: its element has decodable data and is playing, or its
+  // decoded loop is running.
+  function nightReady() {
+    const tr = tracks.night;
+    if (!tr.url || tr.dead) return false;
+    if (tr.fallback) return !!tr.fallback.src;
+    return !!(tr.el && !tr.el.paused && !tr.el.error && tr.el.readyState >= 2);
   }
   // equal-power, so the two never dip in the middle of the fade
   function fadeOf(tr) {
     return tr === tracks.night ? NIGHT_TRIM * Math.sin(xfade * Math.PI / 2) : Math.cos(xfade * Math.PI / 2);
   }
   function applyXfade(force) {
+    if (!ctx) { xfadeSent = -1; return; }        // before unlock, or after dispose: nothing to drive yet
     if (!force && Math.abs(xfade - xfadeSent) < 0.002) return;
     xfadeSent = xfade;
     for (const tr of [tracks.day, tracks.night]) {
@@ -603,6 +630,7 @@ export function createAudio() {
     tr.url = url || null;
     stopFallback(tr);
     tr.deferred = false;
+    tr.dead = false;
     if (!tr.url) {
       if (tr.el) tr.el.pause();
       tr.pendingDecode = false;
@@ -739,6 +767,7 @@ export function createAudio() {
     } catch (err) {
       console.warn('music: element and decoded fallback both failed', tr.name, err);
       tr.fallback = null;
+      if (tr === tracks.night) tr.dead = true;   // the climb stays on the theme rather than fading into nothing
     }
   }
   function stopFallback(tr) {

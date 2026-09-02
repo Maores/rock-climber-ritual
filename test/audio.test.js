@@ -14,8 +14,10 @@ class Param {
   setValueAtTime(v, t) { this.calls.push(['set', v, t]); this.value = v; return this; }
   linearRampToValueAtTime(v, t) { this.calls.push(['lin', v, t]); return this; }
   exponentialRampToValueAtTime(v, t) { this.calls.push(['exp', v, t]); return this; }
-  // the value reads as the target, so a test can ask "what was it last told"
-  setTargetAtTime(v, t, tc) { this.calls.push(['target', v, t, tc]); this.value = v; return this; }
+  // `target` is what the param was last told; `value` follows it at once here, which a browser's
+  // AudioParam (an exponential approach) would not do -- assert on `target` for anything driven by
+  // setTargetAtTime, and read `value` only where the module itself reads it (debug()).
+  setTargetAtTime(v, t, tc) { this.calls.push(['target', v, t, tc]); this.target = v; this.value = v; return this; }
   cancelScheduledValues(t) { this.calls.push(['cancel', t]); return this; }
 }
 class Node {
@@ -75,11 +77,19 @@ class FakeAudio {
 }
 FakeAudio.all = [];
 const fetches = [];
+let fetchHold = null;     // { url } -> a fetch of that url waits until fetchHold.ok() or fetchHold.fail()
+const okResponse = () => ({ ok: true, arrayBuffer: async () => new ArrayBuffer(16) });
 globalThis.window = { AudioContext: FakeContext, addEventListener() {}, removeEventListener() {} };
 globalThis.document = { hidden: false, addEventListener() {}, removeEventListener() {} };
 globalThis.localStorage = { getItem: () => null, setItem() {} };
 globalThis.Audio = FakeAudio;
-globalThis.fetch = async (url) => { fetches.push(url); return { ok: true, arrayBuffer: async () => new ArrayBuffer(16) }; };
+globalThis.fetch = (url) => {
+  fetches.push(url);
+  if (fetchHold && fetchHold.url === url) {
+    return new Promise((res, rej) => { fetchHold.ok = () => res(okResponse()); fetchHold.fail = () => rej(new Error('HTTP 500')); });
+  }
+  return Promise.resolve(okResponse());
+};
 
 const { createAudio } = await import('../src/audio.js');
 
@@ -98,6 +108,7 @@ function climb(o = {}) {
 function boot() {
   FakeAudio.all.length = 0;
   fetches.length = 0;
+  fetchHold = null;
   const audio = createAudio();
   assert.equal(audio.unlock(), true);
   return { audio, ctx: audio.ctx };
@@ -195,6 +206,7 @@ test('audio: past night 0.55 the night track fades in over 2 s, and a new climb 
   assert.equal(a.fade.gain.value, 1);
   assert.equal(b.fade.gain.value, 0);
   assert.equal(audio.debug().track, 'day');
+  assert.equal(audio.debug().nightReady, true);
   assert.equal(audio.debug().music.playing, true);
   assert.equal(audio.debug().night.playing, true);
 
@@ -208,12 +220,12 @@ test('audio: past night 0.55 the night track fades in over 2 s, and a new climb 
   run(audio, up, 0.5);
   assert.equal(audio.debug().track, 'night');
   near(audio.debug().xfade, 0.25, 0.02, 'a quarter of the way after 0.5 s');
-  near(b.fade.gain.value, trim * Math.sin(0.25 * Math.PI / 2), 0.05, 'night gain');
-  near(a.fade.gain.value, Math.cos(0.25 * Math.PI / 2), 0.03, 'theme gain');
+  near(b.fade.gain.target, trim * Math.sin(0.25 * Math.PI / 2), 0.05, 'night gain');
+  near(a.fade.gain.target, Math.cos(0.25 * Math.PI / 2), 0.03, 'theme gain');
   run(audio, up, 1.6);
   assert.equal(audio.debug().xfade, 1);
-  near(b.fade.gain.value, trim, 1e-9);
-  near(a.fade.gain.value, 0, 1e-9);
+  near(b.fade.gain.target, trim, 1e-9);
+  near(a.fade.gain.target, 0, 1e-9);
 
   // the plunge runs night back to 0 on the way down, and the ground is not a new climb
   run(audio, climb({ phase: 'falling', night: 0.2, body: { x: 0, y: 5, vx: 0, vy: -20 } }), 1);
@@ -228,9 +240,93 @@ test('audio: past night 0.55 the night track fades in over 2 s, and a new climb 
   near(audio.debug().xfade, 0.5, 0.02, 'halfway back after 1 s');
   run(audio, climb({ night: 0.05 }), 1.2);
   assert.equal(audio.debug().xfade, 0);
-  assert.equal(a.fade.gain.value, 1);
-  assert.equal(b.fade.gain.value, 0);
+  assert.equal(a.fade.gain.target, 1);
+  assert.equal(b.fade.gain.target, 0);
   audio.dispose();
+});
+
+test('audio: the same climb never hands the theme back on its own; only a fresh climber does (B61 fix pass)', async () => {
+  const { audio } = boot();
+  audio.setMusic('http://x/theme.mp3');
+  await flush();
+  const st = climb({ night: 0.6 });
+  run(audio, st, 2.5);
+  assert.equal(audio.debug().xfade, 1);
+  // swing down under the line and take rock again at 7 m: still this climb, still the night track
+  st.phase = 'swinging'; st.night = 0.3;
+  run(audio, st, 1);
+  st.phase = 'climbing';
+  run(audio, st, 2);
+  assert.equal(audio.debug().track, 'night', 'the same state object keeps its track');
+  assert.equal(audio.debug().xfade, 1);
+  st.night = 0.7;
+  run(audio, st, 1);
+  assert.equal(audio.debug().track, 'night');
+  // Climb again: restart() builds a new climber, and that is what hands back
+  run(audio, climb({ night: 0.05 }), 2.5);
+  assert.equal(audio.debug().track, 'day');
+  assert.equal(audio.debug().xfade, 0);
+  // and once that new climb has gone up, it too keeps the night track when it comes down
+  const again = climb({ night: 0.6 });
+  run(audio, again, 2.5);
+  again.night = 0.1;
+  run(audio, again, 2);
+  assert.equal(audio.debug().track, 'night');
+  audio.dispose();
+});
+
+test('audio: the theme never fades into silence: the fade waits for a night track still decoding, and gives up on one that fails (B61 fix pass)', async () => {
+  // slow: the decode is in flight for the whole fade window
+  let { audio, ctx } = boot();
+  fetchHold = { url: 'http://x/theme2.mp3' };
+  audio.setMusic('http://x/theme.mp3', { night: 'http://x/theme2.mp3', decode: true });
+  await flush(); await flush();
+  const st = climb({ night: 0.7 });
+  run(audio, st, 3);
+  assert.equal(audio.debug().track, 'night', 'the switch is wanted');
+  assert.equal(audio.debug().nightReady, false);
+  assert.equal(audio.debug().xfade, 0, 'but the theme holds while the night track has nothing to play');
+  assert.deepEqual(fetches, ['http://x/theme.mp3', 'http://x/theme2.mp3']);
+  fetchHold.ok();
+  await flush(); await flush(); await flush();
+  assert.equal(audio.debug().nightReady, true);
+  run(audio, st, 3);
+  assert.equal(audio.debug().xfade, 1, 'and fades once it can be heard');
+  const loops = ctx.nodes.filter((n) => n.kind === 'buffer' && n.loop && n.started != null && n.buffer && n.buffer.duration === 10);
+  assert.equal(loops.length, 2);
+  audio.dispose();
+
+  // failed: the climb stays on the theme, and nothing keeps retrying
+  ({ audio, ctx } = boot());
+  fetchHold = { url: 'http://x/theme2.mp3' };
+  audio.setMusic('http://x/theme.mp3', { night: 'http://x/theme2.mp3', decode: true });
+  await flush(); await flush();
+  const st2 = climb({ night: 0.7 });
+  run(audio, st2, 1);
+  fetchHold.fail();
+  const warns = [];
+  const w = console.warn; console.warn = (...a) => warns.push(a.map(String).join(' '));
+  try { await flush(); await flush(); await flush(); } finally { console.warn = w; }
+  assert.equal(warns.length, 1, 'one warning for the failed decode');
+  run(audio, st2, 2);
+  assert.equal(audio.debug().track, 'day', 'the night track is written off');
+  assert.equal(audio.debug().xfade, 0);
+  assert.equal(fetches.length, 2, 'and not fetched again');
+  run(audio, climb({ night: 0.9 }), 1);
+  assert.equal(audio.debug().track, 'day');
+  audio.dispose();
+});
+
+test('audio: setMusic after dispose is a no-op, not a throw (B61 fix pass)', async () => {
+  const { audio } = boot();
+  audio.setMusic('http://x/theme.mp3');
+  await flush();
+  audio.dispose();
+  assert.doesNotThrow(() => audio.setMusic(null));
+  assert.doesNotThrow(() => audio.setMusic('http://x/theme.mp3'));
+  assert.doesNotThrow(() => audio.setMuted(true));
+  assert.doesNotThrow(() => audio.handle([{ type: 'impact' }], climb(), 1 / 60));
+  audio.setMuted(false);
 });
 
 test('audio: setMusic(null) is the title and stops both; mute pauses both; theme2.mp3 beside the theme is the default (B61)', async () => {
