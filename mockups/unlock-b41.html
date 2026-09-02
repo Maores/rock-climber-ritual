@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>B41 — how you unlock ARACHNID on a phone</title>
+<link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root { --bg:#0a0c18; --panel:#171422; --line:#332a3f; --text:#f1e6d8; --muted:#b9a58f;
+          --teal:#7fe0ff; --gold:#d99a5b; --ok:#8ddc9b; --bad:#ff6a5a; --faint:#8b7963; }
+  * { box-sizing:border-box; }
+  body { margin:0; padding-bottom:28px; color:var(--text); font-family:Inter, system-ui, sans-serif; line-height:1.5;
+         background:radial-gradient(900px 560px at 50% -6%, #3a2333 0%, #14100d 58%, var(--bg) 100%); }
+  body.wide { min-width:900px; }
+  main { max-width:900px; margin:0 auto; padding:20px 18px 0; }
+  h1 { font-family:Cinzel, serif; letter-spacing:.04em; color:var(--gold); font-size:24px; margin:0 0 6px; text-align:center; }
+  .sub { text-align:center; color:var(--muted); margin:0 auto 4px; font-size:13.5px; max-width:800px; }
+  .sub b { color:var(--text); font-weight:600; }
+  .why { text-align:center; color:#ffb4aa; font-size:12.5px; margin:0 auto 18px; max-width:800px; }
+
+  .opt { display:flex; flex-wrap:wrap; gap:18px; align-items:flex-start; margin-bottom:15px;
+         background:rgba(23,20,34,.72); border:1px solid var(--line); border-radius:16px; padding:14px; }
+  .opt.rec { border-color:rgba(127,224,255,.5); box-shadow:0 0 0 2px rgba(127,224,255,.13); }
+  .art { flex:0 0 300px; width:300px; height:250px; border-radius:12px; position:relative; overflow:hidden;
+         background:radial-gradient(ellipse at 50% 34%, rgba(91,61,110,.4), rgba(10,12,24,.98) 66%);
+         border:1px solid rgba(127,224,255,.13); }
+  .art svg { position:absolute; inset:0; width:100%; height:100%; }
+  .cap { flex:1 1 300px; padding-top:2px; }
+  .cap h3 { margin:0 0 6px; font-size:17px; display:flex; align-items:center; gap:9px; flex-wrap:wrap; }
+  .cap p { margin:0 0 7px; font-size:13px; color:var(--muted); }
+  .cap p:last-child { margin-bottom:0; }
+  .cap b { color:var(--text); font-weight:600; }
+  .tag { font:600 9.5px/1 Inter, sans-serif; letter-spacing:.09em; text-transform:uppercase; padding:4px 8px; border-radius:999px; }
+  .tag.rec { background:rgba(127,224,255,.15); color:var(--teal); border:1px solid rgba(127,224,255,.45); }
+  .ok { color:var(--ok); font-weight:600; }
+  .no { color:var(--bad); font-weight:600; }
+  .foot { max-width:900px; margin:6px auto 0; padding:12px 18px 0; font-size:12.5px; color:var(--faint);
+          border-top:1px solid var(--line); text-align:center; }
+  .lbl { font:600 10px/1 Inter, sans-serif; letter-spacing:.16em; text-transform:uppercase; fill:var(--faint); }
+  .letter { font:600 11px/1 Inter, sans-serif; fill:rgba(241,230,216,.5); text-anchor:middle; dominant-baseline:middle; }
+  .letter.on { fill:#06222b; font-weight:700; }
+  .slot { font:700 15px/1 Cinzel, serif; fill:var(--teal); text-anchor:middle; }
+  .thumb { fill:rgba(241,230,216,.16); stroke:rgba(241,230,216,.5); stroke-width:1.5; }
+</style>
+</head>
+<body>
+<main>
+  <h1>B41 — how you unlock ARACHNID on a phone</h1>
+  <p class="sub">The code is matched by a <b>keydown listener</b> on the title screen. An iPhone has no keyboard
+  there and nothing summons one.</p>
+  <p class="why">So on your phone the ✦ button never appears, the glove is never worn, and the whole web-zip —
+  B14 to B21, all of v0.2.0 — is dead code. You asked for it and have never been able to reach it.</p>
+
+  <!-- ------------------------------------------------------------------ A -->
+  <div class="opt rec">
+    <div class="art">
+      <svg viewBox="0 0 300 250">
+        <g transform="translate(150,116)">
+          <!-- the sigil, dimmed, with the alphabet laid out around it like a web -->
+          <g opacity=".35" fill="none" stroke="#7fe0ff" stroke-width="1.8" stroke-linecap="round">
+            <circle r="42"/><circle r="35" stroke-dasharray="2 5"/>
+            <path d="M0-33V33"/><path d="M0-10-17-27M0-10 17-27"/><path d="M0 14-14 30M0 14 14 30"/>
+            <path d="M-23 0h46" opacity=".5"/>
+          </g>
+          <circle r="4" fill="#7fe0ff" opacity=".5"/>
+          <g id="ring"></g>
+        </g>
+        <text class="lbl" x="150" y="18" text-anchor="middle">Long-press the sigil</text>
+        <g transform="translate(150,214)">
+          <text class="slot" x="0" y="0">A R A C H _ _ _</text>
+        </g>
+      </svg>
+    </div>
+    <div class="cap">
+      <h3>A · The sigil becomes a web of letters <span class="tag rec">my pick</span></h3>
+      <p>Hold the sigil for about a second. The alphabet arranges itself around the ring and you tap
+      out the word; the letters you have found fill in beneath. Wrong letter and the ring quietly resets.</p>
+      <p><span class="ok">The word survives</span> — the egg is still a code you have to know, not a
+      button. It looks like the game rather than like a form, and it reads as deliberately hidden,
+      which is what an easter egg is for. Desktop keeps typing exactly as it does now.</p>
+      <p><span class="no">Cost:</span> the most to build — a letter ring, its hit targets and its reset.</p>
+    </div>
+  </div>
+
+  <!-- ------------------------------------------------------------------ B -->
+  <div class="opt">
+    <div class="art">
+      <svg viewBox="0 0 300 250">
+        <g transform="translate(150,112)">
+          <g fill="none" stroke="#7fe0ff" stroke-width="2" stroke-linecap="round">
+            <circle r="52" opacity=".55"/><circle r="43" stroke-dasharray="2.5 6" opacity=".5"/>
+            <path d="M0-42V42"/><path d="M0-13-21-34M0-13 21-34"/><path d="M0 17-17 37M0 17 17 37" opacity=".65"/>
+            <path d="M-28 0h56" opacity=".4"/>
+          </g>
+          <circle r="5" fill="#7fe0ff"/>
+          <circle r="66" fill="none" stroke="#7fe0ff" stroke-width="1.2" opacity=".35" stroke-dasharray="3 7"/>
+          <circle r="80" fill="none" stroke="#7fe0ff" stroke-width="1" opacity=".18"/>
+          <!-- a thumb, mid-tap -->
+          <path class="thumb" d="M30 44c0-10 8-18 18-18s18 8 18 18v26H30z"/>
+        </g>
+        <text class="lbl" x="150" y="18" text-anchor="middle">Tap it eight times</text>
+        <g transform="translate(150,214)">
+          <g fill="#7fe0ff">
+            <circle cx="-49" cy="0" r="4"/><circle cx="-35" cy="0" r="4"/><circle cx="-21" cy="0" r="4"/>
+            <circle cx="-7" cy="0" r="4"/><circle cx="7" cy="0" r="4"/>
+          </g>
+          <g fill="none" stroke="#7fe0ff" stroke-width="1.3" opacity=".35">
+            <circle cx="21" cy="0" r="4"/><circle cx="35" cy="0" r="4"/><circle cx="49" cy="0" r="4"/>
+          </g>
+        </g>
+      </svg>
+    </div>
+    <div class="cap">
+      <h3>B · Eight taps on the sigil</h3>
+      <p>Eight legs, eight taps. Nothing on screen counts them until the fifth, when faint dots appear
+      so you know something is happening.</p>
+      <p><span class="ok">Cheapest to build</span> by a distance, and impossible to fumble on a phone.</p>
+      <p><span class="no">Cost:</span> the word is gone. ARACHNID stops being the secret and the egg
+      becomes a button you happen to press a lot — and it can be tripped by accident.</p>
+    </div>
+  </div>
+
+  <!-- ------------------------------------------------------------------ C -->
+  <div class="opt">
+    <div class="art">
+      <svg viewBox="0 0 300 250">
+        <g transform="translate(150,84)">
+          <g fill="none" stroke="#7fe0ff" stroke-width="2" stroke-linecap="round" opacity=".85">
+            <circle r="40" opacity=".55"/><circle r="33" stroke-dasharray="2.5 6" opacity=".5"/>
+            <path d="M0-32V32"/><path d="M0-10-16-26M0-10 16-26"/><path d="M0 13-13 28M0 13 13 28" opacity=".65"/>
+            <path d="M-21 0h42" opacity=".4"/>
+          </g>
+          <circle r="4" fill="#7fe0ff"/>
+        </g>
+        <rect x="52" y="132" width="196" height="30" rx="7" fill="rgba(20,14,11,.8)" stroke="rgba(127,224,255,.5)"/>
+        <text x="66" y="152" class="letter" style="text-anchor:start;fill:#7fe0ff;font-size:13px">ARACH|</text>
+        <!-- the OS keyboard -->
+        <rect x="14" y="172" width="272" height="70" rx="8" fill="rgba(210,212,220,.13)" stroke="rgba(241,230,216,.22)"/>
+        <g fill="rgba(241,230,216,.3)">
+          <g>
+            <rect x="22" y="180" width="22" height="17" rx="3"/><rect x="48" y="180" width="22" height="17" rx="3"/>
+            <rect x="74" y="180" width="22" height="17" rx="3"/><rect x="100" y="180" width="22" height="17" rx="3"/>
+            <rect x="126" y="180" width="22" height="17" rx="3"/><rect x="152" y="180" width="22" height="17" rx="3"/>
+            <rect x="178" y="180" width="22" height="17" rx="3"/><rect x="204" y="180" width="22" height="17" rx="3"/>
+            <rect x="230" y="180" width="22" height="17" rx="3"/><rect x="256" y="180" width="22" height="17" rx="3"/>
+          </g>
+          <g>
+            <rect x="35" y="202" width="22" height="17" rx="3"/><rect x="61" y="202" width="22" height="17" rx="3"/>
+            <rect x="87" y="202" width="22" height="17" rx="3"/><rect x="113" y="202" width="22" height="17" rx="3"/>
+            <rect x="139" y="202" width="22" height="17" rx="3"/><rect x="165" y="202" width="22" height="17" rx="3"/>
+            <rect x="191" y="202" width="22" height="17" rx="3"/><rect x="217" y="202" width="22" height="17" rx="3"/>
+            <rect x="243" y="202" width="22" height="17" rx="3"/>
+          </g>
+          <rect x="90" y="224" width="120" height="15" rx="3"/>
+        </g>
+        <text class="lbl" x="150" y="18" text-anchor="middle">Tap the sigil, then type</text>
+      </svg>
+    </div>
+    <div class="cap">
+      <h3>C · Tap the sigil to summon the real keyboard</h3>
+      <p>A hidden text field takes focus, iOS raises its own keyboard, and you type ARACHNID exactly
+      as you would on a desktop.</p>
+      <p><span class="ok">Smallest change</span>, and one truth for both platforms: the code is typed,
+      full stop. Nothing new to design.</p>
+      <p><span class="no">Cost:</span> the system keyboard slides up over the title screen, which looks
+      like a bug report form rather than a ritual — and nothing tells you the sigil is tappable.</p>
+    </div>
+  </div>
+</main>
+<p class="foot">All three keep the desktop path unchanged. Pick one and I will build it.</p>
+<script>
+if (new URLSearchParams(location.search).has('wide')) document.body.classList.add('wide');
+// Option A: lay the alphabet around the ring, with ARACH already found.
+const R = 62, found = 'ARACH';
+const g = document.getElementById('ring');
+const NS = 'http://www.w3.org/2000/svg';
+const AZ = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+for (let i = 0; i < 26; i++) {
+  const a = (i / 26) * Math.PI * 2 - Math.PI / 2;
+  const x = Math.cos(a) * R, y = Math.sin(a) * R;
+  const ch = AZ[i];
+  const hot = found.includes(ch);
+  if (hot) {
+    const c = document.createElementNS(NS, 'circle');
+    c.setAttribute('cx', x.toFixed(1)); c.setAttribute('cy', y.toFixed(1));
+    c.setAttribute('r', '10'); c.setAttribute('fill', '#7fe0ff'); c.setAttribute('opacity', '.9');
+    g.appendChild(c);
+  }
+  const t = document.createElementNS(NS, 'text');
+  t.setAttribute('x', x.toFixed(1)); t.setAttribute('y', y.toFixed(1));
+  t.setAttribute('class', 'letter' + (hot ? ' on' : ''));
+  t.textContent = ch;
+  g.appendChild(t);
+}
+</script>
+</body>
+</html>

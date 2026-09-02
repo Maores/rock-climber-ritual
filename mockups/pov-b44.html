@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>B44 — how close the hands sit to your eyes</title>
+<link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root { --bg:#14100d; --panel:#1f1813; --line:#3a2c22; --text:#f1e6d8; --muted:#b9a58f;
+          --teal:#7fe0ff; --gold:#d99a5b; --ok:#8ddc9b; --bad:#ff6a5a; --faint:#8b7963; }
+  * { box-sizing:border-box; }
+  body { margin:0; padding-bottom:26px; background:radial-gradient(1000px 600px at 50% -8%, #3a2333 0%, var(--bg) 60%);
+         color:var(--text); font-family:Inter, system-ui, sans-serif; line-height:1.5; }
+  body.wide { min-width:1090px; }
+  main { max-width:1080px; margin:0 auto; padding:18px 14px 0; }
+  h1 { font-family:Cinzel, serif; letter-spacing:.04em; color:var(--gold); font-size:24px; margin:0 0 5px; text-align:center; }
+  .sub { text-align:center; color:var(--muted); margin:0 auto 4px; font-size:13.5px; max-width:900px; }
+  .sub b { color:var(--text); font-weight:600; }
+  .meas { text-align:center; color:var(--faint); font-size:11.5px; margin:0 auto 16px; max-width:900px; }
+
+  .row { display:flex; gap:12px; align-items:flex-start; justify-content:center; flex-wrap:wrap; }
+  .opt { flex:0 0 250px; width:250px; background:rgba(31,24,19,.5); border:1px solid var(--line);
+         border-radius:14px; padding:10px; }
+  .opt.now { border-color:rgba(255,106,90,.42); }
+  .opt.rec { border-color:rgba(127,224,255,.55); box-shadow:0 0 0 2px rgba(127,224,255,.14); }
+  .shot { position:relative; width:100%; border-radius:9px; overflow:hidden; border:1px solid rgba(0,0,0,.55);
+          background:#0a0c18; }
+  /* the whole 390x844 frame: the framing is the thing being judged */
+  .shot .win { position:relative; width:100%; aspect-ratio:390/844; overflow:hidden; }
+  .shot img { position:absolute; inset:0; width:100%; height:100%; display:block; }
+  .tick { position:absolute; z-index:3; left:9px; top:9px; font:600 10px/1 Inter, sans-serif;
+          letter-spacing:.1em; text-transform:uppercase; padding:4px 8px; border-radius:999px;
+          background:rgba(10,12,24,.72); border:1px solid rgba(241,230,216,.3); color:var(--text); }
+  .opt.now .tick { background:rgba(255,106,90,.22); border-color:rgba(255,106,90,.6); color:#ffb4aa; }
+  .opt.rec .tick { background:rgba(127,224,255,.18); border-color:rgba(127,224,255,.6); color:var(--teal); }
+  .cap { margin-top:9px; }
+  .cap h3 { margin:0 0 3px; font-size:15px; }
+  .cap .n { font:600 11px/1 Inter, sans-serif; color:var(--gold); letter-spacing:.04em; margin-bottom:5px; }
+  .cap p { margin:0; font-size:12.5px; color:var(--muted); }
+  .foot { max-width:1080px; margin:14px auto 0; padding:12px 16px 0; font-size:12.5px; color:var(--faint);
+          border-top:1px solid var(--line); text-align:center; }
+  .foot b { color:var(--muted); }
+</style>
+</head>
+<body>
+<main>
+  <h1>B44 — how close the hands sit to your eyes</h1>
+  <p class="sub">The same frame, the same climb, the same instant — only the eye moves toward the wall.
+  Both hands are wearing the glove.</p>
+  <p class="meas">The cause is a framing dolly in camera.js: the eye eases <b>back</b>, up to 0.60 m, so that
+  both hands always fit the frame width. With the hands only 0.50 m apart it had already retreated 0.17 m.</p>
+
+  <div class="row">
+    <div class="opt now">
+      <div class="shot"><div class="win"><img src="./pov-now.jpg" alt=""></div><div class="tick">today</div></div>
+      <div class="cap">
+        <h3>Today</h3>
+        <div class="n">eye 0.79 m off the wall · hands 0.85 m away</div>
+        <p>The hands read as someone else's, out at the end of long arms. This is what you were
+        looking at when you said it was wrong.</p>
+      </div>
+    </div>
+
+    <div class="opt">
+      <div class="shot"><div class="win"><img src="./pov-closer.jpg" alt=""></div><div class="tick">a step in</div></div>
+      <div class="cap">
+        <h3>1 · A step in</h3>
+        <div class="n">eye 0.60 m · hands 0.66 m away</div>
+        <p>Just the dolly switched off — the eye never retreats to fit a wide reach. Everything else
+        is exactly as it is now.</p>
+      </div>
+    </div>
+
+    <div class="opt rec">
+      <div class="shot"><div class="win"><img src="./pov-climb.jpg" alt=""></div><div class="tick">the climb</div></div>
+      <div class="cap">
+        <h3>2 · The Climb</h3>
+        <div class="n">eye 0.46 m · hands 0.52 m away</div>
+        <p>Your head is in over the rock, the way it is when you are actually on a wall. The hands
+        are yours and the forearms come in from below.</p>
+      </div>
+    </div>
+
+    <div class="opt">
+      <div class="shot"><div class="win"><img src="./pov-inIt.jpg" alt=""></div><div class="tick">right in it</div></div>
+      <div class="cap">
+        <h3>3 · Right in it</h3>
+        <div class="n">eye 0.34 m · hands 0.40 m away</div>
+        <p>Nose almost on the rock. Biggest hands, most weight — and the least wall, so reading the
+        route ahead gets harder.</p>
+      </div>
+    </div>
+  </div>
+</main>
+<p class="foot">A wide reach will put a hand off the edge of the frame at every setting below today's —
+that is the trade, and it is what <b>The Climb</b> does too. Pick one and I will make it the camera.</p>
+<script>
+if (new URLSearchParams(location.search).has('wide')) document.body.classList.add('wide');
+</script>
+</body>
+</html>

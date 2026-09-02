@@ -4,7 +4,7 @@
 // one skinned GLB cloned for both sides with SkeletonUtils; the off-hand is the mirror image
 // (scale.x = -1 on a parent group). The model's own axes (finger direction, thumb side, palm side)
 // are measured at load time from its bones and its 'Grab' clip, so the code never hard-codes the
-// exporter's frame. Forearm and upper arm are tapered cloth cylinders placed by a 2-bone IK from the
+// exporter's frame. The forearm is a tapered cloth stub placed by a 2-bone IK from the
 // shoulder; finger curl samples the 'Grab' clip directly (no mixer) so the amount is a plain number;
 // tremble is a small high-frequency jitter. Reads `state` only, never touches the DOM.
 //
@@ -12,7 +12,7 @@
 // Optional injections: shoulder = sim.shoulder (else the CFG offsets are mirrored here), holdZ = world.holdZ (front z of a hold blob).
 
 import * as THREE from 'three';
-import { applySpiderSkin, spiderUnlocked, spiderSkin } from './spiderHand.js';
+import { applySpiderSkin, spiderUnlocked, spiderSkin, SPIDER_VARIANTS } from './spiderHand.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { clone as cloneSkeleton } from 'three/addons/utils/SkeletonUtils.js';
 
@@ -27,6 +27,14 @@ const HAND_LEN = 0.19;          // wrist crease → middle fingertip, metres
 const PALM_OFFSET = 0.075;      // wrist → palm centre, along the fingers
 const UPPER = 0.31;             // shoulder → elbow
 const LOWER = 0.29;             // elbow → wrist
+// B44: NOTHING BUT HANDS IS DRAWN. "I want to see ONLY the hands, no sleeve, no coat, Only hands"
+// (Maor 2026-09-02, after The Climb reference). With the eye in close (camera.js) a forearm swept
+// right across the frame and the hand read as being on the end of someone else's arm. The IK still
+// solves the whole arm -- it is what puts the wrist and the finger direction where they belong --
+// but the forearm, the upper arm, the shoulder, the cuff, its rim, cord and bead are all built and
+// never shown. The one piece that stays is the wrist plug, which closes the model's open wrist cut;
+// it takes the glove's cuff colour so the hand ends in itself rather than in a stump of bare skin.
+const STUB = 0.155;             // metres of sleeve drawn back from the wrist (built, not drawn)
 const LEAN = 0.22;              // the reaching shoulder rolls toward the wall by up to this much
 const PROTRACT = 0.07;          // ...and slides toward the hand by up to this much
 const BODY_DEPTH = 0.55;        // body z above the wall (contract)
@@ -423,6 +431,12 @@ export async function createArms({ scene, tier, shoulder, holdZ } = {}) {
   const skinMat = makeSkinMaterial(T.skinned.material);
   const skinTone = averageColor(T.skinned.material.map && T.skinned.material.map.image, new THREE.Color(0x8d5a3f));
   const plainSkin = new THREE.MeshPhysicalMaterial({ color: skinTone, roughness: 0.6, metalness: 0, sheen: 0.4, sheenColor: new THREE.Color(0xffc9ad), sheenRoughness: 0.6 });
+  // B44: with nothing but hands on screen, the model's open wrist cut has to be closed by something
+  // that belongs to the hand. Bare skin gets the glove's own cuff colour; a bare hand keeps its skin.
+  const wristVariant = SPIDER_VARIANTS[spiderSkin()];
+  const wristMat = spiderUnlocked() && wristVariant
+    ? new THREE.MeshPhysicalMaterial({ color: new THREE.Color(wristVariant.blue), roughness: wristVariant.roughness, metalness: 0, sheen: wristVariant.sheen })
+    : plainSkin;
   // Cloth = soft wrinkle normals at sleeve scale + a fine weave bump (~1.5 mm threads: gone at
   // arm's length, a soft grain up close).
   const wrinkles = makeNormalMap(tierName === 'phone' ? 128 : 256, wrinkleHeight);
@@ -498,9 +512,10 @@ export async function createArms({ scene, tier, shoulder, holdZ } = {}) {
         o.frustumCulled = false;
       }
     });
-    // The Easter egg: once the code has been typed, the RIGHT hand wears the glove. It is a
-    // repaint of this same skinned mesh, so the rig, the curl and the tremble are untouched.
-    if (side === 'R' && spiderUnlocked()) applySpiderSkin(model, { variant: spiderSkin() });
+    // Pick the glove in the hand panel and BOTH hands wear it (Maor 2026-09-02). It is a repaint
+    // of this same skinned mesh, so the rig, the curl and the tremble are untouched; the left hand's
+    // model is mirrored, so its webbing mirrors with it, which is what a left glove looks like.
+    if (spiderUnlocked()) applySpiderSkin(model, { variant: spiderSkin() });
 
     // Finger curl: sample the Grab clip per bone, blended out of the bind pose near curl = 0.
     const curlTracks = [];
@@ -524,27 +539,35 @@ export async function createArms({ scene, tier, shoulder, holdZ } = {}) {
     rim.rotation.x = Math.PI / 2;
     rim.position.y = 0.035;
     rim.castShadow = true;
-    const plug = new THREE.Mesh(plugGeo, plainSkin);
-    plug.scale.set(0.031, 0.05, 0.024);
-    plug.position.set(0, 0.0, 0);
+    const plug = new THREE.Mesh(plugGeo, wristMat);
+    // B44: it used to be a long ellipsoid hidden inside the cuff tube. With the cuff gone it is all
+    // that closes the wrist, so it is flattened along the arm and set back to sit flush in the cut.
+    plug.scale.set(0.0295, 0.013, 0.0225);
+    plug.position.set(0, -0.007, 0);
     plug.castShadow = true;
+    cuffMesh.visible = rim.visible = false;      // B44: only hands
     const cord = new THREE.Mesh(cordGeo, cordMat);
     cord.rotation.x = Math.PI / 2;
     cord.position.y = 0.022;
     cord.scale.set(1, 1, 0.8);
     const bead = new THREE.Mesh(beadGeo, beadMat);
     bead.position.set(-sgn * 0.0385, 0.022, 0.012);
+    cord.visible = bead.visible = false;         // B44: only hands
     cuff.add(cuffMesh, rim, plug, cord, bead);
 
     const forearm = new THREE.Mesh(forearmGeo, clothMat);
     forearm.castShadow = true; forearm.receiveShadow = true;
+    forearm.visible = false;        // B44: only hands
     const elbow = new THREE.Mesh(elbowGeo, clothMat);
     elbow.castShadow = true; elbow.receiveShadow = true;
+    elbow.visible = false;          // B44: only hands
     const upper = new THREE.Mesh(upperGeo, clothMat);
     upper.castShadow = true; upper.receiveShadow = true;
+    upper.visible = false;          // B44: never drawn — see STUB
     const shoulderBall = new THREE.Mesh(shoulderGeo, clothMat);
     shoulderBall.castShadow = true; shoulderBall.receiveShadow = true;
 
+    shoulderBall.visible = false;   // B44: never drawn
     group.add(handRoot, cuff, forearm, elbow, upper, shoulderBall);
 
     arms.sides[side] = {
@@ -754,29 +777,25 @@ export async function createArms({ scene, tier, shoulder, holdZ } = {}) {
         }
       }
 
-      // Forearm: elbow → wrist, running 3 cm on into the cuff. Unit cylinder scaled along Y.
+      // Forearm: only the last STUB metres before the wrist, running 3 cm on into the cuff.
       seg.subVectors(A.W, A.E);
-      const fl = seg.length();
+      const fl = Math.min(STUB, seg.length());
       seg.normalize();
-      A.forearm.position.copy(A.E).addScaledVector(seg, fl * 0.5 + 0.01);
+      A.forearm.position.copy(A.W).addScaledVector(seg, -(fl * 0.5) + 0.01);
       limbBasis(seg, n, A.forearm.quaternion);
       A.forearm.scale.set(1.1, fl + 0.04, 0.88);            // a forearm is oval, flat toward the wall
-      A.elbow.position.copy(A.E);
+      // Cap the cut end so the sleeve is a closed stub rather than an open pipe.
+      A.elbow.position.copy(A.W).addScaledVector(seg, -fl);
       A.elbow.quaternion.copy(A.forearm.quaternion);
-      A.elbow.scale.set(1.05, 1, 0.92);
+      const rEnd = (0.031 + (0.045 - 0.031) * (fl / LOWER)) / 0.045;
+      A.elbow.scale.set(rEnd * 1.1, rEnd * 0.9, rEnd * 0.88);
 
       // Cuff sits on the wrist, its far edge 5 cm up the hand.
       A.cuff.position.copy(A.W).addScaledVector(seg, 0.01);
       A.cuff.quaternion.copy(A.forearm.quaternion);
 
-      // Upper arm: shoulder → elbow.
-      seg.subVectors(A.E, A.S);
-      const ul = seg.length();
-      seg.normalize();
-      A.upper.position.copy(A.S).addScaledVector(seg, ul * 0.5);
-      limbBasis(seg, n, A.upper.quaternion);
-      A.upper.scale.set(1.08, ul + 0.02, 0.9);
-      A.shoulderBall.position.copy(A.S);
+      // Upper arm and shoulder are never drawn: at this camera distance they only ever cross the
+      // frame. The IK still places the elbow, because the forearm direction comes from it.
     }
   }
 

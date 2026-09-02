@@ -17,17 +17,20 @@ import * as THREE from 'three';
 
 // ---------------------------------------------------------------------------------------------
 // The unlock. Typing the word on the title screen flips this on for good on this device.
-const UNLOCK_KEY = 'ritual.spider';
 export const SPIDER_CODE = 'ARACHNID';
 
+// B41: the code could only ever be typed, and a phone has no keyboard on the title screen, so on a
+// phone none of this existed. Wearing the glove is now the unlock: pick it in the hand panel, which
+// is open to everyone, and the web comes with it. Typing the word is still a shortcut to the same
+// thing. `bare` is the default, so a first climb is still your own hands.
 export function spiderUnlocked() {
-  try { return localStorage.getItem(UNLOCK_KEY) === '1'; } catch (e) { return false; }
+  return spiderSkin() !== 'bare';
 }
 export function unlockSpider() {
-  try { localStorage.setItem(UNLOCK_KEY, '1'); } catch (e) {}
+  if (spiderSkin() === 'bare') setSpiderSkin('classic');
 }
 export function relockSpider() {
-  try { localStorage.removeItem(UNLOCK_KEY); } catch (e) {}
+  setSpiderSkin('bare');
 }
 
 // Which glove is worn. Chosen in the customisation panel, remembered per device.
@@ -36,8 +39,8 @@ export const SPIDER_SKINS = ['classic', 'stealth', 'bare'];
 export function spiderSkin() {
   try {
     const v = localStorage.getItem(SKIN_KEY);
-    return SPIDER_SKINS.includes(v) ? v : 'classic';
-  } catch (e) { return 'classic'; }
+    return SPIDER_SKINS.includes(v) ? v : 'bare';
+  } catch (e) { return 'bare'; }
 }
 export function setSpiderSkin(v) {
   if (!SPIDER_SKINS.includes(v)) return;

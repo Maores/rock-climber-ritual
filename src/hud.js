@@ -777,7 +777,8 @@ export function createHud(root) {
   }
   function openCustom() { if (customEl) { markSkin(); customEl.hidden = false; syncOverlayFlag(); } }
   function closeCustom() { if (customEl) { customEl.hidden = true; syncOverlayFlag(); } }
-  function refreshCustomBtn() { if (customBtn) customBtn.hidden = !spiderUnlocked(); }
+  // B41: the panel is how you put the glove on, so it can never be hidden behind having the glove.
+  function refreshCustomBtn() { if (customBtn) customBtn.hidden = false; }
   if (customEl) {
     customEl.querySelectorAll('.skin').forEach((b) => b.addEventListener('click', () => {
       const v = b.dataset.skin;

@@ -15,13 +15,20 @@
 import * as THREE from 'three';
 
 const EYE_UP = 0.30;       // eye above the shoulder centre
-const EYE_OUT = 0.62;      // eye above the wall surface at the body
+// B44: the eye used to sit 0.62 m off the wall and ease back up to another 0.60 to keep both hands
+// inside the frame, which put a hand 0.85 m away and made it read as someone else's. Maor's
+// reference is The Climb: the hand is about 0.40 m from your eyes and fills a good part of the view.
+// The eye is in close now and follows the hand you are steering, so that hand stays big and centred
+// and the resting one is allowed to leave the frame -- which is what the reference does too.
+const EYE_OUT = 0.40;      // eye above the wall surface at the body
+const REACH_FOLLOW = 0.55; // how far the eye rides toward the hand being steered
+const REACH_SIDE = 0.45;   // ...and how much of that it takes sideways
 const FOV_PORTRAIT = 84;
 const FOV_LANDSCAPE = 70;
 // Framing dolly: the eye eases back (never forward of EYE_OUT) until the hands fit the frame width
 // with FRAME_MARGIN to spare; PULL_MAX caps it so a wide reach crops the resting hand's edge rather
 // than shrinking everything.
-const PULL_MAX = 0.60;
+const PULL_MAX = 0.14;
 const FRAME_MARGIN = 0.92;
 const HAND_HALF = 0.075;   // half-width of a hand plus a finger of margin
 const HAND_LIFT = 0.06;    // a hand sits about this far off the wall surface (hold front or hover)
@@ -89,6 +96,9 @@ export function createCameraRig(camera) {
   const roll = { x: 0, v: 0 };              // radians, + tilts the head to the climber's right
   const bounce = { x: 0, v: 0 };            // metres on eye y, spring around 0
   const pull = { x: 0, v: 0 };              // framing dolly, metres back from EYE_OUT
+  const reach = { x: 0, v: 0 };             // eye offset toward the hand being steered, sideways
+  const reachY = { x: 0, v: 0 };            // ...and vertically
+  const reachTarget = { x: 0, y: 0 };
   const lean = { x: 0, v: 0 };              // sideways eye offset while hanging on the rope
   let shake = 0;                            // 0..1 envelope
   let fallBlend = 0;                        // 0..1 look-down amount
@@ -172,6 +182,13 @@ export function createCameraRig(camera) {
     }
     let lookX = THREE.MathUtils.lerp(body.x, hx, 0.7);
     let lookY = THREE.MathUtils.lerp(body.y + EYE_UP, hy + 0.12, 0.65);
+    // With exactly one hand free, the eye rides toward it: a reach above your head keeps your head
+    // under it rather than leaving the hand up at the top of the frame at arm's length.
+    const free = (L && !L.gripping && R && R.gripping) ? L : (R && !R.gripping && L && L.gripping) ? R : null;
+    reachTarget.x = free ? (free.x - body.x) * REACH_FOLLOW * REACH_SIDE : 0;
+    reachTarget.y = free ? (free.y - (body.y + EYE_UP)) * REACH_FOLLOW : 0;
+    spring(reach, reachTarget.x, 4.0, 1.0, dt);
+    spring(reachY, reachTarget.y, 4.0, 1.0, dt);
     titleBias = approach(titleBias, state.phase === 'title' ? 1 : 0, 2.5, dt);
     lookY += 0.35 * titleBias;
 
@@ -200,7 +217,8 @@ export function createCameraRig(camera) {
     spring(lean, falling ? ROPE_LEAN : 0, 3.0, 1.0, dt);
 
     // --- eye target ----------------------------------------------------------------------
-    const eyeTarget = _v.set(body.x + lean.x, body.y + EYE_UP, wz(body.x, body.y) + EYE_OUT + pull.x);
+    const eyeTarget = _v.set(body.x + lean.x + reach.x, body.y + EYE_UP + reachY.x,
+                             wz(body.x, body.y) + EYE_OUT + pull.x);
     if (summitT >= 0) {
       const ease = 1 - Math.exp(-summitT / SUMMIT_TAU);
       eyeTarget.y += SUMMIT_RISE * ease;
