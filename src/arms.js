@@ -12,7 +12,7 @@
 // Optional injections: shoulder = sim.shoulder (else the CFG offsets are mirrored here), holdZ = world.holdZ (front z of a hold blob).
 
 import * as THREE from 'three';
-import { applySpiderSkin, spiderUnlocked, spiderSkin, SPIDER_VARIANTS } from './spiderHand.js';
+import { applySpiderSkin, spiderUnlocked, spiderSkin } from './spiderHand.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { clone as cloneSkeleton } from 'three/addons/utils/SkeletonUtils.js';
 
@@ -32,8 +32,16 @@ const LOWER = 0.29;             // elbow → wrist
 // right across the frame and the hand read as being on the end of someone else's arm. The IK still
 // solves the whole arm -- it is what puts the wrist and the finger direction where they belong --
 // but the forearm, the upper arm, the shoulder, the cuff, its rim, cord and bead are all built and
-// never shown. The one piece that stays is the wrist plug, which closes the model's open wrist cut;
-// it takes the glove's cuff colour so the hand ends in itself rather than in a stump of bare skin.
+// never shown.
+// B49: and neither is anything else. B44 kept one last object at the wrist -- a "plug" ellipsoid
+// tinted the glove's cuff blue -- on the belief that it closed the model's open wrist cut. The model
+// has no open wrist cut: realistic_hand.glb is watertight (all 4554 edges shared by exactly two
+// triangles, at every weld tolerance down to exact float equality), and it ends in a rounded, closed
+// stump. The plug was inherited from a time when it filled the open-ended CUFF TUBE, which B44 then
+// hid; at 59 x 26 x 45 mm against a wrist only 32-42 mm across and 19-29 mm deep it stood proud of
+// the wrist on every side, in its own flat material with none of the glove's webbing. That is the
+// "blue balloon" Maor hated, and it is gone. The hand now ends in its own mesh: the glove shader
+// paints that stump its own cuff blue, and a bare hand ends in skin.
 const STUB = 0.155;             // metres of sleeve drawn back from the wrist (built, not drawn)
 const LEAN = 0.22;              // the reaching shoulder rolls toward the wall by up to this much
 const PROTRACT = 0.07;          // ...and slides toward the hand by up to this much
@@ -197,23 +205,6 @@ function makeHeightMap(size, heightFn) {
   tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
   tex.colorSpace = THREE.NoColorSpace;
   return tex;
-}
-
-/** Average colour of an albedo image (used for the wrist plug under the cuff). */
-function averageColor(image, fallback) {
-  try {
-    const c = document.createElement('canvas');
-    c.width = c.height = 16;
-    const ctx = c.getContext('2d');
-    ctx.drawImage(image, 0, 0, 16, 16);
-    const d = ctx.getImageData(0, 0, 16, 16).data;
-    let r = 0, g = 0, b = 0, n = 0;
-    for (let i = 0; i < d.length; i += 4) { if (d[i + 3] > 8) { r += d[i]; g += d[i + 1]; b += d[i + 2]; n++; } }
-    if (!n) return fallback;
-    return new THREE.Color(r / n / 255, g / n / 255, b / n / 255).convertSRGBToLinear();
-  } catch (_) {
-    return fallback;
-  }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -429,14 +420,8 @@ export async function createArms({ scene, tier, shoulder, holdZ } = {}) {
 
   // Materials shared by both sides.
   const skinMat = makeSkinMaterial(T.skinned.material);
-  const skinTone = averageColor(T.skinned.material.map && T.skinned.material.map.image, new THREE.Color(0x8d5a3f));
-  const plainSkin = new THREE.MeshPhysicalMaterial({ color: skinTone, roughness: 0.6, metalness: 0, sheen: 0.4, sheenColor: new THREE.Color(0xffc9ad), sheenRoughness: 0.6 });
-  // B44: with nothing but hands on screen, the model's open wrist cut has to be closed by something
-  // that belongs to the hand. Bare skin gets the glove's own cuff colour; a bare hand keeps its skin.
-  const wristVariant = SPIDER_VARIANTS[spiderSkin()];
-  const wristMat = spiderUnlocked() && wristVariant
-    ? new THREE.MeshPhysicalMaterial({ color: new THREE.Color(wristVariant.blue), roughness: wristVariant.roughness, metalness: 0, sheen: wristVariant.sheen })
-    : plainSkin;
+  // B49: no wrist material, because there is no wrist object. The hand model is watertight and
+  // closes itself; whatever paints the hand paints the end of it too.
   // Cloth = soft wrinkle normals at sleeve scale + a fine weave bump (~1.5 mm threads: gone at
   // arm's length, a soft grain up close).
   const wrinkles = makeNormalMap(tierName === 'phone' ? 128 : 256, wrinkleHeight);
@@ -483,7 +468,6 @@ export async function createArms({ scene, tier, shoulder, holdZ } = {}) {
   const shoulderGeo = new THREE.SphereGeometry(0.053, 18, 14);   // rounds off the sleeve's top end
   const cuffGeo = new THREE.CylinderGeometry(0.037, 0.035, 0.07, 24, 1, true);
   const cuffRimGeo = new THREE.TorusGeometry(0.037, 0.0042, 8, 28);
-  const plugGeo = new THREE.SphereGeometry(1, 16, 12);
   const cordGeo = new THREE.TorusGeometry(0.0385, 0.0022, 6, 36);
   const beadGeo = new THREE.SphereGeometry(0.0045, 10, 8);
 
@@ -530,8 +514,8 @@ export async function createArms({ scene, tier, shoulder, holdZ } = {}) {
       }
     }
 
-    // Cuff follows the forearm axis and overlaps the hand's wrist cut by ~3 cm; a skin plug sits
-    // inside it (aligned with the forearm, not the hand) so the cuff never reads as a hollow tube.
+    // Cuff follows the forearm axis and overlaps the hand's wrist by ~3 cm. Built, never shown
+    // (B44); it carried the wrist plug until B49 established there was no hole to plug.
     const cuff = new THREE.Group();
     const cuffMesh = new THREE.Mesh(cuffGeo, cuffMat);
     cuffMesh.castShadow = true; cuffMesh.receiveShadow = true;
@@ -539,12 +523,6 @@ export async function createArms({ scene, tier, shoulder, holdZ } = {}) {
     rim.rotation.x = Math.PI / 2;
     rim.position.y = 0.035;
     rim.castShadow = true;
-    const plug = new THREE.Mesh(plugGeo, wristMat);
-    // B44: it used to be a long ellipsoid hidden inside the cuff tube. With the cuff gone it is all
-    // that closes the wrist, so it is flattened along the arm and set back to sit flush in the cut.
-    plug.scale.set(0.0295, 0.013, 0.0225);
-    plug.position.set(0, -0.007, 0);
-    plug.castShadow = true;
     cuffMesh.visible = rim.visible = false;      // B44: only hands
     const cord = new THREE.Mesh(cordGeo, cordMat);
     cord.rotation.x = Math.PI / 2;
@@ -553,7 +531,7 @@ export async function createArms({ scene, tier, shoulder, holdZ } = {}) {
     const bead = new THREE.Mesh(beadGeo, beadMat);
     bead.position.set(-sgn * 0.0385, 0.022, 0.012);
     cord.visible = bead.visible = false;         // B44: only hands
-    cuff.add(cuffMesh, rim, plug, cord, bead);
+    cuff.add(cuffMesh, rim, cord, bead);
 
     const forearm = new THREE.Mesh(forearmGeo, clothMat);
     forearm.castShadow = true; forearm.receiveShadow = true;
@@ -571,7 +549,7 @@ export async function createArms({ scene, tier, shoulder, holdZ } = {}) {
     group.add(handRoot, cuff, forearm, elbow, upper, shoulderBall);
 
     arms.sides[side] = {
-      side, sgn, handRoot, mirror, model, skinned, curlTracks, cuff, plug, forearm, elbow, upper, shoulderBall,
+      side, sgn, handRoot, mirror, model, skinned, curlTracks, cuff, forearm, elbow, upper, shoulderBall,
       curl: 0.15, tremble: 0, grip: 0, tilt: 0, horns: 0,
       quat: new THREE.Quaternion(), pos: new THREE.Vector3(), forearmDir: new THREE.Vector3(0, 1, 0),
       S: new THREE.Vector3(), E: new THREE.Vector3(), W: new THREE.Vector3(),
@@ -810,8 +788,8 @@ export async function createArms({ scene, tier, shoulder, holdZ } = {}) {
 
   function dispose() {
     if (scene) scene.remove(group);
-    [forearmGeo, upperGeo, elbowGeo, shoulderGeo, cuffGeo, cuffRimGeo, plugGeo, cordGeo, beadGeo].forEach((g) => g.dispose());
-    [skinMat, plainSkin, clothMat, cuffMat, cordMat, beadMat].forEach((m) => m.dispose());
+    [forearmGeo, upperGeo, elbowGeo, shoulderGeo, cuffGeo, cuffRimGeo, cordGeo, beadGeo].forEach((g) => g.dispose());
+    [skinMat, clothMat, cuffMat, cordMat, beadMat].forEach((m) => m.dispose());
     weave.dispose(); rib.dispose(); wrinkles.dispose();
   }
 

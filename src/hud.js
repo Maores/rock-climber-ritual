@@ -14,6 +14,9 @@
 //   • hud.update(state[, events]) — the event list is optional; misses are also detected from state.
 //   • hud.onMute(cb) wires the mute button to audio.setMuted; without it the button reaches
 //     window.__ritual.audio. hud.onRestart(cb) replaces the default location.reload() of "Climb again".
+//   • hud.onMenu(cb) is asked to put the game back on the title screen; without it Menu reloads the
+//     page. hud.onPause(cb) fires true/false around the mid-climb confirmation, so the integrator
+//     can freeze the sim while the question is on screen.
 //   • hud.showEnd(stats) accepts the state object or { time, high, runesLit, runesTotal }; the HUD
 //     also shows the end screen itself 2.8 s after state.phase becomes 'summit' unless it was shown.
 //   • The keystroke that starts the climb is stopped in the capture phase on window, so input.js never
@@ -32,6 +35,28 @@ const PILL_LABEL = {
   gripping: 'Holding',
   slipping: 'Slipping',
 };
+
+// B39: on a pointer device the pill also carries an LMB / RMB badge, and a letter-spaced
+// eight-letter word plus a badge does not fit the pill at any size the layout produces. HELD
+// rather than HOLD because the badge is beside it: the mouse button is a toggle, not a hold.
+const PILL_LABEL_KEYED = {
+  free: 'Grip',
+  hover: 'Grab',
+  armed: 'Armed',
+  gripping: 'Held',
+  slipping: 'Slip',
+};
+
+// B42: what each of the four routes actually is, from the numbers B13 measured when it picked
+// them. Keyed by seed, because generation is deterministic and a seed IS the route; route.js
+// owns the roster itself, so nothing here has to agree with it beyond the number.
+const ROUTE_LINE = {
+  7: 'The original line.',
+  21: '42 jugs, easy rock low down, poor rock up high.',
+  4: 'Wanders 0.70 m either side of centre.',
+  19: '31 crimps, 18 slopers, 68% poor rock up high. 9 decoys.',
+};
+const UNLISTED_LINE = 'An unlisted seed.';
 
 const CREDITS = [
   {
@@ -210,6 +235,7 @@ export function createHud(root) {
     cache.hudOn = true;
     hudEl.classList.add('on');
     hudEl.setAttribute('aria-hidden', 'false');
+    if (menuBtn) menuBtn.hidden = false;     // B40: the Menu button is up exactly while a climb is
     // fonts and layout are ready only now; re-measure once the frame is painted
     requestAnimationFrame(onResize);
   }
@@ -217,7 +243,71 @@ export function createHud(root) {
     cache.hudOn = false;
     hudEl.classList.remove('on');
     hudEl.setAttribute('aria-hidden', 'true');
+    if (menuBtn) menuBtn.hidden = true;
   }
+
+  // ---- the way back to the title (B40) ----------------------------------------------------
+  // Every choice on the title screen used to be a one-way door. The button lives with the HUD, so
+  // it is up exactly while a climb is: mid-climb it asks once, because a mis-tap would throw the
+  // climb away; from the end screen there is nothing left to lose and it just goes. Rebuilding the
+  // game is the integrator's business — all this does is ask and report.
+  const menuBtn = byId('menuBtn');
+  const confirmEl = byId('confirm');
+  const menuCbs = [];
+  const pauseCbs = [];
+  function onMenu(cb) {
+    if (typeof cb === 'function') menuCbs.push(cb);
+    return hud;
+  }
+  function onPause(cb) {
+    if (typeof cb === 'function') pauseCbs.push(cb);
+    return hud;
+  }
+  function setPaused(on) {
+    for (const cb of pauseCbs) { try { cb(!!on); } catch (err) { console.error(err); } }
+  }
+  function openConfirm() {
+    if (!confirmEl) { leaveClimb(); return; }        // no markup: ask nothing rather than trap them
+    confirmEl.hidden = false;
+    syncOverlayFlag();
+    setPaused(true);                                 // a one-hand hang drains 0.20/s: the question must not cost the climb
+  }
+  function closeConfirm() {
+    if (!confirmEl || confirmEl.hidden) return;
+    confirmEl.hidden = true;
+    syncOverlayFlag();
+    setPaused(false);
+  }
+  function leaveClimb() {
+    closeConfirm();
+    if (menuCbs.length) {
+      for (const cb of menuCbs) { try { cb(); } catch (err) { console.error(err); } }
+    } else {
+      location.reload();                             // not wired: a reload is the title screen
+    }
+  }
+  const onMenuClick = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    // Falling, or on the ground: the climb is already lost, so "Leave the climb?" would be asking
+    // about something that has happened. Go straight out, and never freeze a fall to ask.
+    if (cache.phase === 'falling' || cache.phase === 'fallen') leaveClimb();
+    else openConfirm();
+  };
+  const onConfirmBackdrop = (e) => { if (e.target === confirmEl) closeConfirm(); };
+  const confirmStayEl = byId('confirmStay');
+  const confirmLeaveEl = byId('confirmLeave');
+  if (menuBtn) menuBtn.addEventListener('click', onMenuClick);
+  if (confirmEl) {
+    if (confirmStayEl) confirmStayEl.addEventListener('click', closeConfirm);
+    if (confirmLeaveEl) confirmLeaveEl.addEventListener('click', leaveClimb);
+    confirmEl.addEventListener('pointerdown', onConfirmBackdrop);
+  }
+  const onConfirmKey = (e) => {
+    if (!confirmEl || confirmEl.hidden) return;
+    if (e.key === 'Escape') { e.preventDefault(); closeConfirm(); }
+  };
+  window.addEventListener('keydown', onConfirmKey);
 
   // ---- sticks -----------------------------------------------------------------------------------
   function applyKnob(side) {
@@ -272,7 +362,7 @@ export function createHud(root) {
     const el = grips[side];
     const keep = el.classList.contains('miss') ? ' miss' : '';
     el.className = 'grip ' + st + keep + (keyHints ? ' keyed' : '');
-    el.textContent = PILL_LABEL[st] || 'Grip';
+    el.textContent = (keyHints ? PILL_LABEL_KEYED : PILL_LABEL)[st] || 'Grip';
     if (keyHints) {
       const k = doc.createElement('span');
       k.className = 'key';
@@ -448,7 +538,7 @@ export function createHud(root) {
   // The WEB pad belongs to the climb, so it goes away whenever a full-screen overlay is up: it
   // used to sit on top of the title's tap line in landscape and over the end screen's credits.
   function syncOverlayFlag() {
-    const up = titleShown || endShown || !!(customEl && !customEl.hidden);
+    const up = titleShown || endShown || !!(customEl && !customEl.hidden) || !!(confirmEl && !confirmEl.hidden);
     if (doc.body && doc.body.classList) doc.body.classList.toggle('overlay-up', up);
   }
 
@@ -495,6 +585,18 @@ export function createHud(root) {
     if (typeof cb === 'function') seedCbs.push(cb);
     return hud;
   }
+  // B42: the shared line under the pills. It describes the route you are on; pointing at or
+  // tabbing to another pill previews that one, so the sentence answers the question before the
+  // tap that reloads the page rather than after it.
+  let seedNow = null;
+  function setNote(seed) {
+    const el = byId('seed-note');
+    if (el) el.textContent = ROUTE_LINE[seed] || UNLISTED_LINE;
+  }
+  function previewNote(e) {
+    const b = e.target && e.target.closest ? e.target.closest('[data-seed]') : null;
+    if (b) setNote(+b.getAttribute('data-seed'));
+  }
   function renderSeeds(list, current) {
     const inner = titleEl.querySelector('.inner');
     let row = byId('seeds');
@@ -511,8 +613,13 @@ export function createHud(root) {
         if (!b) return;
         e.stopPropagation();
         const n = +b.getAttribute('data-seed');
+        setNote(n);
         for (const cb of seedCbs) { try { cb(n); } catch (err) { console.error(err); } }
       });
+      row.addEventListener('pointerover', previewNote);
+      row.addEventListener('focusin', previewNote);
+      row.addEventListener('pointerleave', () => setNote(seedNow));
+      row.addEventListener('focusout', () => setNote(seedNow));
       const tapEl = byId('tap');
       if (tapEl && tapEl.parentNode === inner) inner.insertBefore(row, tapEl);
       else inner.appendChild(row);
@@ -523,7 +630,10 @@ export function createHud(root) {
         (r.seed | 0) + '" title="' + escapeHtml(r.note || '') + '" aria-pressed="' + (r.seed === current) + '">' +
         escapeHtml(r.name) + '</button>').join('') +
       // an unlisted ?seed= is shown as it is, so you can always see which line you are on
-      (known ? '' : '<span class="seed on custom" aria-current="true">Seed ' + (current | 0) + '</span>');
+      (known ? '' : '<span class="seed on custom" data-seed="' + (current | 0) + '" aria-current="true">Seed ' + (current | 0) + '</span>') +
+      '<span class="note" id="seed-note"></span>';
+    seedNow = current;
+    setNote(current);
   }
 
   function isStartKey(e) {
@@ -556,12 +666,17 @@ export function createHud(root) {
     }
     return true;                      // a letter never doubles as "press any key to begin"
   }
+  let customTimer = 0;
   function codeFlash(already) {
     const sig = titleEl && titleEl.querySelector('.sigil');
     if (sig) { sig.classList.remove('code-hit'); void sig.offsetWidth; sig.classList.add('code-hit'); }
     message(already ? 'The web answers again' : 'The web answers', 2600, 'rune');
     refreshCustomBtn();
-    setTimeout(openCustom, 900);        // the reward is a choice, not a surprise
+    // The reward is a choice, not a surprise — and only on the title. Typing the code and tapping
+    // to begin inside the 900 ms used to drop the panel over a live climb, so the handle is kept,
+    // cleared when the title goes, and the deferred open checks the title is still up.
+    clearTimeout(customTimer);
+    customTimer = setTimeout(() => { customTimer = 0; if (titleShown) openCustom(); }, 900);
   }
 
   function onTitleKey(e) {
@@ -576,6 +691,29 @@ export function createHud(root) {
     e.stopPropagation();
     begin();
   }
+  // B40: showTitle is no longer only the boot call — it is also the way out of a climb — so it
+  // puts the shell back to the state it boots in first: no HUD, no end screen, no dead veil, and
+  // no timer left over from the abandoned run waiting to raise an end screen over the title.
+  function resetShell() {
+    clearTimeout(endTimer);
+    endTimer = 0;
+    clearTimeout(msgTimer);
+    clearTimeout(customTimer);
+    customTimer = 0;
+    msgEl.className = '';
+    msgText = '';
+    if (endShown) {
+      endShown = false;
+      endEl.classList.add('hide');
+      setTimeout(() => { if (!endShown) endEl.hidden = true; }, 950);
+    }
+    endEl.classList.remove('dead');
+    hudEl.classList.remove('dead', 'falling');
+    cache.phase = null;                    // so the next climb announces itself again
+    closeConfirm();
+    hideHud();
+  }
+
   function begin() {
     if (started) return;
     started = true;
@@ -586,6 +724,7 @@ export function createHud(root) {
   }
 
   function showTitle(opts = {}) {
+    resetShell();
     const touch = opts.touch != null ? !!opts.touch : (navigator.maxTouchPoints > 0);
     keyHints = touch ? null : { L: 'LMB', R: 'RMB' };
     pillState.L = pillState.R = '';           // force the pills to re-render with or without key hints
@@ -609,6 +748,8 @@ export function createHud(root) {
   }
   function hideTitle() {
     titleShown = false;
+    clearTimeout(customTimer);        // the code's deferred panel belongs to the title it was typed on
+    customTimer = 0;
     syncOverlayFlag();
     titleEl.removeEventListener('pointerdown', onTitlePointer);
     window.removeEventListener('keydown', onTitleKey, true);
@@ -659,6 +800,7 @@ export function createHud(root) {
       '<p><b>' + escapeHtml(c.what) + ':</b> ' + escapeHtml(c.text) + ' — ' + escapeHtml(c.license) +
       ' <a href="' + c.url + '" target="_blank" rel="noopener">' + escapeHtml(c.url.replace(/^https?:\/\//, '')) + '</a></p>').join('') +
       '<p style="margin-top:6px">Design and code: Rock Climber: The Ritual, 2026. Sound effects are synthesised live in WebAudio.</p>';
+    const btns = ensure('end-btns', 'div', inner, 'btns');
     let btn = byId('end-restart');
     if (!btn) {
       btn = doc.createElement('button');
@@ -666,8 +808,19 @@ export function createHud(root) {
       btn.className = 'btn';
       btn.type = 'button';
       btn.textContent = 'Climb again';
-      inner.appendChild(btn);
+      btns.appendChild(btn);
     }
+    // B40: and the other way out — no confirmation here, the climb is already over.
+    let menu = byId('end-menu');
+    if (!menu) {
+      menu = doc.createElement('button');
+      menu.id = 'end-menu';
+      menu.className = 'btn ghost';
+      menu.type = 'button';
+      menu.textContent = 'Menu';
+      btns.appendChild(menu);
+    }
+    menu.onclick = (e) => { e.preventDefault(); leaveClimb(); };
     btn.onclick = (e) => {
       e.preventDefault();
       if (restartCbs.length) {
@@ -743,6 +896,12 @@ export function createHud(root) {
     window.removeEventListener('orientationchange', onResize);
     window.removeEventListener('keydown', onGlobalKey);
     window.removeEventListener('keydown', onTitleKey, true);
+    window.removeEventListener('keydown', onConfirmKey);
+    if (menuBtn) menuBtn.removeEventListener('click', onMenuClick);
+    if (confirmStayEl) confirmStayEl.removeEventListener('click', closeConfirm);
+    if (confirmLeaveEl) confirmLeaveEl.removeEventListener('click', leaveClimb);
+    if (confirmEl) confirmEl.removeEventListener('pointerdown', onConfirmBackdrop);
+    clearTimeout(customTimer);
     titleEl.removeEventListener('pointerdown', onTitlePointer);
     muteBtn.removeEventListener('click', onMuteClick);
     muteBtn.removeEventListener('pointerdown', onMutePointer);
@@ -831,7 +990,7 @@ export function createHud(root) {
     openCustom, closeCustom, refreshCustomBtn,
     onSkinChange(cb) { if (typeof cb === 'function') skinCbs.push(cb); },
     root: hudEl,
-    elements: { hud: hudEl, title: titleEl, end: endEl, msg: msgEl, height: heightEl, runes: runesEl, falls: fallsEl, mute: muteBtn, vignette: vigEl },
+    elements: { hud: hudEl, title: titleEl, end: endEl, msg: msgEl, height: heightEl, runes: runesEl, falls: fallsEl, mute: muteBtn, menu: menuBtn, confirm: confirmEl, vignette: vigEl },
     update,
     setStick,
     message,
@@ -842,6 +1001,8 @@ export function createHud(root) {
     showEnd,
     hideEnd,
     onRestart,
+    onMenu,
+    onPause,
     onMute,
     setMuted,
     get muted() { return muted; },
