@@ -63,15 +63,23 @@ Event = { type, hand?: 'L'|'R', holdId?: number, ...extras }
   the rock: 'crumble' (+holdId of the decoy)
   the zip:  'aim' | 'webshot' | 'webhit' (+yank) | 'webmiss' | 'webcut'
 Anything reading events must ignore types it does not know: the list grows.
-Input = { L:{x,y}, R:{x,y}, tapL:boolean, tapR:boolean,
+Input = { L:{x,y,active}, R:{x,y,active}, tapL:boolean, tapR:boolean,
           look:{ x, y, active },                           // look: hold-to-look; sim ignores it, the camera rig consumes it
           holdL:boolean, holdR:boolean }                   // grip currently HELD; the spider hand aims on a held right grip (true for one frame)
+  // stick `active`: something is on that stick this frame — a finger, the mouse driving that hand, a movement key, or a
+  // recenter (Escape / a grip key, for one read). It is how the sim tells a stick nobody is touching from one reading
+  // zero (B45); an Input without the flag is read the old way, where only a non-zero vector steers.
+  // while the WEB pad is held it IS holdR, and `R` carries the pad's drag as the aim, overriding that stick and LOOK.
+  // The sim reads `R` for the aim AND for the free right hand, so aiming points the hand too, and it parks there (B48).
 ```
 Constants live in `sim.js` as `CFG`: REACH 0.72, SNAP 0.16, SHOULDER_DX 0.19, SHOULDER_DY 0.08, HANG_TWO 0.42, HANG_ONE 0.50,
-GRACE 0.25, FLOOR 0.75, FALL_TERMINAL 26, drain two-hand 0.05/s, one-hand 0.20/s, refill free 0.18/s, rune refill 0.50/s, forced release at 0.
+GRACE 0.25, FLOOR 0.75, FALL_TERMINAL 26, drain per gripping hand 0.022/s with two hands on, 0.085/s with one, both times the hold's own multiplier (jug 0.65 to crimp 1.85), refill free 0.30/s, rune refill 0.50/s, forced release at 0.
 
-Behavior (kinematic with physical feel): free hands spring-damp toward `shoulder + stick × REACH` (stick released → drift back to
-a rest offset), body spring-damps to the mean of gripped holds minus HANG, sways toward the loaded arm on one-hand hangs, releases
+Behavior (kinematic with physical feel): free hands spring-damp toward `shoulder + stick × REACH`, and letting go of the stick
+leaves the hand there — the target is kept as an offset from the shoulder, so a parked hand rides along when the body moves, and it
+holds until the stick is pushed again or the hand takes rock (B45). A hand that has not been steered since it last held rock hangs at
+a rest offset instead: at the start of a climb, and after every release, since taking a hold clears where the hand was parked.
+Body spring-damps to the mean of gripped holds minus HANG, sways toward the loaded arm on one-hand hangs, releases
 of both hands begin a fall that nothing stops (B43): a quarter-second GRACE window in which a hand can still find rock, then the
 whole cliff at terminal velocity to `phase 'fallen'` and the death screen. Letting go with your feet still on the ground
 (`_fall.from ≤ FLOOR + HANG_TWO`) is not a fall: you stay standing, in `phase 'grounded'`, and can take the rock again. Stamina drains and
@@ -91,7 +99,7 @@ export function shoulder(state, side) → { x, y }
 export function aimPoint(state) → { x, y } | null     // where the web shot would land; the camera rig and the HUD reticle both read it
 export function cutWeb(state)                        // drop the line from outside the sim
 export function generateRoute(seed) also returns `fakes`; SEEDS / DEFAULT_SEED / normalizeSeed(v) back the route picker
-export function createInput({ hud, keyboard = true, win, now, mouse, getHands }) → { read(): Input, dispose() }   // input.js — touch/mouse on hud.sticks + hud.grips + hud.lookButton + hud.webButton (pointer events), keyboard WASD+Q / arrows+Enter or Slash; sticks: position mapping; keyboard: integrating virtual stick that holds its value; taps are edge-triggered. `win` and `now` are injected so the tests can drive it headless
+export function createInput({ hud, keyboard = true, win, now, mouse, getHands }) → { read(): Input, dispose() }   // input.js — touch/mouse on hud.sticks + hud.grips + hud.lookButton + hud.webButton (pointer events), keyboard WASD+Q / arrows+Enter or Slash; sticks: position mapping, zero and `active` false the moment the finger lifts; keyboard: integrating virtual stick that holds its value, `active` only while a key is down; the WEB pad's drag replaces `R` while it is held; taps are edge-triggered. `win` and `now` are injected so the tests can drive it headless
 
 // world-light
 export async function createWorld({ renderer, scene, route, tier }) → world             // world.js — loads textures + HDRI itself (paths below)
