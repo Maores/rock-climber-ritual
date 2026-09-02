@@ -202,6 +202,8 @@ export async function createWorld({ renderer, scene, route, tier }) → world   
 world.wallZ(x, y) → number; world.holdZ(hold) → number
 world.update(dt, state, camera, events)               // holds glow when hovered/lit, decoys fall, particles, time-of-day from state.night. `events` fires the decoy dust on 'crumble', so it lands the frame the hand comes off
 world.setTier(tier)
+world.holds → THREE.Group of InstancedMesh; world.holdMeshes → that list        // B52: plain holds are instances of 12 unit-scale prototype blobs, not one deformed mesh each, so the cost of the rock does not grow with the number of holds. `world.holds` used to be the single merged Mesh; nothing outside world.js reads it. Runes, the summit and the decoys keep a mesh of their own; `world.chalk` and the contact skirts are still one merged mesh each
+
 export function createPost({ renderer, scene, camera, tier }) → post                      // post.js — EffectComposer: RenderPass → UnrealBloom → vignette/grain ShaderPass → OutputPass
 post.render(dt); post.resize(w, h); post.setNight(t01); post.setTier(tier)
 
