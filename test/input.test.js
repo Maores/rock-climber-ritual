@@ -40,6 +40,8 @@ function rig({ keyboard = true, look = false, hands = null, title = false } = {}
   clock.advance = (ms) => { let r; for (let done = 0; done < ms; done += 20) { t += 20; r = input.read(); } return r; };
   return { hud, win, canvas, clock, input, calls };
 }
+// The idle web gesture: no thumb on the pad, aiming straight up, no tap.
+const WEB0 = { x: 0, y: 1, active: false, tap: false, cancel: false };
 const near = (a, b, tol = 1e-9) => assert.ok(Math.abs(a - b) <= tol, `expected ${b}, got ${a}`);
 const pt = (el, fx, fy, pointerId = 1) => {
   const r = el.rect;
@@ -48,7 +50,7 @@ const pt = (el, fx, fy, pointerId = 1) => {
 
 test('input: idle read is all zeros with no taps, and feeds the HUD knobs', () => {
   const { input, calls } = rig();
-  assert.deepEqual(input.read(), { L: { x: 0, y: 0, active: false }, R: { x: 0, y: 0, active: false }, tapL: false, tapR: false, look: { x: 0, y: 0, active: false, homing: false, down: 85 }, holdL: false, holdR: false });
+  assert.deepEqual(input.read(), { L: { x: 0, y: 0, active: false }, R: { x: 0, y: 0, active: false, web: WEB0 }, tapL: false, tapR: false, look: { x: 0, y: 0, active: false, homing: false, down: 85 }, holdL: false, holdR: false, web: WEB0 });
   assert.deepEqual(calls, [['L', 0, 0], ['R', 0, 0]]);
 });
 
@@ -60,7 +62,7 @@ test('input: touch sticks map pointer position to the unit disc with y up, and d
   assert.equal(el.captured, 1);
   let r = input.read();
   near(r.L.x, 0.5); near(r.L.y, 0.5);
-  assert.deepEqual(r.R, { x: 0, y: 0, active: false });
+  assert.deepEqual(r.R, { x: 0, y: 0, active: false, web: WEB0 });
   el.fire('pointermove', pt(el, 2, 2));                          // far outside the ring → clamped
   r = input.read();
   near(Math.hypot(r.L.x, r.L.y), 1);
@@ -88,7 +90,7 @@ test('input: one pointer per stick; other pointers and other ids are ignored', (
   near(r.R.y, 1);
   el.fire('pointercancel', pt(el, 0, 0, 7));
   r = input.read();
-  assert.deepEqual(r.R, { x: 0, y: 0, active: false });
+  assert.deepEqual(r.R, { x: 0, y: 0, active: false, web: WEB0 });
 });
 
 test('input: grip taps are edge-triggered — one tap per read no matter how many pointerdowns', () => {
@@ -158,7 +160,7 @@ test('input: Q, Enter and Slash toggle grips and recenter that stick; Escape rec
   win.fire('keydown', { code: 'Enter', key: 'Enter' });
   r = input.read();
   assert.equal(r.tapR, true);
-  assert.deepEqual(r.R, { x: 0, y: 0, active: true });
+  assert.deepEqual(r.R, { x: 0, y: 0, active: true, web: WEB0 });
   win.fire('keydown', { code: 'Slash', key: '/' });
   assert.equal(input.read().tapR, true);
   win.fire('keydown', { code: 'Enter', key: 'Enter', repeat: true });      // held Enter does not re-tap
@@ -173,7 +175,7 @@ test('input: Q, Enter and Slash toggle grips and recenter that stick; Escape rec
   win.fire('keydown', { code: 'Escape', key: 'Escape' });
   r = input.read();
   assert.deepEqual(r.L, { x: 0, y: 0, active: true });
-  assert.deepEqual(r.R, { x: 0, y: 0, active: true });
+  assert.deepEqual(r.R, { x: 0, y: 0, active: true, web: WEB0 });
   assert.deepEqual(input.read().L, { x: 0, y: 0, active: false });   // the recenter lasts exactly one read
 });
 
@@ -217,7 +219,7 @@ test('input: long-press menus are suppressed on sticks and grips; losing pointer
   el.fire('lostpointercapture', { pointerId: 9 });                // someone else's pointer: ignored
   near(input.read().R.y, 1);
   el.fire('lostpointercapture', { pointerId: 4 });
-  assert.deepEqual(input.read().R, { x: 0, y: 0, active: false });
+  assert.deepEqual(input.read().R, { x: 0, y: 0, active: false, web: WEB0 });
 });
 
 // ---- looking around: a drag on the play surface (B47) --------------------------------------
@@ -368,7 +370,7 @@ test('look: a mouse look never drags the hand, and the hand keeps its target whe
   view.fire('pointermove', { pointerType: 'mouse', pointerId: 9, button: 1, clientX: 700, clientY: 300 });
   r = input.read();
   assert.ok(r.look.x > 0, 'the head turned');
-  assert.deepEqual(r.R, { x: 0, y: 0, active: false }, 'the hand parks where it was, and is not steered');
+  assert.deepEqual(r.R, { x: 0, y: 0, active: false, web: WEB0 }, 'the hand parks where it was, and is not steered');
   view.fire('pointerup', { pointerType: 'mouse', pointerId: 9, button: 1, clientX: 700, clientY: 300 });
   r = input.read();
   near(r.R.x, parked.x); near(r.R.y, parked.y);          // ...and does not jump when the drag ends
@@ -414,7 +416,7 @@ test('look: Shift and a stick still turn the head, and the hand stays where it i
   assert.equal(r.look.active, true);
   const turned = r.look.x;
   assert.ok(turned > 30 && turned < 42, `0.42 arcs/s over half a second of a 180 deg arc: ${turned}`);
-  assert.deepEqual(r.R, { x: 0, y: 0, active: false });  // the hand is not steered; it parks (B45)
+  assert.deepEqual(r.R, { x: 0, y: 0, active: false, web: WEB0 });  // the hand is not steered; it parks (B45)
   win.fire('keyup', { key: 'Shift' });
   const after = clock.advance(500);
   near(after.look.x, turned, 1e-9);                      // and the view stays where Shift left it
@@ -437,7 +439,7 @@ test('input: keyboard can be disabled, hud can be missing, dispose removes every
   assert.equal(b.win.count(), 0);
 
   const bare = createInput({ hud: null, keyboard: true, win: null });
-  assert.deepEqual(bare.read(), { L: { x: 0, y: 0, active: false }, R: { x: 0, y: 0, active: false }, tapL: false, tapR: false, look: { x: 0, y: 0, active: false, homing: false, down: 85 }, holdL: false, holdR: false });
+  assert.deepEqual(bare.read(), { L: { x: 0, y: 0, active: false }, R: { x: 0, y: 0, active: false, web: WEB0 }, tapL: false, tapR: false, look: { x: 0, y: 0, active: false, homing: false, down: 85 }, holdL: false, holdR: false, web: WEB0 });
   bare.dispose();
 });
 
@@ -470,36 +472,70 @@ test('input: active tells a stick nobody is touching from a stick reading zero (
   assert.equal(r.R.active, false, 'no key down: a held value is a parked hand, not a live steer');
 });
 
-test('input: the WEB pad is the right grip and its drag is the aim that reaches the sim (B48)', () => {
+test('input: the WEB pad is the right grip, and its drag is the aim — in its own field (B48, B50)', () => {
   const knob = { L: null, R: null };
   const hud = {
     sticks: { L: ring(20, 600), R: ring(250, 600) }, grips: {},
     webButton: ring(250, 400, 60),
     setStick(side, x, y) { knob[side] = { x, y }; },
   };
-  const input = createInput({ hud, keyboard: false, win: new FakeEl({}), now: () => 0 });
+  let t = 0;
+  const input = createInput({ hud, keyboard: false, win: new FakeEl({}), now: () => t });
   const b = hud.webButton;
   const cx = 280, cy = 430;                                        // the pad's centre; PAD_RADIUS is 84 px
   assert.equal(input.read().holdR, false);
   b.fire('pointerdown', { pointerId: 5, clientX: cx, clientY: cy });
   let r = input.read();
-  assert.equal(r.holdR, true, 'holding the pad IS the held right grip the sim aims on');
-  assert.deepEqual(r.R, { x: 0, y: 1, active: true }, 'a fresh pad aims straight up');
+  // A press does not become an aim the instant it lands: until it commits it is still a possible
+  // tap, so it is not holdR and the sim never aims on it.
+  assert.equal(r.holdR, false, 'an uncommitted press is not yet the held right grip');
+  assert.deepEqual(r.web, { x: 0, y: 1, active: false, tap: false, cancel: false }, 'a fresh pad is not aiming yet');
+  assert.equal(r.R.web, r.web, 'the gesture also rides on R, where a field-copying integrator cannot drop it');
   b.fire('pointermove', { pointerId: 5, clientX: cx + 84, clientY: cy - 84 });   // drag up and right
   r = input.read();
-  near(r.R.x, Math.SQRT1_2); near(r.R.y, Math.SQRT1_2);
-  assert.equal(r.R.active, true, 'the aim steers the hand too, the way the desktop cursor does');
+  assert.equal(r.holdR, true, 'a drag past the dead radius commits the press to an aim at once');
+  assert.equal(r.web.active, true);
+  near(r.web.x, Math.SQRT1_2); near(r.web.y, Math.SQRT1_2);
+  // B50 reverses B48's second half: the aim is NOT the hand's steering. One field cannot mean
+  // both, and when it did, the right stick went dead for as long as a thumb was on the pad.
+  assert.equal(r.R.x, 0); assert.equal(r.R.y, 0); assert.equal(r.R.active, false);   // the pad does not touch the right stick
   assert.deepEqual(knob.R, { x: 0, y: 0 }, 'the HUD knob still shows the stick, which nobody is touching');
-  // A finger on the right stick does not outvote the pad while it is held.
+  // ...so a finger on the right stick still steers the right hand while the other thumb aims.
   const st = hud.sticks.R;
   st.fire('pointerdown', pt(st, -1, 0, 6));
   r = input.read();
-  near(r.R.x, Math.SQRT1_2); near(r.R.y, Math.SQRT1_2);
+  near(r.R.x, -1); near(r.R.y, 0);
+  assert.equal(r.R.active, true, 'the right stick still reaches the hand while the pad is held');
+  near(r.web.x, Math.SQRT1_2); near(r.web.y, Math.SQRT1_2);        // and the aim is untouched by it
   st.fire('pointerup', pt(st, -1, 0, 6));
   b.fire('pointerup', { pointerId: 5 });                           // letting go looses the shot
   r = input.read();
   assert.equal(r.holdR, false);
-  assert.deepEqual(r.R, { x: 0, y: 0, active: false }, 'and the hand parks where the aim left it (B45)');
+  assert.equal(r.web.active, false);
+  input.dispose();
+});
+
+test('input: a quick press-and-lift on the pad is a webTap; a long hold is not (B50)', () => {
+  const hud = { sticks: { L: ring(20, 600), R: ring(250, 600) }, grips: {}, webButton: ring(250, 400, 60) };
+  let t = 0;
+  const input = createInput({ hud, keyboard: false, win: new FakeEl({}), now: () => t });
+  const b = hud.webButton;
+  // A tap: down and up inside 250 ms. This is what lets go of an attached line.
+  b.fire('pointerdown', { pointerId: 5, clientX: 280, clientY: 430 });
+  t += 90;
+  b.fire('pointerup', { pointerId: 5 });
+  assert.equal(input.read().web.tap, true, 'a quick tap is the release gesture');
+  assert.equal(input.read().web.tap, false, 'and it is an edge: true for exactly one read');
+  // A hold is the aim gesture, not a tap — a thumb resting on the pad must not sever the line.
+  b.fire('pointerdown', { pointerId: 6, clientX: 280, clientY: 430 });
+  t += 900;
+  b.fire('pointerup', { pointerId: 6 });
+  assert.equal(input.read().web.tap, false, 'a long hold is an aim, never a release');
+  // A cancelled pointer is not a tap either.
+  b.fire('pointerdown', { pointerId: 7, clientX: 280, clientY: 430 });
+  t += 50;
+  b.fire('pointercancel', { pointerId: 7 });
+  assert.equal(input.read().web.tap, false, 'a stolen pointer is not a gesture');
   input.dispose();
 });
 
@@ -524,7 +560,7 @@ test('input: the mouse is always steering the hand it drives, and a look drag ta
   r = input.read();
   assert.equal(r.look.active, true);
   assert.ok(r.look.x > 0, 'dragging right turns the head right');
-  assert.deepEqual(r.R, { x: 0, y: 0, active: false }, 'the hand parks; nothing tows it');
+  assert.deepEqual(r.R, { x: 0, y: 0, active: false, web: WEB0 }, 'the hand parks; nothing tows it');
   view.fire('pointerup', { pointerType: 'touch', pointerId: 3, clientX: 400, clientY: 400 });
   r = input.read();
   assert.equal(r.R.active, true, 'the cursor drives the hand again');

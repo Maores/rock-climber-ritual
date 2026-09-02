@@ -56,12 +56,17 @@ Hand  = { side:'L'|'R', x, y, vx, vy, tx, ty, gripping, holdId|null, armed, stam
 Hold  = { id, x, y, size (0.10..0.24 radius), kind: 'hold'|'rune'|'summit', lit:boolean, angle }
 Fake  = a Hold with ids from 10000 up and `broken` set once it has given way. Never on the line, never the only way up.
 Web   = { mode: 'idle'|'aiming'|'flying'|'attached', ax, ay,   // anchor the line bit
-          tipX, tipY, len, cd, aimX, aimY, unlocked }          // cd = cooldown left, 3 s after a shot
+          tipX, tipY, len, cd, aimX, aimY, unlocked,           // cd = cooldown left, 3 s after a shot
+          grounded, walled }                                   // while swinging: the floor / the edge of the cliff is
+                                                               // holding the body off the circle this frame
 Event = { type, hand?: 'L'|'R', holdId?: number, ...extras }
   climbing: 'start' | 'grab' | 'release' | 'miss' | 'arm' | 'slip' | 'rune' | 'summit'
   the drop: 'fall' | 'impact' | 'fallen'      — no 'catch': nothing catches a fall (B43)
   the rock: 'crumble' (+holdId of the decoy)
   the zip:  'aim' | 'webshot' | 'webhit' (+yank) | 'webmiss' | 'webcut'
+            // 'aim' the moment aiming starts (the pad: first frame; the right grip: after WEB_AIM_HOLD); 'webshot' on the
+            // release that looses it; 'webmiss' if the anchor is inside WEB_MIN (0.35 s cooldown, no line); 'webhit' when it
+            // bites — BOTH hands let go then, and only then; 'webcut' on the tap that lets go, and on a hold caught mid-swing.
 Anything reading events must ignore types it does not know: the list grows.
 Input = { L:{x,y,active}, R:{x,y,active}, tapL:boolean, tapR:boolean,
           look:{ x, y, active, homing, down },             // the head, in DEGREES of yaw and pitch (B47), already clamped to how far you can
@@ -77,12 +82,29 @@ Input = { L:{x,y,active}, R:{x,y,active}, tapL:boolean, tapR:boolean,
                                                            // `active` = a look gesture is in progress; it does NOT gate whether looking is
                                                            // allowed. `down` is the live arc's downward limit, for the vertigo lens.
                                                            // The sim ignores all of it; the camera rig consumes it
-          holdL:boolean, holdR:boolean }                   // grip currently HELD; the spider hand aims on a held right grip (true for one frame)
+          holdL:boolean, holdR:boolean,                    // grip currently HELD; the web-zip aims on a held right grip
+          web:{ x, y, active, tap, cancel } }              // the web-zip gesture — see below
   // stick `active`: something is on that stick this frame — a finger, the mouse driving that hand, a movement key, or a
   // recenter (Escape / a grip key, for one read). It is how the sim tells a stick nobody is touching from one reading
   // zero (B45); an Input without the flag is read the old way, where only a non-zero vector steers.
-  // while the WEB pad is held it IS holdR, and `R` carries the pad's drag as the aim, overriding that stick and LOOK.
-  // The sim reads `R` for the aim AND for the free right hand, so aiming points the hand too, and it parks there (B48).
+  //
+  // `web` (B50) is the whole web-zip gesture, from the WEB pad or the desktop right button:
+  //   x, y   — the aim vector. Its OWN vector, never `R.x/R.y`: the sim reads `R` to steer the right HAND, so while the
+  //            aim shared that field the right stick was dead for as long as a thumb was on the pad, the hand could never
+  //            park, and it did not in fact point at the anchor (`_stick` is a shoulder-relative offset that rotates with
+  //            the body: measured 38–60° off through a swing). The pad aims; the stick still moves the hand.
+  //   active — the press has COMMITTED to being an aim: HELD past 250 ms, or DRAGGED past 0.15 of the pad radius. Only a
+  //            committed press is holdR, so a brush of the pad neither aims nor fires. WEB_AIM_HOLD still governs the
+  //            desktop right button, which shares its button with the grip; the pad disambiguates by commitment instead.
+  //   tap    — press and lift inside 250 ms with NO drag. This is the only thing that lets go of an ATTACHED line.
+  //   cancel — the browser took the pointer mid-aim. Not a release: the sim puts the aim away and charges no cooldown.
+  // `tap` and `cancel` are EDGES that the SIM consumes on first read. One input read feeds every fixed sub-step of a
+  // rendered frame, so a flag left standing is seen again on the next sub-step; a tap that outlived the bite cut the line
+  // one step after it attached. Consuming them in the sim, not the integrator, is deliberate: it must not depend on
+  // main.js's tap plumbing, which is going away with the GRIP buttons.
+  // While the pad is held it IS holdR. `web` is handed out twice — as `Input.web` and as `Input.R.web`, the SAME object —
+  // because an integrator that forwards the Input field by field drops new top-level fields on the floor, which is exactly
+  // how B48 happened. `R` is the right hand's own control group and is forwarded by reference, so the gesture arrives.
 ```
 Constants live in `sim.js` as `CFG`: REACH 0.72, SNAP 0.16, SHOULDER_DX 0.19, SHOULDER_DY 0.08, HANG_TWO 0.42, HANG_ONE 0.50,
 GRACE 0.25, FLOOR 0.75, FALL_TERMINAL 26, drain per gripping hand 0.022/s with two hands on, 0.085/s with one, both times the hold's own multiplier (jug 0.65 to crimp 1.85), refill free 0.30/s, rune refill 0.50/s, forced release at 0.
@@ -98,6 +120,20 @@ whole cliff at terminal velocity to `phase 'fallen'` and the death screen. Letti
 refills as above, GRIP is a tap toggle with arming (tap away from a hold → armed → grabs the next hold within SNAP), rune holds are
 rest holds and checkpoints, grabbing the summit hold → `phase 'summit'`.
 
+**The web-zip's gesture (B50).** One rule, and the same one on both devices: **hold to aim, let go to fire, tap to let go
+of the line.** Hold the WEB pad (or the right mouse button) and drag to aim — the reticle follows, and *you may do this with
+both hands on the rock*: aiming never releases a hand, because losing one costs the whole cliff (B43). Lift to fire. The
+line flies, bites, and **both hands come off at that moment and not before**; you then swing with **nothing held at all** —
+the left stick pumps and reels, the right stick still steers the right hand toward rock. A **tap** on the pad, or a right
+click, lets go and throws you with the speed you had. Nothing about the swing is a dead-man's switch: the thumb that fired
+the shot is already off the pad, so "the pad is no longer held" cannot mean "cut the line" — it used to, and it severed the
+line one step after it attached, turning every shot on a phone into a fall. A press-and-hold on the pad while attached is
+NOT a release, so a thumb resting there is harmless. Nor is a GRIP tap: reaching for rock with the right hand while
+swinging is a grab, and it reaches the hand — it neither cuts the line nor is swallowed. A **brush** of the pad — pressed
+and lifted inside the tap window without a drag — does nothing at all: it used to fire an unaimed shot straight up, which
+always bit and took both hands off the wall, so with no rope a stray touch killed you. While swinging the body is clamped to `|x| ≤ SWING_MAX_X` (4.2, the
+same clamp the anchor gets): a long line pumped sideways used to carry the climber to x = 7.40, off a cliff 9 m wide.
+
 ## Interfaces
 ```js
 // sim-input
@@ -111,7 +147,7 @@ export function shoulder(state, side) → { x, y }
 export function aimPoint(state) → { x, y } | null     // where the web shot would land; the camera rig and the HUD reticle both read it
 export function cutWeb(state)                        // drop the line from outside the sim
 export function generateRoute(seed) also returns `fakes`; SEEDS / DEFAULT_SEED / normalizeSeed(v) back the route picker
-export function createInput({ hud, keyboard = true, win, now, mouse, getHands, surface = mouse }) → { read(): Input, dispose() }   // input.js — touch/mouse on hud.sticks + hud.grips + hud.webButton (pointer events), and the LOOK DRAG on `surface`, the canvas: a pointer that reaches it was not on a control, which is how the gesture stays out of the sticks (hit region, not z-index). Keyboard WASD+Q / arrows+Enter or Slash, Shift + a stick turns the head; sticks: position mapping, zero and `active` false the moment the finger lifts; keyboard: integrating virtual stick that holds its value, `active` only while a key is down; the WEB pad's drag replaces `R` while it is held; taps are edge-triggered. `win` and `now` are injected so the tests can drive it headless
+export function createInput({ hud, keyboard = true, win, now, mouse, getHands, surface = mouse }) → { read(): Input, dispose() }   // input.js — touch/mouse on hud.sticks + hud.grips + hud.webButton (pointer events), and the LOOK DRAG on `surface`, the canvas: a pointer that reaches it was not on a control, which is how the gesture stays out of the sticks (hit region, not z-index). Keyboard WASD+Q / arrows+Enter or Slash, Shift + a stick turns the head; sticks: position mapping, zero and `active` false the moment the finger lifts; keyboard: integrating virtual stick that holds its value, `active` only while a key is down; the WEB pad fills `web` (and `R.web`) and leaves `R` to the right stick, and a press there becomes an aim only once it commits (held past 250 ms, or dragged past 0.15 of the pad radius) so a brush does nothing; taps are edge-triggered. `win` and `now` are injected so the tests can drive it headless
 
 // world-light
 export async function createWorld({ renderer, scene, route, tier }) → world             // world.js — loads textures + HDRI itself (paths below)

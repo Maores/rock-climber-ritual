@@ -71,6 +71,9 @@ export const CFG = Object.freeze({
   WEB_YANK: 3.4,        // m/s kick along the line the instant it goes taut
   WEB_YANK_REEL: 0.35,  // ...and this much of the line taken up with it
   SWING_RELEASE_BOOST: 1.22,   // letting go throws you: a timed release is the point
+  SWING_MAX_X: 4.2,     // the cliff is 9 m wide; a pendulum on a 6.5 m line can leave it entirely
+                        // (measured: x = 7.40, 2.9 m past the edge). Anchors are clamped here too,
+                        // so the body can never swing further out than the furthest anchor.
 });
 
 const ZERO_STICK = Object.freeze({ x: 0, y: 0 });
@@ -106,7 +109,9 @@ export function createClimber(route) {
     hands: { L: makeHand('L', h0), R: makeHand('R', h1) },
     height: 0, maxHeight: 0,
     // The web-zip. `mode` is idle → aiming → flying → attached; `cd` is the cooldown left.
-    web: { mode: 'idle', ax: 0, ay: 0, tipX: 0, tipY: 0, len: 0, cd: 0, aimX: 0, aimY: 1, unlocked: false },
+    // `grounded` / `walled`: while swinging, the floor or the edge of the cliff is holding the
+    // body somewhere the line's circle does not pass through, so it is off the line this frame.
+    web: { mode: 'idle', ax: 0, ay: 0, tipX: 0, tipY: 0, len: 0, cd: 0, aimX: 0, aimY: 1, unlocked: false, grounded: false, walled: false },
     runesLit: [], checkpoint: null, night: 0,
     route, events: [],
     _fall: { t: 0, from: 0 },
@@ -181,10 +186,10 @@ export function step(state, input, dt) {
   const live = state.phase === 'climbing' || state.phase === 'falling' || state.phase === 'swinging' ||
     state.phase === 'grounded';
 
-  const webTap = updateWeb(state, inp, dt);      // may swallow the right tap as a shot
+  const webAteTap = updateWeb(state, inp, dt);   // may swallow the right tap as an aim / a cut
   if (live) {
     if (inp.tapL) tap(state, state.hands.L);
-    if (inp.tapR && !webTap) tap(state, state.hands.R);
+    if (inp.tapR && !webAteTap) tap(state, state.hands.R);
     updateStamina(state, dt);
   }
   updateBody(state, dt, inp);
@@ -200,7 +205,26 @@ export function step(state, input, dt) {
 // ---------------------------------------------------------------------------------------
 // The web-zip. Only the unlocked spider hand can shoot, and only the right hand.
 //
-//   idle → (hold the right grip past WEB_AIM_HOLD) aiming → (let go) flying → attached
+//   idle → (hold the right grip / the WEB pad) aiming → (let go) flying → attached
+//        → (tap the pad, or click the right button) idle, thrown
+//
+// The gesture, and why each step is an EDGE and not a held state (B50):
+//   • Aiming does not need a free hand. You can shoot with both hands on the rock, and only
+//     let go when the line actually bites — losing a hand costs the whole cliff now (B43), so
+//     the ability must not charge you one just to look at where you might shoot.
+//   • The aim vector comes from `inp.web` when the WEB pad is supplying one, and from the right
+//     stick / the cursor otherwise. It is NOT the hand's steering: the pad aims, the stick still
+//     moves the hand, and the two no longer fight over one field.
+//   • WEB_AIM_HOLD tells a click of the shared right grip (a grab) from a hold (an aim), and it
+//     still governs the desktop right button. The pad does not use it: input.js decides there,
+//     by only reporting `web.active` once the press has COMMITTED to being an aim — held past
+//     its tap window, or dragged past a dead radius. A brush of the pad therefore aims nothing
+//     and fires nothing. It used to fire an unaimed shot straight up, which always bit and took
+//     both hands off the wall: with no rope (B43), a death from a stray touch.
+//   • Letting go FIRES. That is why cutting an attached line cannot also be "let go": the thumb
+//     that fired is already off the pad, so the old `!holding` rule severed the line one step
+//     after it bit and dropped you down the cliff. Cutting is its own tap — and only ever a
+//     completed one, on a line that was already out before this step began.
 //
 // While attached the body is a pendulum on a rigid line: gravity acts, then the position is
 // projected back onto the circle around the anchor and the radial part of the velocity is
@@ -211,19 +235,48 @@ function updateWeb(state, inp, dt) {
   if (w.cd > 0) w.cd = Math.max(0, w.cd - dt);
   if (!w.unlocked) return false;
 
-  const hand = state.hands.R;
   const holding = !!inp.holdR;
   // Mid-fall is exactly when you want to shoot: the line is the only thing left that can stop you.
   const canShoot = state.phase === 'climbing' || state.phase === 'falling' || state.phase === 'swinging';
 
-  // Aim vector: whatever the right stick is pushing, defaulting to straight up.
-  const ax = (inp.R && +inp.R.x) || 0, ay = (inp.R && +inp.R.y) || 0;
+  // The WEB pad's gesture. input.js hands the same object out as `web` and as `R.web`; the second
+  // is the one that survives an integrator which forwards the Input field by field (B48's bug).
+  const g = inp.web || (inp.R && inp.R.web) || null;
+  const onPad = !!(g && g.active);            // the pad is committed to an aim: its drag is the vector
+
+  // `tap` and `cancel` are EDGES, and the sim consumes them the first time it reads them. One
+  // input read feeds every fixed sub-step of a rendered frame, so a flag left standing is read
+  // again on the next sub-step — and a tap that outlived the bite would cut the line one step
+  // after it attached, which is the exact failure this whole gesture exists to end. Clearing it
+  // here rather than in main.js is deliberate: the integrator's tap plumbing is on its way out
+  // with the GRIP buttons, and this must not depend on it.
+  let tapped = false, cancelled = false;
+  if (g) {
+    tapped = !!g.tap; cancelled = !!g.cancel;
+    if (tapped) g.tap = false;
+    if (cancelled) g.cancel = false;
+  }
+  // Only a line that was ALREADY out when this step began may be cut: never a shot still in the
+  // air, and never the bite that happens during this very step.
+  const wasAttached = w.mode === 'attached';
+
+  // Aim vector: the pad's drag while it is committed, else whatever the right stick or the cursor
+  // is pushing, defaulting to straight up. Keeping the pad's aim out of `inp.R` is what lets the
+  // right stick go on steering the right hand while the other thumb aims.
+  const src = onPad ? g : inp.R;
+  const ax = (src && +src.x) || 0, ay = (src && +src.y) || 0;
   if (Math.hypot(ax, ay) > 0.08) { w.aimX = ax; w.aimY = ay; }
 
+  // A stolen pointer is not a release, so it must not loose the shot: put the aim away and charge
+  // nothing for it. Without this, a system gesture or an incoming call fired an unaimed shot.
+  if (cancelled && (w.mode === 'aiming' || w.mode === 'idle')) { w.mode = 'idle'; w._hold = 0; return true; }
+
   if (w.mode === 'idle') {
-    if (holding && !hand.gripping && w.cd <= 0 && canShoot) {
+    // A hand still on the rock may aim: you only let go when the line bites (see fire/'flying').
+    if (holding && w.cd <= 0 && canShoot) {
       w._hold = (w._hold || 0) + dt;
-      if (w._hold >= CFG.WEB_AIM_HOLD) { w.mode = 'aiming'; w._hold = 0; push(state, { type: 'aim' }); }
+      // The pad only ever means "web", so it needs no hold to prove it: no press is too short.
+      if (w._hold >= (onPad ? 0 : CFG.WEB_AIM_HOLD)) { w.mode = 'aiming'; w._hold = 0; push(state, { type: 'aim' }); }
     } else w._hold = 0;
     return false;
   }
@@ -256,12 +309,22 @@ function updateWeb(state, inp, dt) {
       w.tipX += (dx / d) * stepLen;
       w.tipY += (dy / d) * stepLen;
     }
-    return !!inp.tapR;
+    // A tap cannot cut a shot that is still in the air, and a GRIP tap during the flight is a
+    // real grab attempt: let it reach the hand.
+    return false;
   }
 
   if (w.mode === 'attached') {
-    if (inp.tapR || !holding) { cutWeb(state); return true; }
-    return true;
+    // Only one gesture lets go: a completed tap on the WEB pad, or a completed right CLICK.
+    // NOT `!holding` — the thumb lifted to fire this very shot, so that rule cut the line one
+    // step after it attached and turned every phone shot into a fall (B50). Nothing needs to be
+    // held to keep swinging; the pad is free for the tap and the sticks are free to climb with.
+    //
+    // And NOT `tapR`: a GRIP tap is a grab, not a release. On a phone, tapping GRIP-R mid-swing
+    // cut the line AND was swallowed, so the hand never armed; on a desktop `tapR` fires on
+    // pointerDOWN, so the line went the instant the button touched rather than on the click.
+    if (tapped && wasAttached) { cutWeb(state); return true; }
+    return false;                              // a GRIP tap mid-swing is a grab: let it through
   }
   return false;
 }
@@ -275,7 +338,7 @@ export function aimPoint(state) {
   const ax0 = m < 1e-4 ? 0 : w.aimX / m;
   const ay0 = m < 1e-4 ? 1 : w.aimY / m;
   return {
-    x: Math.max(-4.2, Math.min(4.2, sh.x + ax0 * CFG.WEB_RANGE)),
+    x: Math.max(-CFG.SWING_MAX_X, Math.min(CFG.SWING_MAX_X, sh.x + ax0 * CFG.WEB_RANGE)),
     y: Math.max(CFG.FLOOR + 0.4, Math.min(state.route.top + 1.4, sh.y + ay0 * CFG.WEB_RANGE)),
     from: sh,
   };
@@ -354,6 +417,15 @@ function updateSwing(state, inp, dt) {
     b.y = CFG.FLOOR;
     if (b.vy < 0) b.vy = 0;
     w.grounded = true;
+  }
+  // ...and so are the sides of the cliff. A long line pumped sideways carried the body to
+  // x = 7.40, well past the 9 m rock face and out over nothing. `walled` reads like `grounded`:
+  // the body is off the circle this frame because something solid is holding it.
+  w.walled = false;
+  if (b.x < -CFG.SWING_MAX_X || b.x > CFG.SWING_MAX_X) {
+    b.x = b.x < 0 ? -CFG.SWING_MAX_X : CFG.SWING_MAX_X;
+    if (b.x * b.vx > 0) b.vx = 0;              // kill only the velocity heading further out
+    w.walled = true;
   }
 }
 
