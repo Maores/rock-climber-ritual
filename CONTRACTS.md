@@ -260,10 +260,22 @@ The one array of events from `drainEvents` is passed to every consumer in the sa
 find out what happened. Render at display rate.
 `window.__ritual = { state, world, arms, rig, post, hud, audio, input, renderer, scene, camera, tier, perf, errors, debug, seed, sim, ready }`
 for tests and evidence capture — `state`, `world`, `arms`, `rig` and `post` are getters, because a restart or a re-skin
-replaces them. `debug` offers `start() / restart() / teleport(y) / tap(side) / hold(side, bool) / fall() / autopilot(b)` and the
-`pause` flag — the one member of `debug` the game itself writes: `hud.onPause` raises it while the mid-climb
-confirmation is on screen, so a one-hand hang cannot drain away under the question,
-and the URL accepts `?seed= ?auto ?tier=phone ?fps=1`.
+replaces them. `debug` offers, and this list is the whole of it:
+`start()` · `restart()` · `autopilot(on)` · `teleport(y)` · `push(side, x, y[, seconds])` · `tap(side)` · `hold(side, on)` ·
+`fall()` · `advance(seconds)` · `overlay(on)` · `plan(state)` · `steer(state, side, hold, full)` · `auto` · `timeScale` · `pause`.
+There is no tap in the game any more (B51), so `push(side, x, y)` is the primitive: one frame of a stick vector, or
+`seconds` of sim time if you ask for it — on a gripping hand that is the release, on a free hand it is the reach.
+`tap(side)` survives only as an alias for a push straight up. `hold(side, on)` is the WEB pad's held state, and only
+`R` reaches the sim (`Input.holdR`); there is no `holdL`. `fall()` pushes BOTH sticks the way that finds no rock and
+holds them there past `RELEASE_CONFIRM` and through the whole `GRACE` window, so the fall you asked for is the fall
+you get (B43); it steps the sim synchronously and returns the phase, and from the foot of the route that phase is
+`grounded`, because your feet never left the ground. `teleport(y)` picks its pair of holds GEOMETRICALLY — the hold
+nearest `y`, then the best partner within `2·REACH` on the other side of the body that the sim can actually hang from —
+never `H[i]` and `H[i+1]` by height order, which pairs rocks metres apart on anything but a single-line route.
+`plan(state)` and `steer(...)` are the autopilot's own planner, exposed so `review/harness.js` drives the sticks toward
+the same holds instead of keeping a second copy. `pause` is the one member of `debug` the game itself writes:
+`hud.onPause` raises it while the mid-climb confirmation is on screen, so a one-hand hang cannot drain away under the
+question. The URL accepts `?seed= ?auto ?tier=phone ?fps=1`.
 
 ## Assets (already in the repo; paths are relative to project root)
 - Wall PBR: `assets/textures/rock_face_03/{Diffuse_2k,nor_gl_2k,Diffuse_1k,nor_gl_1k,Rough_1k,AO_1k,Displacement_1k}.jpg`

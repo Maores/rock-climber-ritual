@@ -8,8 +8,8 @@
 // through the public Input interface — never through the sim's internals).
 
 import * as THREE from 'three';
-import { CFG, createClimber, startClimb, step, drainEvents, shoulder, hangTarget, aimPoint } from './sim.js';
-import { generateRoute, intendedHand, SEEDS, DEFAULT_SEED, normalizeSeed } from './route.js';
+import { CFG, createClimber, startClimb, step, drainEvents, shoulder, restingShoulder, grabRadius, hangTarget, aimPoint, cutWeb } from './sim.js';
+import { generateRoute, SEEDS, DEFAULT_SEED, normalizeSeed } from './route.js';
 import { createInput } from './input.js';
 import { createWebLine } from './webLine.js';
 import { createWebFx } from './webFx.js';
@@ -203,95 +203,201 @@ if (window.visualViewport) window.visualViewport.addEventListener('resize', resi
 // pause/advance, fps overlay. Used by the test/evidence harness only.
 
 // `active` is the B45 flag: false here means "nobody is on this stick", so a free hand keeps its
-// parked target instead of reading a zero vector as a push toward the shoulder.
-const zeroInput = () => ({ L: { x: 0, y: 0, active: false }, R: { x: 0, y: 0, active: false }, tapL: false, tapR: false, holdL: false, holdR: false });
-const heldDebug = { L: false, R: false };   // debug.hold(side, on) — the evidence harness fires the web with this
+// parked target instead of reading a zero vector as a push toward the shoulder. There is no
+// `tapL`/`tapR`/`holdL` any more: the GRIP buttons are gone (B51) and the sim reads neither.
+const zeroInput = () => ({ L: { x: 0, y: 0, active: false }, R: { x: 0, y: 0, active: false }, holdR: false });
+// debug.hold(side, on). Only `R` reaches the sim — `holdR` is the WEB pad's held state, and it is
+// the evidence harness's way of charging a shot. `L` is kept so the call is symmetrical and so a
+// harness that sets it is not silently lying; nothing downstream reads it.
+const heldDebug = { L: false, R: false };
 const OTHER = { L: 'R', R: 'L' };
+const REACHABLE = 0.9 * CFG.REACH;   // route.js's own guarantee: every hold is this close to the
+                                     // shoulder of the hand meant to take it
 
 // dwell: seconds both hands rest after a grab before the next move — a human pace, not a blur.
-// minStamina: a free hand below this is refilling and does not tap GRIP (a spent hand re-grabbing slips at once).
 // runeRest: a hand on a rune stays there until it is this fresh — runes are the route's rest holds.
-const auto = { on: false, target: null, from: null, t0: 0, dwell: 0.12, restUntil: 0, minStamina: 0.2, runeRest: 0.95, grabs: 0, retargets: 0, timeouts: 0, longestReach: 0, falls: 0, log: [] };
+// sideways: consecutive moves that gained no height; after MAX_SIDEWAYS the bot stops planning
+// rather than shuffling between the same rocks for ever on a wall with no way up.
+const MAX_SIDEWAYS = 3;
+const auto = {
+  on: false, target: null, side: null, from: null, t0: 0, centre: false,
+  dwell: 0.12, restUntil: 0, runeRest: 0.95,
+  grabs: 0, retargets: 0, timeouts: 0, sideways: 0, longestReach: 0, falls: 0, log: [],
+};
 
-// Stick vector that points a free hand at `hold` from its current shoulder — what a player aims for.
-function steerTo(st, side, hold) {
+// Stick vector that points a hand at `hold` from its current shoulder — what a player aims for.
+// `full` normalises it to the rim of the ring: that is the RELEASE push (it has to clear
+// CFG.RELEASE_DEADZONE), and it is already aimed at where the hand is going. Once the hand is
+// free the vector is left PROPORTIONAL, because `shoulder + stick × REACH` is where the hand
+// parks, and a full-deflection steer would park it at arm's length past the rock instead of on it.
+function steerTo(st, side, hold, full = false) {
   const sh = shoulder(st, side);
   const v = { x: (hold.x - sh.x) / CFG.REACH, y: (hold.y - sh.y) / CFG.REACH };
   const m = Math.hypot(v.x, v.y);
-  if (m > 1) { v.x /= m; v.y /= m; }
+  if ((m > 1 || full) && m > 1e-6) { v.x /= m; v.y /= m; }
   v.active = true;             // the bot's thumb is on the stick for this frame
   return v;
 }
 
-// Next hold to reach for: while climbing, the hold after the highest one held (the route
-// alternates hands, so its intended hand is free or about to be); on the rope, the highest hold
-// the hand meant for it can reach.
-function pickTarget(st) {
-  const H = st.route.holds;
-  const { L, R } = st.hands;
-  if (!L.gripping && !R.gripping) {
-    let best = null;
-    for (const h of H) {
-      const sh = shoulder(st, intendedHand(h.id));
-      if (Math.hypot(h.x - sh.x, h.y - sh.y) <= 0.9 * CFG.REACH && (!best || h.y > best.y)) best = h;
-    }
-    return best ? best.id : null;
+// The best hold for `freeSide` to reach for from the stance we are actually in. Pure geometry —
+// no hold-id arithmetic, because ids are not a ladder: `max(id) + 1` is the next rung only on a
+// single-line route, and on a field of a couple of thousand holds it is a rock somewhere else
+// entirely. The anchor is the OTHER hand's hold; `restingShoulder` says where this hand's
+// shoulder ends up once the body hangs from that anchor alone, and route.js guarantees every hold
+// is within 0.9·REACH of that point. Runes are the rests and the summit ends the climb, so both
+// win over a merely higher rock.
+function bestReach(st, freeSide, upOnly) {
+  const anchor = st.hands[OTHER[freeSide]];
+  const grip = anchor.gripping ? st.route.holds[anchor.holdId] : null;   // ids equal their index (route.js)
+  const free = st.hands[freeSide];
+  const fromY = free.gripping ? st.route.holds[free.holdId].y : -Infinity;
+  const sh = grip ? restingShoulder(grip, freeSide) : shoulder(st, freeSide);
+  let best = null, bestScore = -Infinity;
+  for (const h of st.route.holds) {
+    if (grip && h.id === grip.id) continue;                    // two hands never share a hold
+    if (free.gripping && h.id === free.holdId) continue;       // nor is the hold we are leaving a target
+    if (upOnly && h.y <= fromY + 0.02) continue;               // a move up, not a shuffle
+    if (Math.hypot(h.x - sh.x, h.y - sh.y) > REACHABLE) continue;
+    const score = h.y + (h.kind === 'summit' ? 100 : h.kind === 'rune' ? 0.5 : 0);
+    if (score > bestScore) { bestScore = score; best = h; }
   }
-  const next = Math.max(L.gripping ? L.holdId : -1, R.gripping ? R.holdId : -1) + 1;
-  return next < H.length ? next : null;
+  return best;
 }
 
+// Which hand moves next, and to which hold. With both hands on the rock either could go, so both
+// are costed and the one that ends up highest wins — which is what makes the bot leapfrog without
+// anybody telling it that hold ids alternate hands.
+function pickTarget(st) {
+  const both = st.hands.L.gripping && st.hands.R.gripping;
+  for (const upOnly of [true, false]) {
+    if (!upOnly && auto.sideways >= MAX_SIDEWAYS) break;
+    let best = null;
+    for (const side of ['L', 'R']) {
+      if (!both && st.hands[side].gripping) continue;          // one hand free: that is the hand that moves
+      const h = bestReach(st, side, upOnly);
+      if (h && (!best || h.y > best.hold.y)) best = { side, hold: h };
+    }
+    if (best) return { side: best.side, id: best.hold.id, up: upOnly };
+  }
+  return null;
+}
+
+// The autopilot, played through the public Input interface and nothing else (B51): there is no
+// GRIP to tap any more, so ONE gesture moves a hand — push its own stick at the target, which
+// both opens the fingers and aims the reach — and then the stick keeps steering until the hover
+// dwell closes the hand on the rock by itself.
 function autoInput(st) {
   const inp = zeroInput();
-  if (st.phase !== 'climbing' && st.phase !== 'grounded') { auto.target = null; return inp; }   // title, summit, mid-fall: wait
+  if (st.phase !== 'climbing' && st.phase !== 'grounded') { auto.target = null; return inp; }   // title, summit, mid-fall, the line: wait
   const H = st.route.holds;
   if (auto.target !== null && st.t - auto.t0 > (st.phase === 'grounded' ? 3 : 8)) {
     auto.timeouts++; auto.target = null;             // give up on this hold and re-plan
   }
   if (auto.target === null) {
     if (st.t < auto.restUntil && st.hands.L.gripping && st.hands.R.gripping) return inp;   // dwell after a grab
-    auto.target = pickTarget(st);
-    if (auto.target === null) return inp;
+    const pick = pickTarget(st);
+    if (!pick) return inp;
+    auto.target = pick.id;
+    auto.side = pick.side;
+    auto.from = st.hands[pick.side].holdId;          // null when that hand is already free
     auto.t0 = st.t;
-    auto.from = st.hands[intendedHand(auto.target)].holdId;   // null when that hand is free
     auto.retargets++;
+    auto.sideways = pick.up ? 0 : auto.sideways + 1;
+    // One CENTRED frame before the push. `grab()` drops the sim's release latch (`_relArm`) so
+    // that the stick which steered a hand onto rock cannot drop it the frame after it closed; the
+    // latch re-arms only on a frame where that stick is back inside RELEASE_DEADZONE. Two
+    // consecutive releases of the same hand with no centred frame between them therefore never
+    // let go at all — the stall the tap-based autopilot used to hide. This is the same beat that
+    // test/playability.test.js's releaseHand() opens with.
+    auto.centre = true;
   }
-  const side = intendedHand(auto.target);
-  const hand = st.hands[side], other = st.hands[OTHER[side]];
-  if (hand.gripping && hand.holdId !== auto.from) {          // arrived — on the target or another hold of this hand's side
+  const side = auto.side;
+  const hand = st.hands[side];
+  if (hand.gripping && hand.holdId !== auto.from) {   // arrived — on the target, or on rock it found on the way
     auto.grabs++;
     auto.longestReach = Math.max(auto.longestReach, st.t - auto.t0);
     auto.restUntil = st.t + auto.dwell;
     auto.target = null;
     return inp;
   }
-  if (hand.gripping) {                                       // still on the previous hold: let go to reach (never into a fall)
-    const on = H[hand.holdId];                               // hold ids equal their index (route.js)
-    if (on && on.kind === 'rune' && hand.stamina < auto.runeRest) return inp;   // a rune is a rest hold: shake out here first
-    if (other.gripping && st.phase === 'climbing') inp['tap' + side] = true;
-    return inp;
+  if (hand.gripping) {
+    const on = H[hand.holdId];
+    // A rune is a rest hold: shake out here before moving on, and do not let the plan time out
+    // while we do it.
+    if (on && on.kind === 'rune' && hand.stamina < auto.runeRest) { auto.t0 = st.t; return inp; }
   }
-  inp[side] = steerTo(st, side, H[auto.target]);
-  // A spent hand (it just slipped) would slip again the moment it re-grabbed: like a climber, shake it
-  // out until it has some stamina back before tapping GRIP.
-  if (!hand.armed && hand.stamina >= auto.minStamina) inp['tap' + side] = true;   // grabs within SNAP, else arms
+  if (auto.centre) { auto.centre = false; return inp; }
+  // Gripping: full deflection, because that push IS the release. Free: proportional, because the
+  // stick is now parking the hand and it must park ON the rock.
+  inp[side] = steerTo(st, side, H[auto.target], hand.gripping);
   return inp;
 }
 
-// Put both hands on the two consecutive holds nearest height `y`, body hanging below them, every
-// rune below already lit — a screenshot position, not a shortcut a player can take.
+// Where to push a stick so the hand it frees finds nothing: the direction whose reach sweeps
+// furthest from every piece of rock, decoys included. debug.fall() needs it, because with the
+// grab automatic a hand let go into rock simply takes it again inside the grace window.
+function escapeDir(st, side) {
+  const sh = shoulder(st, side);
+  let best = { x: side === 'L' ? -1 : 1, y: 0 }, bestClear = -Infinity;
+  for (let i = 0; i < 72; i++) {
+    const a = (i / 72) * Math.PI * 2;
+    const dx = Math.cos(a), dy = Math.sin(a);
+    let clear = Infinity;
+    for (let k = 4; k <= 10; k++) {               // sample the path out, not only the far end
+      const px = sh.x + dx * CFG.REACH * (k / 10), py = sh.y + dy * CFG.REACH * (k / 10);
+      for (const h of st.route.holds) { const d = Math.hypot(h.x - px, h.y - py) - grabRadius(h); if (d < clear) clear = d; }
+      for (const f of st.route.fakes || []) { if (f.broken) continue; const d = Math.hypot(f.x - px, f.y - py) - grabRadius(f); if (d < clear) clear = d; }
+    }
+    if (clear > bestClear) { bestClear = clear; best = { x: dx, y: dy }; }
+  }
+  return { x: best.x, y: best.y, active: true, clear: bestClear };
+}
+
+// Put both hands on a pair of holds near height `y`, body hanging below them, every rune below
+// already lit — a screenshot position, not a shortcut a player can take.
+//
+// The pair is chosen GEOMETRICALLY. It used to be `H[i]` and `H[i + 1]` by height order, which
+// only pairs sensibly on a single-line route where consecutive ids are consecutive rungs; sort a
+// field of holds by height and neighbours are metres apart, so the climber was hung from two rocks
+// he could not possibly hold at once. Now: the hold nearest `y`, then the best partner within
+// 2·REACH of it that lands on the opposite side of the body and that the sim can actually hang
+// from — both holds inside REACH of their own shoulder at the body position the pair produces.
 function teleport(y) {
   const H = state.route.holds;
-  let i = 0;
-  for (let k = 0; k < H.length; k++) if (Math.abs(H[k].y - y) < Math.abs(H[i].y - y)) i = k;
-  if (i >= H.length - 2) i = H.length - 3;             // keep the summit hold itself for the player
-  if (i < 0) i = 0;
-  const a = H[i], b = H[i + 1];
-  const pair = { [intendedHand(a.id)]: a, [intendedHand(b.id)]: b };
-  if (!pair.L || !pair.R) { pair.L = a; pair.R = b; }
+  const usable = H.filter((h) => h.kind !== 'summit');        // the altar stays for the player
+  if (usable.length < 2) return null;
+  let a = usable[0];
+  for (const h of usable) if (Math.abs(h.y - y) < Math.abs(a.y - y)) a = h;
+
+  let best = null, bestScore = -Infinity;
+  for (const b of usable) {
+    if (b.id === a.id) continue;
+    if (Math.abs(b.x - a.x) < 0.06) continue;                 // they have to fall either side of the body
+    if (Math.hypot(b.x - a.x, b.y - a.y) > 2 * CFG.REACH) continue;
+    const left = a.x < b.x ? a : b, right = a.x < b.x ? b : a;
+    const bx = (a.x + b.x) / 2, by = (a.y + b.y) / 2 - CFG.HANG_TWO;      // hangTarget for two holds
+    const dl = Math.hypot(left.x - (bx - CFG.SHOULDER_DX), left.y - (by + CFG.SHOULDER_DY));
+    const dr = Math.hypot(right.x - (bx + CFG.SHOULDER_DX), right.y - (by + CFG.SHOULDER_DY));
+    const margin = Math.min(CFG.REACH - dl, CFG.REACH - dr);
+    if (margin <= 0.01) continue;                             // the sim could not hold this stance
+    const score = margin - 0.25 * Math.abs(b.y - a.y);        // roomy, and level enough to look like a stance
+    if (score > bestScore) { bestScore = score; best = { L: left, R: right, margin }; }
+  }
+  if (!best) return null;
+
   for (const side of ['L', 'R']) {
-    const h = state.hands[side], hold = pair[side];
-    Object.assign(h, { x: hold.x, y: hold.y, vx: 0, vy: 0, tx: hold.x, ty: hold.y, gripping: true, holdId: hold.id, armed: false, stamina: 1, curl: 1, hover: 1, tremble: 0 });
+    const h = state.hands[side], hold = best[side];
+    // Everything grab() sets, because this IS a grab that never happened: the contact offset (a
+    // stale one from the last hold would hang the hand off the rock), the hover dwell, the release
+    // latch down exactly as a real grab leaves it, the hold lock-out cleared, the sloper clock zeroed.
+    Object.assign(h, {
+      x: hold.x, y: hold.y, vx: 0, vy: 0, tx: hold.x, ty: hold.y,
+      gripping: true, holdId: hold.id, armed: false, stamina: 1, curl: 1, hover: 1, tremble: 0,
+      gripDX: 0, gripDY: 0, nearId: hold.id, nearDist: 0,
+      _hoverId: null, _hoverT: 0, _relArm: false, _relT: 0,
+      _skipId: null, _spent: false, _missT: 0, _regripT: 0, _onT: 0,
+    });
+    h._stick.x = h._stick.y = 0;
   }
   state.phase = 'climbing';
   const tgt = hangTarget(state);
@@ -304,8 +410,13 @@ function teleport(y) {
   state.night = Math.min(1, Math.max(0, state.body.y / state.route.top));
   auto.target = null;
   auto.restUntil = 0;
-  pendingTap.L = pendingTap.R = false;
-  return { hold: i, y: state.body.y };
+  auto.sideways = 0;
+  pendingPush.L = pendingPush.R = null;
+  return {
+    L: best.L.id, R: best.R.id, y: +state.body.y.toFixed(3),
+    gap: +Math.hypot(best.L.x - best.R.x, best.L.y - best.R.y).toFixed(3),
+    reachMargin: +best.margin.toFixed(3),
+  };
 }
 
 // `?fps=1` overlay. It is read on a phone held at arm's length, so B27: the headline number is
@@ -376,9 +487,42 @@ const debug = {
     queuedEvents.push(...drainEvents(state));
     return state.phase;
   },
-  fall() { pendingTap.L = pendingTap.R = true; },
-  tap(side) { pendingTap[side] = true; },
+  // A stick vector, injected the way a thumb would push one. Default: it lasts exactly one
+  // rendered frame — every fixed sub-step of that frame — which is all a nudge needs. `seconds`
+  // holds it for that much SIM time instead. This replaces debug.tap(): there is no tap.
+  push(side, x = 0, y = 1, seconds = 0) {
+    if (side !== 'L' && side !== 'R') return null;
+    pendingPush[side] = { x: +x || 0, y: +y || 0, active: true, until: seconds > 0 ? state.t + seconds : null };
+    return pendingPush[side];
+  },
+  // Kept as an alias so old evidence scripts still say something true: a "tap" is now a push
+  // straight up, which on a gripping hand is a release and on a free hand is a reach.
+  tap(side) { return debug.push(side, 0, 1); },
   hold(side, on = true) { heldDebug[side] = !!on; return heldDebug; },
+  // Let go with both hands, on purpose, and mean it. Both sticks are pushed the way that finds no
+  // rock (escapeDir), held past CFG.RELEASE_CONFIRM and then through the whole grace window, so
+  // nothing catches what you asked for (B43). Stepped synchronously, like advance(), so the caller
+  // gets the answer rather than a promise; the plunge itself then plays out in the frame loop.
+  // From the foot of the route this correctly ends 'grounded' — your feet never left the ground.
+  fall() {
+    // On the line both hands are already off, so there is nothing to let go of: the line is what
+    // holds you, and cutting it is the fall.
+    if (state.phase === 'swinging') { cutWeb(state); queuedEvents.push(...drainEvents(state)); return state.phase; }
+    if (state.phase !== 'climbing' && state.phase !== 'grounded') return state.phase;
+    const inp = { L: escapeDir(state, 'L'), R: escapeDir(state, 'R'), holdR: false };
+    step(state, zeroInput(), SIM_DT);                     // one centred step: the release latch re-arms
+    const until = state.t + CFG.RELEASE_CONFIRM + CFG.GRACE + 0.1;
+    while (state.t < until && state.phase !== 'fallen' && state.phase !== 'grounded') {
+      step(state, inp, SIM_DT);
+      queuedEvents.push(...drainEvents(state));
+    }
+    queuedEvents.push(...drainEvents(state));
+    return state.phase;
+  },
+  // The autopilot's own planner and steering, so review/harness.js drives the sticks toward the
+  // same holds this file does instead of keeping a second copy that can rot.
+  plan(st = state) { return pickTarget(st); },
+  steer(st, side, hold, full = false) { return steerTo(st, side, hold, full); },
   start() {
     const title = document.getElementById('title');
     if (title && !title.hidden) title.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true }));
@@ -410,7 +554,8 @@ function restart() {
   rig.setPortrait(window.innerHeight >= window.innerWidth);
   auto.target = null;
   auto.restUntil = 0;                 // the new climb's clock starts at zero
-  pendingTap.L = pendingTap.R = false;
+  auto.sideways = 0;
+  pendingPush.L = pendingPush.R = null;
   hud.hideEnd();
   hud.message('Light every rune · reach the altar', 3000);
 }
@@ -426,7 +571,8 @@ function toTitle() {
   rig.setPortrait(window.innerHeight >= window.innerWidth);
   auto.target = null;
   auto.restUntil = 0;
-  pendingTap.L = pendingTap.R = false;
+  auto.sideways = 0;
+  pendingPush.L = pendingPush.R = null;
   debug.pause = false;                  // the confirmation's freeze never outlives the climb
   // The theme belongs to the climb, and start() is the only thing that ever asked for it, so a
   // title reached this way would keep playing over a screen the boot title leaves silent.
@@ -455,7 +601,10 @@ hud.onSeed((next) => {
 // ---------------------------------------------------------------------------------------------
 // Frame loop
 
-const pendingTap = { L: false, R: false };   // taps are edge-triggered; keep one until a sim step consumes it
+// debug.push(side, x, y[, seconds]) parks a stick vector here and the loop feeds it to the sim in
+// place of whatever input.read() said, for one frame or for a span of sim time. A frozen sim runs
+// no steps, so a push waits for the pause to lift rather than being swallowed by it.
+const pendingPush = { L: null, R: null };
 let last = performance.now();
 let acc = 0;
 
@@ -468,45 +617,59 @@ function frame(now) {
   perf.frameMs = dt * 1000;
   perf.frames++;
 
-  // Input: read once per frame (the HUD knobs follow), merge the autopilot on top.
-  let inp = input.read();
+  // Input: read once per frame (the HUD knobs follow), then the autopilot and the debug pushes on
+  // top of it. The two sticks are the whole climb now (B51), so this is all there is to merge.
+  const inp = input.read();
   const lookIn = inp.look;
+  let L = inp.L, R = inp.R;
   if (auto.on && !debug.pause) {
     const ai = autoInput(state);
-    inp = { L: ai.L, R: ai.R, tapL: inp.tapL || ai.tapL, tapR: inp.tapR || ai.tapR, look: lookIn, web: inp.web };
-    hud.setStick('L', ai.L.x, ai.L.y);
-    hud.setStick('R', ai.R.x, ai.R.y);
+    L = ai.L; R = ai.R;
+    hud.setStick('L', L.x, L.y);
+    hud.setStick('R', R.x, R.y);
   }
-  if (!debug.pause) {                  // a frozen sim swallows taps instead of firing them all on resume
-    if (inp.tapL) pendingTap.L = true;
-    if (inp.tapR) pendingTap.R = true;
-  }
+  if (pendingPush.L) L = pendingPush.L;
+  if (pendingPush.R) R = pendingPush.R;
 
-  // Sim: fixed 120 Hz steps; the first step of a frame carries the taps.
+  // Sim: fixed 120 Hz steps.
   let steps = 0;
   if (!debug.pause) {
     acc += dt * Math.max(0, debug.timeScale || 1);
     const maxSteps = Math.ceil(16 * Math.max(1, debug.timeScale || 1));
     while (acc >= SIM_DT && steps < maxSteps) {
+      // Everything the sim reads, and nothing it does not. Diffed against CONTRACTS' Input
+      // schema: `L`, `R` (with their `active` flag and, on `R`, the same `web` object), `holdR`,
+      // and `web`. `look` is the camera rig's, not the sim's. `tapL`/`tapR`/`holdL` are gone with
+      // the GRIP buttons (B51) — the sim reads none of them, and naming them here only made this
+      // literal look like it still had a say in the grab.
       step(state, {
-        L: inp.L, R: inp.R,
-        tapL: pendingTap.L, tapR: pendingTap.R,
-        // held grips drive the web-zip's aim; without these the shot can never charge
-        holdL: inp.holdL || heldDebug.L, holdR: inp.holdR || heldDebug.R,
-        // the WEB pad's gesture (B50): this literal names its fields, and a field it does not name
-        // never reaches the sim -- which is exactly how the pad's aim went missing in B48
+        L, R,
+        // the WEB pad held (input.js: `holds.R || onPad`) — the aim charges on it, and without it
+        // the shot can never be loosed. heldDebug.R is the evidence harness's thumb.
+        holdR: inp.holdR || heldDebug.R,
+        // the WEB pad's whole gesture (B50). A field this literal does not name never reaches the
+        // sim -- which is exactly how the pad's aim went missing in B48.
         web: inp.web,
       }, SIM_DT);
-      pendingTap.L = pendingTap.R = false;
       acc -= SIM_DT;
       steps++;
     }
     if (steps >= maxSteps) acc = 0;    // a very long hitch: drop the remainder instead of catching up
+    // A push lives for one frame, or until its span of sim time runs out.
+    if (steps > 0) {
+      for (const side of ['L', 'R']) {
+        const p = pendingPush[side];
+        if (p && (p.until === null || p.until <= state.t)) pendingPush[side] = null;
+      }
+    }
   }
   perf.stepsPerFrame = steps;
 
   const events = queuedEvents.length ? queuedEvents.splice(0).concat(drainEvents(state)) : drainEvents(state);
-  if (auto.on && events.length) {
+  // The event log and the fall tally run whether or not the autopilot is driving: review/harness.js
+  // reads both while its own touch and keyboard bots are climbing, and with the rope gone (B43)
+  // there is no `state.fallCount` left to read instead. Capped, so it cannot grow without bound.
+  if (events.length) {
     for (const e of events) {
       if (e.type === 'fall') auto.falls++;
       if (auto.log.length < 4000) auto.log.push({ t: +state.t.toFixed(2), type: e.type, hand: e.hand, holdId: e.holdId });
