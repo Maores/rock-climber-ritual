@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Spider hand — real model</title>
+<link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root { --bg:#14100d; --panel:#1f1813; --line:#3a2c22; --text:#f1e6d8; --muted:#b9a58f; --teal:#7fe0ff; --gold:#d99a5b; --ok:#8ddc9b; }
+  * { box-sizing:border-box; }
+  body { margin:0; padding-bottom:40px; background:radial-gradient(1200px 700px at 50% -10%, #3a2333 0%, var(--bg) 62%); color:var(--text); font-family:Inter, system-ui, sans-serif; line-height:1.5; }
+  body.wide { min-width:1240px; }
+  main { max-width:1220px; margin:0 auto; padding:28px 24px; }
+  h1 { font-family:Cinzel, serif; letter-spacing:.05em; color:var(--gold); font-size:clamp(20px,2.6vw,32px); margin:0 0 4px; text-align:center; }
+  .sub { text-align:center; color:var(--muted); margin:0 auto 6px; max-width:820px; }
+  .real { text-align:center; color:var(--ok); font-size:13px; margin:0 0 22px; }
+  .row { display:grid; grid-template-columns:repeat(auto-fit,minmax(300px,1fr)); gap:16px; }
+  .card { position:relative; background:var(--panel); border:1px solid var(--line); border-radius:16px; overflow:hidden; cursor:pointer; transition:border-color .15s, box-shadow .15s, transform .15s; }
+  .card:hover { transform:translateY(-2px); border-color:rgba(127,224,255,.45); }
+  .card.sel { border-color:var(--teal); box-shadow:0 0 0 3px rgba(127,224,255,.16); }
+  .card canvas { display:block; width:100%; aspect-ratio:1/1; background:linear-gradient(180deg,#2a1e2e,#140f14); }
+  .bd { padding:13px 15px 15px; }
+  .bd h3 { margin:0 0 3px; font-size:15.5px; display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  .bd p { margin:0; font-size:13px; color:var(--muted); }
+  .rec { font-size:10px; letter-spacing:.08em; text-transform:uppercase; padding:2px 7px; border-radius:999px; background:rgba(127,224,255,.14); color:var(--teal); border:1px solid rgba(127,224,255,.4); font-weight:600; }
+  .tick { position:absolute; right:12px; top:12px; width:26px; height:26px; border-radius:50%; background:var(--teal); color:#06222b; display:none; align-items:center; justify-content:center; font-weight:800; }
+  .card.sel .tick { display:flex; }
+  .tag { position:absolute; left:12px; top:12px; font-size:10.5px; letter-spacing:.09em; text-transform:uppercase; color:var(--muted); background:rgba(0,0,0,.5); padding:3px 8px; border-radius:999px; }
+  .note { font-size:12.5px; color:var(--muted); margin-top:18px; border-left:2px solid var(--line); padding-left:11px; max-width:900px; }
+  #bar { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-top:24px; background:rgba(20,14,11,.9); border:1px solid var(--line); border-radius:14px; padding:13px 16px; }
+  #bar .sum { flex:1 1 260px; font-size:13px; color:var(--muted); }
+  #bar .sum b { color:var(--teal); }
+  #bar input { flex:1 1 240px; padding:10px 12px; border-radius:10px; border:1px solid var(--line); background:rgba(255,255,255,.05); color:var(--text); font:inherit; }
+  #bar button { border:0; border-radius:10px; padding:11px 18px; font:inherit; font-weight:600; cursor:pointer; background:var(--teal); color:#06222b; }
+  #bar .st { flex-basis:100%; font-size:13px; color:var(--ok); }
+  .err { padding:14px; color:#ffb0b0; font-size:13px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>THE SPIDER HAND — ON THE REAL MODEL</h1>
+  <p class="sub">This is the game's own rigged hand, in the 🤘 pose, under the game's dusk light. Only the material changes between these three. Drag any of them to turn it.</p>
+  <p class="real" id="status">loading the hand…</p>
+  <div class="row" id="row"></div>
+  <p class="note">All three repaint the model already in the game, so no third-party costume mesh ships. The webbing is generated in the shader from the hand's own object-space position, which is why it wraps the knuckles and rings each finger instead of stretching with the UVs. Palette sampled from a photogrammetry scan of a real figure; pattern matched to a reference photo of the glove.</p>
+  <div id="bar">
+    <div class="sum" id="sum">Pick one.</div>
+    <input id="note" placeholder="Or tell me what to change about it…">
+    <button id="send">Send to Claude →</button>
+    <div class="st" id="st"></div>
+  </div>
+</main>
+
+<script type="importmap">{ "imports": { "three": "../vendor/three/three.module.js", "three/addons/": "../vendor/three/addons/" } }</script>
+<script type="module">
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
+import { clone as skinnedClone } from 'three/addons/utils/SkeletonUtils.js';
+import { applySpiderSkin, SPIDER_VARIANTS } from '../src/spiderHand.js';
+
+if (new URLSearchParams(location.search).has('wide')) document.body.classList.add('wide');
+const statusEl = document.getElementById('status');
+
+// ---------------------------------------------------------------------------------------------
+// Web texture, drawn in code onto the hand's own UV layout.
+function webTexture({ base, web, cuff, webWidth = 2.2, cell = 46, glow = null }) {
+  const S = 1024;
+  const c = document.createElement('canvas'); c.width = c.height = S;
+  const g = c.getContext('2d');
+  g.fillStyle = base; g.fillRect(0, 0, S, S);
+  // a cuff band across the bottom of the UV sheet (the wrist end of the model)
+  if (cuff) { g.fillStyle = cuff; g.fillRect(0, S * 0.86, S, S * 0.14); }
+  // diamond mesh: two sets of diagonals, plus a few long radials from the palm centre
+  g.lineWidth = webWidth; g.strokeStyle = web; g.globalAlpha = 0.9;
+  g.beginPath();
+  for (let i = -S; i < S * 2; i += cell) { g.moveTo(i, 0); g.lineTo(i + S, S); g.moveTo(i + S, 0); g.lineTo(i, S); }
+  g.stroke();
+  // radial spokes + arcs around the palm so it reads as a web, not a net
+  const cx = S * 0.42, cy = S * 0.46;
+  g.lineWidth = webWidth * 1.35;
+  g.beginPath();
+  for (let a = 0; a < Math.PI * 2; a += Math.PI / 7) { g.moveTo(cx, cy); g.lineTo(cx + Math.cos(a) * S, cy + Math.sin(a) * S); }
+  g.stroke();
+  g.lineWidth = webWidth;
+  for (let r = cell * 1.2; r < S * 0.9; r += cell * 1.25) {
+    g.beginPath();
+    for (let a = 0; a <= Math.PI * 2 + 0.01; a += Math.PI / 7) {
+      const sag = 1 - 0.06 * Math.abs(Math.sin(a * 3.5));
+      const x = cx + Math.cos(a) * r * sag, y = cy + Math.sin(a) * r * sag;
+      if (a === 0) g.moveTo(x, y); else g.lineTo(x, y);
+    }
+    g.stroke();
+  }
+  if (glow) {                                   // a faint bloom-catching wash on the web lines
+    g.globalAlpha = 0.35; g.strokeStyle = glow; g.lineWidth = webWidth * 2.6;
+    g.beginPath();
+    for (let a = 0; a < Math.PI * 2; a += Math.PI / 7) { g.moveTo(cx, cy); g.lineTo(cx + Math.cos(a) * S, cy + Math.sin(a) * S); }
+    g.stroke();
+  }
+  g.globalAlpha = 1;
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  t.anisotropy = 8;
+  return t;
+}
+
+// Emissive-only sheet: black except the web lines, so they glow without lighting the whole glove.
+function webEmissive(color) {
+  const S = 1024;
+  const c = document.createElement('canvas'); c.width = c.height = S;
+  const g = c.getContext('2d');
+  g.fillStyle = '#000'; g.fillRect(0, 0, S, S);
+  g.strokeStyle = color; g.lineWidth = 2.6;
+  const cell = 46, cx = S * 0.42, cy = S * 0.46;
+  g.beginPath();
+  for (let i = -S; i < S * 2; i += cell) { g.moveTo(i, 0); g.lineTo(i + S, S); g.moveTo(i + S, 0); g.lineTo(i, S); }
+  for (let a = 0; a < Math.PI * 2; a += Math.PI / 7) { g.moveTo(cx, cy); g.lineTo(cx + Math.cos(a) * S, cy + Math.sin(a) * S); }
+  g.stroke();
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+
+// A ritual sigil burned into the palm: mostly the bare hand, one glowing mark.
+function sigilEmissive(color) {
+  const S = 1024;
+  const c = document.createElement('canvas'); c.width = c.height = S;
+  const g = c.getContext('2d');
+  g.fillStyle = '#000'; g.fillRect(0, 0, S, S);
+  const cx = S * 0.42, cy = S * 0.46, r = S * 0.17;
+  g.strokeStyle = color; g.lineWidth = 7; g.lineCap = 'round';
+  g.beginPath(); g.arc(cx, cy, r, 0, Math.PI * 2); g.stroke();
+  g.beginPath();
+  for (let a = 0; a < Math.PI * 2; a += Math.PI / 4) { g.moveTo(cx, cy); g.lineTo(cx + Math.cos(a) * r, cy + Math.sin(a) * r); }
+  g.stroke();
+  g.lineWidth = 4;
+  for (let k = 1; k <= 2; k++) {
+    g.beginPath();
+    for (let a = 0; a <= Math.PI * 2 + 0.01; a += Math.PI / 4) {
+      const rr = r * (k / 3);
+      const x = cx + Math.cos(a) * rr, y = cy + Math.sin(a) * rr;
+      if (a === 0) g.moveTo(x, y); else g.lineTo(x, y);
+    }
+    g.stroke();
+  }
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+
+const VARIANTS = [
+  { id: 'classic', title: 'Classic red and blue', rec: true, tag: 'raised webbing · shader',
+    blurb: 'The game\'s own hand, repainted. The webbing is generated from the hand\'s object-space position so it wraps the fingers correctly, and it is raised: the lines bend the normal, so the low sun rakes across them like real piping. Palette sampled from a photogrammetry scan of an actual figure.',
+    spider: 'classic' },
+  { id: 'stealth', title: 'Stealth, teal webbing', tag: 'raised webbing · shader',
+    blurb: 'The same raised glove in midnight blue, with the web lines emitting the game\'s rune teal so the bloom catches them. Reads as Spider-Man to anyone who knows, and belongs on this cliff at dusk.',
+    spider: 'stealth' },
+  { id: 'ritual', title: 'The ritual\'s own web', tag: 'bare hand + sigil',
+    blurb: 'No costume: your same chalked hand from the climb, with a web sigil burned glowing into the palm. The power is the surprise instead of the outfit, and it fits the fiction.',
+    build: (orig) => ({ map: orig, rough: 0.55, metal: 0.0, emissiveMap: sigilEmissive('#7fe0ff'), emissive: 0x7fe0ff, emissiveIntensity: 2.2 }) },
+];
+
+const row = document.getElementById('row');
+let picked = null;
+
+try {
+  const hdr = await new RGBELoader().loadAsync('../assets/hdri/kloppenheim_06_puresky_1k.hdr');
+  hdr.mapping = THREE.EquirectangularReflectionMapping;
+  const gltf = await new GLTFLoader().loadAsync('../assets/models/hands/realistic_hand.glb');
+  statusEl.textContent = 'the same rigged hand the climber uses · 🤘 pose · drag to turn';
+
+  // Pose: the 🤘. The model ships one clip, "Armature|Grab" (0.708 s). Sampling it part-way
+  // gives the real curl in the model's own rig; we then restore every bone that is not a
+  // middle or ring finger back to its rest pose, which leaves index, pinky and thumb out.
+  const CURL_T = 0.52;
+  function poseHorns(root, clip) {
+    const rest = new Map();
+    root.traverse((o) => { if (o.isBone) rest.set(o.name, o.quaternion.clone()); });
+    const mixer = new THREE.AnimationMixer(root);
+    const act = mixer.clipAction(clip);
+    act.play();
+    mixer.setTime(CURL_T);
+    root.traverse((o) => {
+      if (!o.isBone) return;
+      const keepCurled = /^(middle|ring)/i.test(o.name);
+      if (!keepCurled && rest.has(o.name)) o.quaternion.copy(rest.get(o.name));
+    });
+    root.updateMatrixWorld(true);
+  }
+
+  for (const v of VARIANTS) {
+    const card = document.createElement('div');
+    card.className = 'card' + (v.rec ? '' : '');
+    card.innerHTML = `<span class="tick">✓</span><span class="tag">${v.tag}</span>
+      <canvas></canvas>
+      <div class="bd"><h3>${v.title}${v.rec ? ' <span class="rec">Recommended</span>' : ''}</h3><p>${v.blurb}</p></div>`;
+    row.appendChild(card);
+    card.addEventListener('click', (e) => {
+      if (e.target.closest('input')) return;
+      document.querySelectorAll('.card').forEach((c) => c.classList.remove('sel'));
+      card.classList.add('sel'); picked = v.id;
+      document.getElementById('sum').innerHTML = 'Glove: <b>' + v.title + '</b>';
+    });
+
+    const canvas = card.querySelector('canvas');
+    const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
+    renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.0;
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+
+    const scene = new THREE.Scene();
+    const pm = new THREE.PMREMGenerator(renderer);
+    scene.environment = pm.fromEquirectangular(hdr).texture;
+    scene.environmentIntensity = 0.85;
+    const key = new THREE.DirectionalLight(0xffb572, 3.4); key.position.set(-1.6, 1.9, 2.4); scene.add(key);
+    const fill = new THREE.DirectionalLight(0x8fa8ff, 0.8); fill.position.set(2.1, 0.4, -1.2); scene.add(fill);
+
+    const camera = new THREE.PerspectiveCamera(30, 1, 0.05, 60);
+    camera.position.set(0, 0.06, 3.05);
+
+    const root = skinnedClone(gltf.scene);
+    if (v.spider) { applySpiderSkin(root, { variant: v.spider }); root.traverse((o) => { if (o.isMesh || o.isSkinnedMesh) o.frustumCulled = false; }); }
+    else { const spec = v.build(null);
+    root.traverse((o) => {
+      if (!o.isMesh && !o.isSkinnedMesh) return;
+      const orig = o.material;
+      const m = new THREE.MeshPhysicalMaterial({
+        map: spec.map === null ? orig.map : (v.id === 'ritual' ? orig.map : spec.map),
+        normalMap: orig.normalMap || null,
+        roughness: spec.rough, metalness: spec.metal,
+        sheen: v.id === 'ritual' ? 0.3 : 0.15,
+        sheenColor: new THREE.Color(v.id === 'ritual' ? 0xff9b8a : 0xffffff),
+        clearcoat: v.id === 'ritual' ? 0.04 : 0.18, clearcoatRoughness: 0.5,
+      });
+      if (spec.emissiveMap) { m.emissiveMap = spec.emissiveMap; m.emissive = new THREE.Color(spec.emissive); m.emissiveIntensity = spec.emissiveIntensity; }
+      o.material = m;
+      o.frustumCulled = false;
+    }); }
+    poseHorns(root, gltf.animations[0]);
+
+    // The model lies flat: fingers along +X, palm facing +Y. Two nested turns stand it up
+    // with the fingers pointing at the sky and the palm toward the lens.
+    const stand = new THREE.Group(); stand.rotation.z = -Math.PI / 2; stand.add(root);
+    const upright = new THREE.Group(); upright.rotation.y = Math.PI / 2; upright.add(stand);
+    upright.updateMatrixWorld(true);
+
+    const box = new THREE.Box3().setFromObject(upright, true);
+    const ctr = box.getCenter(new THREE.Vector3()), size = box.getSize(new THREE.Vector3());
+    const k = 1.45 / Math.max(size.x, size.y, size.z);
+    stand.position.sub(ctr.clone().applyAxisAngle(new THREE.Vector3(0, 1, 0), -Math.PI / 2));
+    const holder = new THREE.Group();
+    holder.add(upright); holder.scale.setScalar(k);
+    scene.add(holder);
+
+    // a fixed three-quarter angle: the screenshot has to read as a hand every time
+    let rx = 0.10, ry = 0.42, drag = false, lx = 0, ly = 0;
+    canvas.addEventListener('pointerdown', (e) => { drag = true; lx = e.clientX; ly = e.clientY; canvas.setPointerCapture(e.pointerId); });
+    canvas.addEventListener('pointermove', (e) => { if (!drag) return; ry += (e.clientX - lx) * 0.01; rx = Math.max(-1.1, Math.min(1.1, rx + (e.clientY - ly) * 0.01)); lx = e.clientX; ly = e.clientY; });
+    canvas.addEventListener('pointerup', () => { drag = false; });
+    const size2 = () => { const w = canvas.clientWidth, h = canvas.clientHeight; if (w && h) { renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix(); } };
+    new ResizeObserver(size2).observe(canvas); size2();
+    const clock = new THREE.Clock();
+    renderer.setAnimationLoop(() => { clock.getDelta(); holder.rotation.set(rx, ry, 0); renderer.render(scene, camera); });
+  }
+} catch (err) {
+  statusEl.textContent = '';
+  row.innerHTML = '<div class="err">Could not load the hand: ' + (err && err.message ? err.message : err) + '</div>';
+  console.error(err);
+}
+
+document.getElementById('send').addEventListener('click', async () => {
+  const st = document.getElementById('st');
+  st.textContent = 'Sending…';
+  try {
+    const r = await fetch('/api/event', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: 'submit', topic: 'spider-glove', choice: picked, note: document.getElementById('note').value.trim() }) });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    st.textContent = 'Sent ✓';
+  } catch (e) { st.textContent = 'Could not send (' + e.message + ').'; }
+});
+</script>
+</body>
+</html>
