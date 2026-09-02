@@ -1,11 +1,16 @@
 // test/web.test.js — the web-zip: aiming, the shot, the pendulum, and letting go.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { CFG, createClimber, startClimb, step, drainEvents, shoulder, cutWeb } from '../src/sim.js';
+import { CFG, createClimber, startClimb, step, drainEvents, shoulder, cutWeb, grabRadius } from '../src/sim.js';
 import { generateRoute } from '../src/route.js';
 
 const DT = 1 / 120;
-const inp = (o = {}) => ({ L: { x: 0, y: 0 }, R: { x: 0, y: 0 }, tapL: false, tapR: false, holdL: false, holdR: false, ...o });
+const inp = (o = {}) => ({ L: { x: 0, y: 0 }, R: { x: 0, y: 0 }, holdR: false, ...o });
+// A gentle downward nudge on the free hand's stick, UNDER CFG.RELEASE_DEADZONE: it steers the
+// hand away from the line of holds without being a push, so it neither lets go of rock (B51) nor
+// counts as a reach mid-swing. That is what keeps these tests measuring the swing rather than a
+// hand catching rock — which is a feature, tested on its own below.
+const HANG = { x: 0, y: -0.3 };
 const types = (s) => drainEvents(s).map((e) => e.type);
 
 // Put the climber on a pair of holds near `y`. Shooting from the very bottom of the route is
@@ -35,21 +40,24 @@ function climber({ unlocked = true, at = 14 } = {}) {
 function run(s, seconds, input = inp()) {
   for (let t = 0; t < seconds; t += DT) step(s, input, DT);
 }
-// Free the right hand, then hold the grip long enough to aim and let go to fire.
+// Free the right hand (the aim itself is a stick push, which is how a hand lets go now — B51),
+// then hold the pad long enough to aim and let go to fire.
 function shoot(s, aim = { x: 0.2, y: 1 }) {
-  step(s, inp({ tapR: true }), DT);                 // right hand lets go of its hold
-  run(s, 0.3);
+  step(s, inp(), DT);                               // stick at centre: the release arms
+  while (s.hands.R.gripping) step(s, inp({ R: aim }), DT);   // pushed: the right hand lets go of its hold
+  run(s, 0.3, inp({ L: HANG }));
   drainEvents(s);
-  run(s, CFG.WEB_AIM_HOLD + 0.05, inp({ holdR: true, R: aim }));
-  step(s, inp({ holdR: false, R: aim }), DT);       // release fires
+  run(s, CFG.WEB_AIM_HOLD + 0.05, inp({ holdR: true, R: aim, L: HANG }));
+  step(s, inp({ holdR: false, R: aim, L: HANG }), DT);   // release fires
 }
 
-test('web: locked, a held grip does nothing at all', () => {
+test('web: locked, a held pad does nothing at all', () => {
   const s = climber({ unlocked: false });
-  step(s, inp({ tapR: true }), DT);
-  run(s, 0.4);
+  step(s, inp(), DT);
+  step(s, inp({ R: { x: 0, y: 1 } }), DT);
+  run(s, 0.4, inp({ L: HANG }));
   drainEvents(s);
-  run(s, 0.6, inp({ holdR: true, R: { x: 0, y: 1 } }));
+  run(s, 0.6, inp({ holdR: true, R: { x: 0, y: 1 }, L: HANG }));
   assert.equal(s.web.mode, 'idle');
   assert.ok(!types(s).includes('aim'));
 });
@@ -70,7 +78,7 @@ test('web: holding the grip aims, releasing fires, and the shot flies to its anc
 test('web: on contact both hands let go and the body starts swinging', () => {
   const s = climber();
   shoot(s);
-  run(s, 0.6, inp({ holdR: true }));
+  run(s, 0.6, inp({ L: HANG }));                  // nothing held: the line bites and stays bitten
   assert.equal(s.web.mode, 'attached');
   assert.equal(s.phase, 'swinging');
   assert.equal(s.hands.L.gripping, false);
@@ -81,28 +89,37 @@ test('web: on contact both hands let go and the body starts swinging', () => {
 test('swing: the body stays exactly on the line, and swings rather than falling straight', () => {
   const s = climber();
   shoot(s, { x: 0.55, y: 1 });
-  run(s, 0.6, inp({ holdR: true }));
+  run(s, 0.6, inp({ L: HANG }));
   assert.equal(s.phase, 'swinging');
   const { ax, ay, len } = s.web;
-  let minX = Infinity, maxX = -Infinity;
+  let minX = Infinity, maxX = -Infinity, grounded = 0, walled = 0;
   for (let i = 0; i < 400; i++) {
-    step(s, inp({ holdR: true }), DT);
+    step(s, inp({ L: HANG }), DT);
+    assert.equal(s.phase, 'swinging', 'the free hand must stay off the rock for this measurement');
     const d = Math.hypot(s.body.x - ax, s.body.y - ay);
-    // exactly on the line, except on the frames where the ground is holding the body up
-    if (!s.web.grounded) assert.ok(Math.abs(d - s.web.len) < 1e-6, `off the line by ${(d - s.web.len).toExponential(2)}`);
+    // Exactly on the line, except on the frames where the ground or the edge of the cliff is
+    // holding the body somewhere the circle does not pass through. Those two flags are not a
+    // blanket excuse: each one is checked to be telling the truth, so the relaxation cannot
+    // quietly grow to cover a real constraint failure.
+    if (s.web.grounded) { assert.equal(s.body.y, CFG.FLOOR, 'grounded means the body is on the floor'); grounded++; }
+    else if (s.web.walled) { assert.equal(Math.abs(s.body.x), CFG.SWING_MAX_X, 'walled means the body is exactly at the clamp'); walled++; }
+    else assert.ok(Math.abs(d - s.web.len) < 1e-6, `off the line by ${(d - s.web.len).toExponential(2)}`);
     assert.ok(Number.isFinite(s.body.x) && Number.isFinite(s.body.y), 'the pendulum stayed finite');
     minX = Math.min(minX, s.body.x); maxX = Math.max(maxX, s.body.x);
   }
   assert.ok(maxX - minX > 0.25, `it should swing sideways, travelled ${(maxX - minX).toFixed(2)} m`);
   assert.ok(len > 0);
+  // and the relaxed frames must stay the exception: this swing should mostly be a free pendulum
+  assert.ok(grounded + walled < 200, `${grounded} grounded + ${walled} walled of 400 frames is not a swing`);
 });
 
 test('swing: pushing the stick up reels you closer, never past the minimum', () => {
   const s = climber();
   shoot(s, { x: 0.2, y: 1 });
-  run(s, 0.6, inp({ holdR: true }));
+  run(s, 0.6, inp({ L: HANG }));
+  assert.equal(s.phase, 'swinging');
   const before = s.web.len;
-  run(s, 4, inp({ holdR: true, L: { x: 0, y: 1 } }));
+  run(s, 4, inp({ L: { x: 0, y: 1 } }));           // the same stick reels and steers the hand
   assert.ok(s.web.len < before, `reeled in from ${before.toFixed(2)} to ${s.web.len.toFixed(2)}`);
   assert.ok(s.web.len >= CFG.SWING_MIN_LEN - 1e-9, 'never reels past the minimum');
 });
@@ -110,39 +127,143 @@ test('swing: pushing the stick up reels you closer, never past the minimum', () 
 test('swing: letting go throws you, and the cooldown blocks an instant second shot', () => {
   const s = climber();
   shoot(s, { x: 0.6, y: 1 });
-  run(s, 0.9, inp({ holdR: true }));
+  run(s, 0.9, inp({ L: HANG }));                   // nothing held: the swing carries on by itself
   assert.equal(s.phase, 'swinging');
   drainEvents(s);
-  step(s, inp({ holdR: false }), DT);              // let go of the line
+  step(s, inp({ L: HANG, R: { x: 0, y: 0, web: { tap: true } } }), DT);   // tapping the pad lets go of the line
   assert.equal(s.web.mode, 'idle');
   assert.ok(s.phase === 'falling' || s.phase === 'caught', `let go into ${s.phase}`);
   assert.notEqual(s.phase, 'swinging');
   assert.ok(types(s).includes('webcut'));
   assert.ok(s.web.cd > 0, 'the cooldown started');
   // a fresh hold cannot fire while the cooldown runs
-  run(s, CFG.WEB_AIM_HOLD + 0.1, inp({ holdR: true, R: { x: 0, y: 1 } }));
+  run(s, CFG.WEB_AIM_HOLD + 0.1, inp({ holdR: true, R: { x: 0, y: 1 }, L: HANG }));
   assert.equal(s.web.mode, 'idle', 'no shot during the cooldown');
 });
 
-test('web: catching rock mid-swing ends the swing and returns you to climbing', () => {
+test('web: the hand on the line never catches rock, however hard it reaches (B51)', () => {
+  // The left hand catching mid-swing is the way off the line (tested below). The RIGHT hand is
+  // the one holding it: if it could snag a hold the shot would cancel itself, so it does not
+  // grab at all while `web.mode` is anything but idle — reach or no reach.
   const s = climber();
   shoot(s, { x: 0.1, y: 1 });
-  run(s, 0.6, inp({ holdR: true }));
+  run(s, 0.6, inp({ L: HANG }));
   assert.equal(s.phase, 'swinging');
-  // steer the left hand onto the nearest hold and take it
+  const near = s.route.holds.reduce((best, h) => {
+    const d = Math.hypot(h.x - s.hands.R.x, h.y - s.hands.R.y);
+    return d < best.d ? { h, d } : best;
+  }, { h: null, d: Infinity });
+  let onRock = 0;
+  for (let t = 0; t < 2; t += DT) {                 // re-aimed every frame, the way a thumb tracks it
+    const sh = shoulder(s, 'R');
+    const v = { x: (near.h.x - sh.x) / CFG.REACH, y: (near.h.y - sh.y) / CFG.REACH };
+    const m = Math.hypot(v.x, v.y); if (m > 1) { v.x /= m; v.y /= m; }
+    step(s, inp({ R: v, L: HANG }), DT);
+    if (Math.hypot(s.hands.R.x - near.h.x, s.hands.R.y - near.h.y) <= grabRadius(near.h)) onRock++;
+  }
+  assert.ok(onRock * DT > CFG.HOVER_GRAB_DWELL, `the hand was only on the rock ${(onRock * DT).toFixed(2)} s`);
+  assert.equal(s.hands.R.gripping, false, 'the hand on the line does not take rock');
+  assert.equal(s.phase, 'swinging', 'so the swing carries on');
+});
+
+test('swing: flying past a hold with the sticks idle catches nothing (B51)', () => {
+  // Both hands are free through a swing and ride the body across the whole face. With the grab
+  // automatic they were inside some hold's radius within a few frames and the swing ended almost
+  // as soon as it began — on a densely bolted face, instantly. Mid-swing a hand only takes rock
+  // its own stick is pushing it into.
+  const s = climber();
+  shoot(s, { x: 0.35, y: 1 });
+  run(s, 0.6, inp({ L: HANG }));
+  assert.equal(s.phase, 'swinging');
+  // Run to the turn of the pendulum, where the hand is slowest, and put a jug exactly where the
+  // swinging left hand is — the way a densely bolted face does by itself. The hand then sits
+  // inside that rock for far longer than the dwell, with nobody touching a stick.
+  for (let i = 0; i < 600 && !(s.body.vx > -0.02 && s.body.vx < 0.02); i++) step(s, inp(), DT);
+  const jug = { id: s.route.holds.length, x: s.hands.L.x, y: s.hands.L.y, size: 0.20, kind: 'hold', grip: 'jug', lit: false, angle: 0 };
+  s.route.holds.push(jug);
+  s._holdById.set(jug.id, jug);
+  let passes = 0;                                  // frames spent with a hand inside a hold
+  for (let i = 0; i < 600; i++) {
+    step(s, inp(), DT);                            // nothing on either stick: just hanging on
+    for (const side of ['L', 'R']) {
+      const h = s.hands[side];
+      if (h.nearId !== null && h.nearDist <= grabRadius(s._holdById.get(h.nearId))) passes++;
+    }
+  }
+  assert.ok(passes > CFG.HOVER_GRAB_DWELL / DT,
+    `only ${passes} frames of hand-on-rock: less than the dwell, so this proves nothing`);
+  assert.equal(s.phase, 'swinging', `the swing ended after ${passes} frames of hand-on-rock`);
+  assert.equal(s.hands.L.gripping, false);
+  assert.equal(s.hands.R.gripping, false);
+});
+
+test('swing: twelve seconds of pumping past holds never grabs one (B51)', () => {
+  // A pump is the left stick swept through the ring, over and over: that is how you drive a
+  // swing. Under a plain "is the stick pushed" rule the sweep counted as a reach, so pumping past
+  // a hold grabbed it, cut the line and spent a fall on a ~1.4 s cycle. The stick has to be
+  // POINTING at the rock for the whole dwell, and a sweep never dwells anywhere.
+  const s = climber();
+  shoot(s, { x: 0.35, y: 1 });
+  run(s, 0.6, inp({ L: HANG }));
+  assert.equal(s.phase, 'swinging');
+  // a jug in the path, so the test cannot pass by never meeting rock at all
+  const jug = { id: s.route.holds.length, x: s.hands.L.x, y: s.hands.L.y, size: 0.20, kind: 'hold', grip: 'jug', lit: false, angle: 0 };
+  s.route.holds.push(jug);
+  s._holdById.set(jug.id, jug);
+  drainEvents(s);
+  let onRock = 0;
+  const CYCLE = 1.4;
+  for (let t = 0; t < 12; t += DT) {
+    const x = Math.sin(2 * Math.PI * t / CYCLE);      // full deflection, sweeping through the ring
+    step(s, inp({ L: { x, y: 0.2 * Math.cos(2 * Math.PI * t / CYCLE) } }), DT);
+    for (const side of ['L', 'R']) {
+      const h = s.hands[side];
+      if (h.nearId !== null && h.nearDist <= grabRadius(s._holdById.get(h.nearId))) onRock++;
+    }
+  }
+  assert.ok(onRock * DT > CFG.HOVER_GRAB_DWELL,
+    `the pump only spent ${(onRock * DT).toFixed(2)} s with a hand on rock: it never met any`);
+  assert.equal(s.phase, 'swinging', 'the pump kept the swing');
+  assert.equal(s.hands.L.gripping, false);
+  const ev = types(s);
+  assert.ok(!ev.includes('grab'), `a pump grabbed something: [${ev}]`);
+  assert.ok(!ev.includes('webcut'), 'and so kept the line');
+});
+
+test('swing: reaching for a hold with the stick catches it, and ends the swing (B51)', () => {
+  const s = climber();
+  shoot(s, { x: 0.35, y: 1 });
+  run(s, 0.6, inp({ L: HANG }));
+  assert.equal(s.phase, 'swinging');
+  // steer the left hand at the nearest hold and hold it there: that is a reach, and it catches
   const near = s.route.holds.reduce((best, h) => {
     const d = Math.hypot(h.x - s.hands.L.x, h.y - s.hands.L.y);
     return d < best.d ? { h, d } : best;
   }, { h: null, d: Infinity });
-  const sh = shoulder(s, 'L');
-  const v = { x: (near.h.x - sh.x) / CFG.REACH, y: (near.h.y - sh.y) / CFG.REACH };
-  const m = Math.hypot(v.x, v.y); if (m > 1) { v.x /= m; v.y /= m; }
-  run(s, 1.2, inp({ holdR: true, L: v }));
-  step(s, inp({ holdR: true, L: v, tapL: true }), DT);
-  if (s.hands.L.gripping) {
-    assert.equal(s.phase, 'climbing', 'a caught hold ends the swing');
-    assert.equal(s.web.mode, 'idle');
+  for (let i = 0; i < 400 && s.phase === 'swinging'; i++) {
+    const sh = shoulder(s, 'L');
+    const v = { x: (near.h.x - sh.x) / CFG.REACH, y: (near.h.y - sh.y) / CFG.REACH };
+    const m = Math.hypot(v.x, v.y); if (m > 1) { v.x /= m; v.y /= m; }
+    step(s, inp({ L: v }), DT);
   }
+  assert.equal(s.hands.L.gripping, true, 'a deliberate reach still takes the rock');
+  assert.equal(s.phase, 'climbing', 'and that ends the swing');
+  assert.equal(s.web.mode, 'idle');
+});
+
+test('swing: the free hand parks where the pump left it (B45)', () => {
+  const s = climber();
+  shoot(s);
+  run(s, 0.6, inp({ L: HANG }));
+  assert.equal(s.phase, 'swinging');
+  run(s, 0.5, inp({ L: { x: 0.9, y: 0.2 } }));   // the left stick pumps the swing, and steers
+  const sh0 = shoulder(s, 'L');
+  const off = { x: s.hands.L.tx - sh0.x, y: s.hands.L.ty - sh0.y };
+  run(s, 1.5);                                                // thumb off: the pumping stops, the arm stays out
+  const sh1 = shoulder(s, 'L');
+  assert.equal(s.phase, 'swinging');
+  assert.ok(Math.abs(s.hands.L.tx - sh1.x - off.x) < 1e-9 && Math.abs(s.hands.L.ty - sh1.y - off.y) < 1e-9,
+    'the hand target rides the shoulder around the swing instead of drifting back to rest');
 });
 
 test('web: cutWeb from outside is safe when nothing is out', () => {
