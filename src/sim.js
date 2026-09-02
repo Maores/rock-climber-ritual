@@ -1,0 +1,404 @@
+// src/sim.js — Rock Climber: The Ritual — the pure climbing simulation.
+//
+// Owns the shared `state` described in CONTRACTS.md; every other module only reads it.
+// No three.js, no DOM. Units are meters, +y is up, +x is the climber's right, the wall
+// is the x/y plane. The model is kinematic with a physical feel: hands and body are
+// spring-damped toward targets, weight shifts on one-arm hangs, gravity acts only
+// while falling, and the rope (or the ground) catches every fall.
+//
+// Hold ids must equal their index in route.holds (route.js guarantees this).
+
+export const CFG = Object.freeze({
+  // --- contract constants -------------------------------------------------------------
+  REACH: 0.72,          // shoulder → fingertips; free hands never leave this circle
+  SNAP: 0.16,           // a grab succeeds when a hold center is within this distance of the hand
+  SHOULDER_DX: 0.19, SHOULDER_DY: 0.08,
+  HANG_TWO: 0.42,       // body hangs this far below the mean of two gripped holds
+  HANG_ONE: 0.50,       // ...and this far below a single gripped hold
+  ROPE_SLACK: 1.3,      // fall distance before the rope catches
+  GRACE: 0.25,          // seconds after the last release during which a grab still saves the fall
+  DRAIN_TWO: 0.05,      // stamina/s per hand while both hands grip
+  DRAIN_ONE: 0.20,      // stamina/s for the only gripping hand
+  REFILL_FREE: 0.18,    // stamina/s for a free hand
+  REFILL_RUNE: 0.50,    // stamina/s for a hand gripping a rune (runes never drain)
+  ARM_TIME: 2.5,        // an armed hand grabs the first hold that comes within SNAP for this long
+  SKIP_TIME: 1.0,       // a released hold is not re-grabbed for this long unless the hand leaves it
+  MAX_DT: 1 / 20,
+
+  // --- feel ---------------------------------------------------------------------------
+  SWAY: 0.05,           // one-hand hang: the body target leans this far past the loaded hold
+  REST_X: 0.14,         // free-hand rest offset from the shoulder (outward, up) when the stick is released
+  REST_Y: 0.30,
+  LINGER: 0.50,         // after the stick is released the hand keeps its place this long (lift the thumb, tap GRIP)...
+  DRIFT_TAU: 0.25,      // ...then drifts toward the rest offset with this time constant
+  HAND_OMEGA: 16, HAND_ZETA: 0.85,          // hand spring: quick, slightly under-damped = weight
+  GRAB_OMEGA: 45,       // a grabbed hand closes onto its hold at this critically damped rate (~0.15 s, no teleport)...
+  GRAB_LOCK: 0.002,     // ...and locks exactly onto it once this close
+  BODY_OMEGA: 7, BODY_ZETA_Y: 0.85, BODY_ZETA_X: 0.55,   // body: settles vertically, sways sideways
+  ROPE_OMEGA: 8, ROPE_ZETA: 0.40,           // rope stretch after a catch: one visible bounce
+  SWING_OMEGA: 3, SWING_ZETA: 0.9,          // the rope swings the caught body back under the line of holds
+  GRAVITY: 9.81,
+  FLOOR: 0.75,          // lowest body height (standing at the base); the ground catches falls near the start
+  HOVER_RANGE: 0.40,    // Hand.hover fades to 0 at this distance from the nearest hold
+  TREMBLE_AT: 0.30,     // tremble grows as stamina drops below this
+  CURL_RATE: 12, TREMBLE_RATE: 6,
+  ROPE_ANCHOR_UP: 1.6,  // rope anchor sits this far above the summit hold
+  EVENT_CAP: 64,        // undrained events are dropped beyond this
+});
+
+const ZERO_STICK = Object.freeze({ x: 0, y: 0 });
+const ZERO_INPUT = Object.freeze({ L: ZERO_STICK, R: ZERO_STICK, tapL: false, tapR: false });
+const SIGN = { L: -1, R: 1 };
+const OTHER = { L: 'R', R: 'L' };
+
+const clamp01 = (v) => (v < 0 ? 0 : v > 1 ? 1 : v);
+
+// ---------------------------------------------------------------------------------------
+// Construction
+
+function makeHand(side, hold) {
+  return {
+    side, x: hold.x, y: hold.y, vx: 0, vy: 0, tx: hold.x, ty: hold.y,
+    gripping: true, holdId: hold.id, armed: false,
+    stamina: 1, tremble: 0, curl: 1, hover: 1,
+    nearId: hold.id, nearDist: 0,             // nearest hold (extra, read-only convenience)
+    _stick: { x: 0, y: 0 }, _linger: 0, _armT: 0,   // internal
+    _skipId: null, _skipT: 0,                       // the hold just let go of, not re-grabbed at once
+  };
+}
+
+export function createClimber(route) {
+  const holds = route.holds;
+  const h0 = holds[0], h1 = holds[1];
+  const summit = holds.find((h) => h.kind === 'summit') || holds[holds.length - 1];
+  const state = {
+    t: 0,
+    phase: 'title',
+    body: { x: (h0.x + h1.x) / 2, y: (h0.y + h1.y) / 2 - CFG.HANG_TWO, vx: 0, vy: 0 },
+    hands: { L: makeHand('L', h0), R: makeHand('R', h1) },
+    ropeAnchor: { x: summit.x, y: summit.y + CFG.ROPE_ANCHOR_UP },
+    fallCount: 0, height: 0, maxHeight: 0,
+    runesLit: [], checkpoint: null, night: 0,
+    route, events: [],
+    _fall: { t: 0, from: 0, catchY: 0, catchX: 0 },
+    _holdById: new Map(holds.map((h) => [h.id, h])),
+  };
+  state.height = state.maxHeight = state.body.y;
+  state.night = clamp01(state.body.y / route.top);
+  return state;
+}
+
+export function startClimb(state) {
+  if (state.phase !== 'title') return;
+  state.phase = 'climbing';
+  state.t = 0;
+  push(state, { type: 'start' });
+}
+
+export function drainEvents(state) {
+  const out = state.events.slice();
+  state.events.length = 0;
+  return out;
+}
+
+// ---------------------------------------------------------------------------------------
+// Geometry helpers (also used by route.js and the tests)
+
+export function shoulder(state, side) {
+  return { x: state.body.x + SIGN[side] * CFG.SHOULDER_DX, y: state.body.y + CFG.SHOULDER_DY };
+}
+
+// Body target for the current grips: mean of two holds minus HANG_TWO, or one hold minus
+// HANG_ONE leaning SWAY toward the loaded arm. null when nothing is gripped.
+export function hangTarget(state) {
+  const { L, R } = state.hands;
+  const hl = L.gripping ? state._holdById.get(L.holdId) : null;
+  const hr = R.gripping ? state._holdById.get(R.holdId) : null;
+  if (hl && hr) return { x: (hl.x + hr.x) / 2, y: (hl.y + hr.y) / 2 - CFG.HANG_TWO };
+  if (hl) return { x: hl.x - CFG.SWAY, y: hl.y - CFG.HANG_ONE };
+  if (hr) return { x: hr.x + CFG.SWAY, y: hr.y - CFG.HANG_ONE };
+  return null;
+}
+
+// Where the free hand's shoulder settles while the other hand hangs alone from `hold`.
+// The route generator places every hold within 0.9·REACH of this point.
+export function restingShoulder(hold, freeSide) {
+  const gripSide = OTHER[freeSide];
+  const bx = hold.x + SIGN[gripSide] * CFG.SWAY;
+  const by = hold.y - CFG.HANG_ONE;
+  return { x: bx + SIGN[freeSide] * CFG.SHOULDER_DX, y: by + CFG.SHOULDER_DY };
+}
+
+export function nearestHold(state, x, y, exceptA = null, exceptB = null) {
+  let best = null, bestD = Infinity;
+  for (const h of state.route.holds) {
+    if (h.id === exceptA || h.id === exceptB) continue;
+    const dy = h.y - y;
+    if (dy > bestD || dy < -bestD) continue;      // cheap reject before the hypot
+    const d = Math.hypot(h.x - x, dy);
+    if (d < bestD) { bestD = d; best = h; }
+  }
+  return best ? { hold: best, d: bestD } : null;
+}
+
+// ---------------------------------------------------------------------------------------
+// Step
+
+export function step(state, input, dt) {
+  dt = Math.min(CFG.MAX_DT, Math.max(0, +dt || 0));
+  if (dt === 0) return;
+  const inp = input || ZERO_INPUT;
+  state.t += dt;
+  const live = state.phase === 'climbing' || state.phase === 'falling' || state.phase === 'caught';
+
+  if (live) {
+    if (inp.tapL) tap(state, state.hands.L);
+    if (inp.tapR) tap(state, state.hands.R);
+    updateStamina(state, dt);
+  }
+  updateBody(state, dt);
+  updateHand(state, state.hands.L, live ? inp.L : null, dt);
+  updateHand(state, state.hands.R, live ? inp.R : null, dt);
+
+  const b = state.body;
+  state.height = b.y;
+  if (b.y > state.maxHeight) state.maxHeight = b.y;
+  state.night = clamp01(b.y / state.route.top);
+}
+
+function push(state, ev) {
+  if (state.events.length < CFG.EVENT_CAP) state.events.push(ev);
+}
+
+function anyGripping(state) {
+  return state.hands.L.gripping || state.hands.R.gripping;
+}
+
+// Grabs work while climbing, while hanging on the rope, and in the grace window of a fall.
+function canGrab(state) {
+  return state.phase === 'climbing' || state.phase === 'caught' ||
+    (state.phase === 'falling' && state._fall.t <= CFG.GRACE);
+}
+
+// GRIP is a toggle: release when gripping; otherwise grab the nearest hold within SNAP,
+// or arm the hand so it grabs the first hold that comes within SNAP during ARM_TIME.
+function tap(state, hand) {
+  if (hand.gripping) { release(state, hand, 'release'); return; }
+  if (canGrab(state)) {
+    const near = targetHold(state, hand);
+    if (near && near.d <= CFG.SNAP) { grab(state, hand, near.hold); return; }
+    // A hold was close but not close enough: a real miss (the HUD shakes). A tap in empty rock,
+    // or right after letting go while still on the old hold, is a deliberate pre-arm: 'arm' only.
+    if (near && near.d <= CFG.HOVER_RANGE) push(state, { type: 'miss', hand: hand.side });
+  }
+  hand.armed = true;
+  hand._armT = CFG.ARM_TIME;
+  push(state, { type: 'arm', hand: hand.side });
+}
+
+// While another hand still grips, the hold this hand just released is skipped so that a
+// quick second tap arms the hand instead of taking the same hold again. Once the climber
+// is falling every hold counts: a panic re-grab inside the grace window saves the fall.
+function skipId(state, hand) {
+  return state.phase === 'climbing' ? hand._skipId : null;
+}
+
+// The hold this hand may take next: the nearest one that is neither the hold it just let go of
+// (while climbing) nor the hold the other hand is holding — two hands never share a hold.
+function targetHold(state, hand) {
+  const other = state.hands[OTHER[hand.side]];
+  return nearestHold(state, hand.x, hand.y, skipId(state, hand), other.gripping ? other.holdId : null);
+}
+
+function grab(state, hand, hold) {
+  hand.gripping = true;
+  hand.holdId = hold.id;
+  hand.armed = false;
+  hand._armT = 0;
+  hand.tx = hold.x;                    // the hand closes onto the hold over ~0.15 s (updateHand); no teleport
+  hand.ty = hold.y;
+  hand._stick.x = hand._stick.y = 0;   // the next release starts from a neutral stick
+  hand._linger = 0;
+  hand._skipId = null;
+  push(state, { type: 'grab', hand: hand.side, holdId: hold.id });
+  if (hold.kind === 'rune') {
+    state.checkpoint = hold.id;
+    if (!hold.lit) {
+      hold.lit = true;
+      state.runesLit.push(hold.id);
+      push(state, { type: 'rune', hand: hand.side, holdId: hold.id });
+    }
+  }
+  if (hold.kind === 'summit') {
+    hold.lit = true;
+    state.phase = 'summit';
+    push(state, { type: 'summit', hand: hand.side, holdId: hold.id });
+  } else {
+    state.phase = 'climbing';   // also ends a fall (grace) or a rope hang
+  }
+}
+
+function release(state, hand, type) {
+  const holdId = hand.holdId;
+  hand.gripping = false;
+  hand.holdId = null;
+  hand._linger = CFG.LINGER;   // the hand hangs where it is for a moment, then drifts to rest
+  if (type === 'release') { hand._skipId = holdId; hand._skipT = CFG.SKIP_TIME; }
+  push(state, { type, hand: hand.side, holdId });
+  if (state.phase === 'climbing' && !anyGripping(state)) beginFall(state);
+}
+
+function beginFall(state) {
+  state.phase = 'falling';
+  state._fall.t = 0;
+  state._fall.from = state.body.y;
+  push(state, { type: 'fall' });
+}
+
+function updateStamina(state, dt) {
+  const { L, R } = state.hands;
+  const both = L.gripping && R.gripping;
+  for (const hand of [L, R]) {
+    if (!hand.gripping) { hand.stamina = Math.min(1, hand.stamina + CFG.REFILL_FREE * dt); continue; }
+    const hold = state._holdById.get(hand.holdId);
+    if (hold.kind === 'rune' || hold.kind === 'summit') {
+      hand.stamina = Math.min(1, hand.stamina + CFG.REFILL_RUNE * dt);   // rest holds
+      continue;
+    }
+    hand.stamina -= (both ? CFG.DRAIN_TWO : CFG.DRAIN_ONE) * dt;
+    if (hand.stamina <= 0) { hand.stamina = 0; release(state, hand, 'slip'); }
+  }
+}
+
+// Mean x of the holds a climber hanging at height y could reach; `fallback` if there are none.
+function lineCenter(state, y, fallback) {
+  let sum = 0, n = 0;
+  for (const h of state.route.holds) {
+    if (Math.abs(h.y - y) <= CFG.REACH * 0.9) { sum += h.x; n++; }
+  }
+  return n ? sum / n : fallback;
+}
+
+// Semi-implicit spring-damper on one axis. Stable for omega·dt < 2 (dt ≤ 1/20 → ≤ 0.8).
+function spring(obj, pk, vk, target, omega, zeta, dt) {
+  const a = omega * omega * (target - obj[pk]) - 2 * zeta * omega * obj[vk];
+  obj[vk] += a * dt;
+  obj[pk] += obj[vk] * dt;
+}
+
+// Exact step of a critically damped spring: stable for any dt, for rates too high for the
+// semi-implicit integrator (the grab settle). d(t) = (d0 + (v0 + ω d0) t) e^(−ωt).
+function springCritical(obj, pk, vk, target, omega, dt) {
+  const d0 = obj[pk] - target, v0 = obj[vk];
+  const e = Math.exp(-omega * dt), k = (v0 + omega * d0) * dt;
+  obj[pk] = target + (d0 + k) * e;
+  obj[vk] = (v0 - k * omega) * e;
+}
+
+function updateBody(state, dt) {
+  const b = state.body;
+  if (state.phase === 'falling') {
+    const f = state._fall;
+    f.t += dt;
+    b.vy -= CFG.GRAVITY * dt;
+    b.vx *= Math.exp(-3 * dt);
+    b.x += b.vx * dt;
+    b.y += b.vy * dt;
+    const catchY = Math.max(f.from - CFG.ROPE_SLACK, CFG.FLOOR);
+    if (b.y <= catchY) {
+      b.y = catchY;
+      b.vy *= 0.35;               // the rope stretches: a short bounce below the catch point
+      f.catchY = catchY;
+      f.catchX = lineCenter(state, catchY + CFG.SHOULDER_DY + 0.35, b.x);
+      state.phase = 'caught';
+      state.fallCount += 1;
+      push(state, { type: 'catch' });
+    }
+    return;
+  }
+  if (state.phase === 'caught') {
+    spring(b, 'x', 'vx', state._fall.catchX, CFG.SWING_OMEGA, CFG.SWING_ZETA, dt);
+    spring(b, 'y', 'vy', state._fall.catchY, CFG.ROPE_OMEGA, CFG.ROPE_ZETA, dt);
+    return;
+  }
+  const tgt = hangTarget(state);   // title / climbing / summit
+  if (!tgt) return;
+  spring(b, 'x', 'vx', tgt.x, CFG.BODY_OMEGA, CFG.BODY_ZETA_X, dt);
+  spring(b, 'y', 'vy', tgt.y, CFG.BODY_OMEGA, CFG.BODY_ZETA_Y, dt);
+}
+
+function updateHand(state, hand, stickIn, dt) {
+  const sh = shoulder(state, hand.side);
+  const sgn = SIGN[hand.side];
+  const hold = hand.gripping ? state._holdById.get(hand.holdId) : null;
+
+  if (hold) {
+    // Close onto the hold — fast and critically damped — then lock exactly on it.
+    hand.tx = hold.x; hand.ty = hold.y;
+    if (hand.x !== hold.x || hand.y !== hold.y || hand.vx !== 0 || hand.vy !== 0) {
+      springCritical(hand, 'x', 'vx', hold.x, CFG.GRAB_OMEGA, dt);
+      springCritical(hand, 'y', 'vy', hold.y, CFG.GRAB_OMEGA, dt);
+      if (Math.hypot(hold.x - hand.x, hold.y - hand.y) < CFG.GRAB_LOCK && Math.hypot(hand.vx, hand.vy) < 0.1) {
+        hand.x = hold.x; hand.y = hold.y; hand.vx = hand.vy = 0;
+      }
+    }
+    hand.nearId = hold.id;
+    hand.nearDist = 0;
+    hand.hover = 1;
+  } else {
+    // Stick: immediate while pushed; on release it lingers, then decays toward rest.
+    const s = hand._stick;
+    let sx = 0, sy = 0, m = 0;
+    if (stickIn) {
+      sx = +stickIn.x || 0; sy = +stickIn.y || 0;
+      m = Math.hypot(sx, sy);
+      if (m > 1) { sx /= m; sy /= m; m = 1; }
+    }
+    if (m > 0.02) { s.x = sx; s.y = sy; hand._linger = CFG.LINGER; }
+    else if (hand._linger > 0) hand._linger -= dt;
+    else { const k = Math.exp(-dt / CFG.DRIFT_TAU); s.x *= k; s.y *= k; }
+
+    // Target = shoulder + stick·REACH, blended with the rest offset as the stick relaxes.
+    const sm = Math.min(1, Math.hypot(s.x, s.y));
+    let ox = sgn * CFG.REST_X * (1 - sm) + s.x * CFG.REACH;
+    let oy = CFG.REST_Y * (1 - sm) + s.y * CFG.REACH;
+    const om = Math.hypot(ox, oy);
+    if (om > CFG.REACH) { ox *= CFG.REACH / om; oy *= CFG.REACH / om; }
+    hand.tx = sh.x + ox;
+    hand.ty = sh.y + oy;
+
+    spring(hand, 'x', 'vx', hand.tx, CFG.HAND_OMEGA, CFG.HAND_ZETA, dt);
+    spring(hand, 'y', 'vy', hand.ty, CFG.HAND_OMEGA, CFG.HAND_ZETA, dt);
+
+    // Hard reach clamp; drop the outward velocity so the hand slides along the circle.
+    const rx = hand.x - sh.x, ry = hand.y - sh.y;
+    const rm = Math.hypot(rx, ry);
+    if (rm > CFG.REACH) {
+      const nx = rx / rm, ny = ry / rm;
+      hand.x = sh.x + nx * CFG.REACH;
+      hand.y = sh.y + ny * CFG.REACH;
+      const vout = hand.vx * nx + hand.vy * ny;
+      if (vout > 0) { hand.vx -= vout * nx; hand.vy -= vout * ny; }
+    }
+
+    if (hand.armed) { hand._armT -= dt; if (hand._armT <= 0) { hand.armed = false; hand._armT = 0; } }
+    if (hand._skipId !== null) {
+      hand._skipT -= dt;
+      const sk = state._holdById.get(hand._skipId);
+      if (hand._skipT <= 0 || !sk || Math.hypot(sk.x - hand.x, sk.y - hand.y) > CFG.SNAP + 0.04) hand._skipId = null;
+    }
+
+    const near = targetHold(state, hand);
+    hand.nearId = near ? near.hold.id : null;
+    hand.nearDist = near ? near.d : Infinity;
+    hand.hover = near ? clamp01(1 - near.d / CFG.HOVER_RANGE) : 0;
+    if (hand.armed && near && near.d <= CFG.SNAP && canGrab(state)) grab(state, hand, near.hold);
+  }
+
+  // Fingers curl onto a hold (a little anticipation when hovering); tremble grows as stamina fades.
+  const curlT = hand.gripping ? 1 : 0.25 * hand.hover;
+  hand.curl += (curlT - hand.curl) * (1 - Math.exp(-CFG.CURL_RATE * dt));
+  const low = clamp01((CFG.TREMBLE_AT - hand.stamina) / CFG.TREMBLE_AT);
+  const trembleT = hand.gripping ? low : 0.4 * low;
+  hand.tremble += (trembleT - hand.tremble) * (1 - Math.exp(-CFG.TREMBLE_RATE * dt));
+}

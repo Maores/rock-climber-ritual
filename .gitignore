@@ -1,0 +1,17 @@
+node_modules/
+.superpowers/
+.DS_Store
+.claude-events/
+
+# Build-run artifacts and private material -- never published.
+# (comments must be on their own line: git treats a trailing '#' as part of the pattern)
+# evidence screenshots + logs from the orchestrated run
+review/
+# The Climb 2 stills (Crytek, copyrighted) used only for private judging
+reference/
+# rejected hand models from the comparison page
+assets/models/candidates/
+# internal pages that reference the two folders above
+hands-compare.html
+reference-pick.html
+run-plan.html

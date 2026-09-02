@@ -1,0 +1,22 @@
+{
+  "name": "Rock Climber: The Ritual",
+  "short_name": "The Ritual",
+  "description": "A first-person climb up a sacred cliff at dusk. Two thumbs, two hands, one rope.",
+  "id": "./",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0a0c18",
+  "theme_color": "#0a0c18",
+  "lang": "en",
+  "categories": ["games"],
+  "icons": [
+    {
+      "src": "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'%3E%3Crect width='512' height='512' rx='112' fill='%230a0c18'/%3E%3Ccircle cx='256' cy='256' r='176' fill='none' stroke='%237fe0ff' stroke-width='16' opacity='.5'/%3E%3Cg fill='none' stroke='%237fe0ff' stroke-width='22' stroke-linecap='round'%3E%3Cpath d='M256 96v320M256 208l-96-96M256 208l96-96'/%3E%3Cpath d='M256 336l-72 72M256 336l72 72' opacity='.6'/%3E%3C/g%3E%3Ccircle cx='256' cy='256' r='24' fill='%237fe0ff'/%3E%3C/svg%3E",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}
