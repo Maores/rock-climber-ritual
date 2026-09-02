@@ -50,6 +50,12 @@ state = {
   web: Web,                            // the web-zip; `unlocked` is false until main.js reads the egg
   route: { holds: Hold[], fakes: Hold[], top, seed },
   events: Event[],                     // appended by step(); consumers call drainEvents()
+  unlimitedStamina: boolean,           // testing default, see B54 — createClimber defaults it false;
+                                       // main.js sets it from `?stamina` (default true: UNLIMITED) right
+                                       // after each `state.web.unlocked = spiderUnlocked()`. When true,
+                                       // updateStamina() early-outs: no drain, no forced release at 0,
+                                       // and no per-kind hang timer (a sloper's 9 s slip included).
+                                       // Decoys still crumble — that is rock, not stamina.
 }
 Hand  = { side:'L'|'R', x, y, vx, vy, tx, ty, gripping, holdId|null, armed, stamina 0..1, tremble 0..1, curl 0..1, hover 0..1,
           nearId, nearDist }             // nearest hold; read-only convenience for the HUD

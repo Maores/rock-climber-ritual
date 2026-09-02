@@ -29,6 +29,8 @@ const WATCHDOG_MIN_FPS = 24;
 const WATCHDOG_WARMUP = 4;      // seconds of shader-compile hitches ignored after boot
 const MIN_PIXEL_RATIO = 1.0;
 const query = new URLSearchParams(location.search);
+// B54: testing default while the controls are being reworked — flip to false to ship the real mechanic
+const UNLIMITED_STAMINA = !query.has('stamina');
 
 // ---------------------------------------------------------------------------------------------
 // Console-error counter — installed first so a boot failure is counted too. Evidence reads
@@ -398,6 +400,7 @@ function start() {
   perf.steps = 0;
   if (query.has('auto')) debug.autopilot(true);
   state.web.unlocked = spiderUnlocked();       // the egg, if the code has been typed
+  state.unlimitedStamina = UNLIMITED_STAMINA;
   hud.refreshCustomBtn();
 }
 
@@ -405,6 +408,7 @@ function restart() {
   state = createClimber(generateRoute(route.seed));   // fresh holds: nothing lit, nothing remembered
   perf.minFps = Infinity; perf.steps = 0;    // the overlay's min and step count are per climb, like start()
   state.web.unlocked = spiderUnlocked();
+  state.unlimitedStamina = UNLIMITED_STAMINA;
   startClimb(state);
   rig = createCameraRig(camera);
   rig.setPortrait(window.innerHeight >= window.innerWidth);
@@ -422,6 +426,7 @@ function restart() {
 function toTitle() {
   state = createClimber(generateRoute(route.seed));
   state.web.unlocked = spiderUnlocked();
+  state.unlimitedStamina = UNLIMITED_STAMINA;
   rig = createCameraRig(camera);
   rig.setPortrait(window.innerHeight >= window.innerWidth);
   auto.target = null;
