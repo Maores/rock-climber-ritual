@@ -73,7 +73,7 @@ Input = { L:{x,y,active}, R:{x,y,active}, tapL:boolean, tapR:boolean,
   // The sim reads `R` for the aim AND for the free right hand, so aiming points the hand too, and it parks there (B48).
 ```
 Constants live in `sim.js` as `CFG`: REACH 0.72, SNAP 0.16, SHOULDER_DX 0.19, SHOULDER_DY 0.08, HANG_TWO 0.42, HANG_ONE 0.50,
-GRACE 0.25, FLOOR 0.75, FALL_TERMINAL 26, drain two-hand 0.05/s, one-hand 0.20/s, refill free 0.18/s, rune refill 0.50/s, forced release at 0.
+GRACE 0.25, FLOOR 0.75, FALL_TERMINAL 26, drain per gripping hand 0.022/s with two hands on, 0.085/s with one, both times the hold's own multiplier (jug 0.65 to crimp 1.85), refill free 0.30/s, rune refill 0.50/s, forced release at 0.
 
 Behavior (kinematic with physical feel): free hands spring-damp toward `shoulder + stick × REACH`, and letting go of the stick
 leaves the hand there — the target is kept as an offset from the shoulder, so a parked hand rides along when the body moves, and it

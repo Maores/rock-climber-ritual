@@ -633,6 +633,11 @@ function updateHand(state, hand, stickIn, dt) {
     // without the flag keeps the pre-B45 meaning — only a non-zero stick steers — which is the
     // safe fallback, because ignoring a zero stick can only ever leave the hand where it is.
     if (m > 0.02 || (stickIn && stickIn.active === true)) { s.x = sx; s.y = sy; }
+    // A null stick is not a released stick: it is `step` saying the phase is not live at all —
+    // the title card, the summit, the death screen. Nobody is steering anything there, so the
+    // hand lets go of its reach and relaxes to the rest offset on the same spring, rather than
+    // holding an arm out mid-move through the whole of the crane over the altar or the drop.
+    else if (!stickIn) { s.x = 0; s.y = 0; }
 
     // Target = shoulder + stick·REACH, blended with the rest offset as the stick nears centre:
     // a hand that has not been steered since it last held rock hangs at rest.
