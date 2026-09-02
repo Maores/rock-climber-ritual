@@ -311,10 +311,9 @@ export function createInput({ hud = null, keyboard = true, win, now = defaultNow
       look.x = src.x; look.y = src.y;
     } else { look.x = 0; look.y = 0; }
     out.look = look;
-    // while the web pad is held, it IS the right grip, and its drag is the aim
+    // while the web pad is held, it IS the right grip; its drag is the aim, applied after the loop
     out.holdL = holds.L;
     out.holdR = holds.R || webActive;
-    if (webActive) { out.R.x = webVec.x; out.R.y = webVec.y; }
     for (const side of ['L', 'R']) {
       // Looking: nothing counts as on the stick, so the hand keeps the target it already has.
       if (lookHeld) { out[side].x = 0; out[side].y = 0; if (hud && typeof hud.setStick === 'function') hud.setStick(side, 0, 0); continue; }
@@ -326,6 +325,18 @@ export function createInput({ hud = null, keyboard = true, win, now = defaultNow
       out[side].active = active[side] !== null || side === mSide || keyed[side] || recenter[side];
       if (hud && typeof hud.setStick === 'function') hud.setStick(side, v.x, v.y);
     }
+    // The WEB pad's drag IS the aim, and it has to be written AFTER the loop: the loop rewrites
+    // out.R from the stick every frame, which used to swallow this and left every shot going
+    // wherever the right stick last pointed — straight up, on a phone, where that stick is not
+    // being touched at all. It beats the stick and LOOK for the frames the pad is held, because
+    // a thumb on the pad is aiming. The HUD knob is deliberately not fed the aim: it shows the
+    // physical stick, which nobody is touching.
+    //
+    // Aiming also points the free right hand, because the sim reads inp.R for the aim AND for
+    // that hand's steering. That is already how the desktop cursor works (it is the hand and the
+    // aim at once), and it is marked `active`, so under B45 the arm parks along the line it just
+    // shot instead of dropping back to rest: the spider hand stays pointing at its anchor.
+    if (webActive) { out.R.x = webVec.x; out.R.y = webVec.y; out.R.active = true; }
     recenter.L = recenter.R = false;
     return out;
   }

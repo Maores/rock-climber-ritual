@@ -266,6 +266,39 @@ test('input: active tells a stick nobody is touching from a stick reading zero (
   assert.equal(r.R.active, false, 'no key down: a held value is a parked hand, not a live steer');
 });
 
+test('input: the WEB pad is the right grip and its drag is the aim that reaches the sim (B47)', () => {
+  const knob = { L: null, R: null };
+  const hud = {
+    sticks: { L: ring(20, 600), R: ring(250, 600) }, grips: {},
+    webButton: ring(250, 400, 60),
+    setStick(side, x, y) { knob[side] = { x, y }; },
+  };
+  const input = createInput({ hud, keyboard: false, win: new FakeEl({}), now: () => 0 });
+  const b = hud.webButton;
+  const cx = 280, cy = 430;                                        // the pad's centre; PAD_RADIUS is 84 px
+  assert.equal(input.read().holdR, false);
+  b.fire('pointerdown', { pointerId: 5, clientX: cx, clientY: cy });
+  let r = input.read();
+  assert.equal(r.holdR, true, 'holding the pad IS the held right grip the sim aims on');
+  assert.deepEqual(r.R, { x: 0, y: 1, active: true }, 'a fresh pad aims straight up');
+  b.fire('pointermove', { pointerId: 5, clientX: cx + 84, clientY: cy - 84 });   // drag up and right
+  r = input.read();
+  near(r.R.x, Math.SQRT1_2); near(r.R.y, Math.SQRT1_2);
+  assert.equal(r.R.active, true, 'the aim steers the hand too, the way the desktop cursor does');
+  assert.deepEqual(knob.R, { x: 0, y: 0 }, 'the HUD knob still shows the stick, which nobody is touching');
+  // A finger on the right stick does not outvote the pad while it is held.
+  const st = hud.sticks.R;
+  st.fire('pointerdown', pt(st, -1, 0, 6));
+  r = input.read();
+  near(r.R.x, Math.SQRT1_2); near(r.R.y, Math.SQRT1_2);
+  st.fire('pointerup', pt(st, -1, 0, 6));
+  b.fire('pointerup', { pointerId: 5 });                           // letting go looses the shot
+  r = input.read();
+  assert.equal(r.holdR, false);
+  assert.deepEqual(r.R, { x: 0, y: 0, active: false }, 'and the hand parks where the aim left it (B45)');
+  input.dispose();
+});
+
 test('input: the mouse is always steering the hand it drives, and LOOK takes nothing over', () => {
   const hud = { sticks: { L: ring(20, 600), R: ring(250, 600) }, grips: {}, lookButton: ring(20, 400, 60) };
   const view = ring(0, 0, 800);

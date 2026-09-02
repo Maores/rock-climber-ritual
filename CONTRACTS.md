@@ -69,6 +69,8 @@ Input = { L:{x,y,active}, R:{x,y,active}, tapL:boolean, tapR:boolean,
   // stick `active`: something is on that stick this frame — a finger, the mouse driving that hand, a movement key, or a
   // recenter (Escape / a grip key, for one read). It is how the sim tells a stick nobody is touching from one reading
   // zero (B45); an Input without the flag is read the old way, where only a non-zero vector steers.
+  // while the WEB pad is held it IS holdR, and `R` carries the pad's drag as the aim, overriding that stick and LOOK.
+  // The sim reads `R` for the aim AND for the free right hand, so aiming points the hand too, and it parks there (B47).
 ```
 Constants live in `sim.js` as `CFG`: REACH 0.72, SNAP 0.16, SHOULDER_DX 0.19, SHOULDER_DY 0.08, HANG_TWO 0.42, HANG_ONE 0.50,
 GRACE 0.25, FLOOR 0.75, FALL_TERMINAL 26, drain two-hand 0.05/s, one-hand 0.20/s, refill free 0.18/s, rune refill 0.50/s, forced release at 0.
@@ -97,7 +99,7 @@ export function shoulder(state, side) → { x, y }
 export function aimPoint(state) → { x, y } | null     // where the web shot would land; the camera rig and the HUD reticle both read it
 export function cutWeb(state)                        // drop the line from outside the sim
 export function generateRoute(seed) also returns `fakes`; SEEDS / DEFAULT_SEED / normalizeSeed(v) back the route picker
-export function createInput({ hud, keyboard = true, win, now, mouse, getHands }) → { read(): Input, dispose() }   // input.js — touch/mouse on hud.sticks + hud.grips + hud.lookButton + hud.webButton (pointer events), keyboard WASD+Q / arrows+Enter or Slash; sticks: position mapping, zero and `active` false the moment the finger lifts; keyboard: integrating virtual stick that holds its value, `active` only while a key is down; taps are edge-triggered. `win` and `now` are injected so the tests can drive it headless
+export function createInput({ hud, keyboard = true, win, now, mouse, getHands }) → { read(): Input, dispose() }   // input.js — touch/mouse on hud.sticks + hud.grips + hud.lookButton + hud.webButton (pointer events), keyboard WASD+Q / arrows+Enter or Slash; sticks: position mapping, zero and `active` false the moment the finger lifts; keyboard: integrating virtual stick that holds its value, `active` only while a key is down; the WEB pad's drag replaces `R` while it is held; taps are edge-triggered. `win` and `now` are injected so the tests can drive it headless
 
 // world-light
 export async function createWorld({ renderer, scene, route, tier }) → world             // world.js — loads textures + HDRI itself (paths below)
