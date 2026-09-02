@@ -186,6 +186,45 @@ button:focus-visible { outline: 2px solid var(--rune); outline-offset: 2px; }
 }
 .code-hit { animation: codeHit 1.5s ease-out; }
 
+/* The route picker: generation is deterministic per seed, so these are the routes. */
+#seeds {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: center;
+  gap: 7px;
+  margin-top: 16px;
+  pointer-events: auto;
+}
+#seeds .lbl {
+  flex-basis: 100%;          /* its own line, so the four pills stay on one row on a 360 px phone */
+  margin-bottom: 2px;
+  font: 600 9.5px/1 var(--sans);
+  letter-spacing: 0.3em; text-indent: 0.3em; text-transform: uppercase;
+  color: var(--faint);
+}
+#seeds .seed {
+  -webkit-appearance: none; appearance: none;
+  padding: 9px 13px;
+  border-radius: 999px;
+  border: 1px solid rgba(241, 230, 216, 0.22);
+  background: rgba(20, 14, 11, 0.55);
+  color: var(--muted);
+  font: 600 11.5px/1 var(--sans);
+  letter-spacing: 0.08em;
+  cursor: pointer;
+  -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
+  transition: color 0.18s, border-color 0.18s, background 0.18s, transform 0.1s;
+}
+#seeds .seed:active { transform: scale(0.96); }
+#seeds .seed.on {
+  border-color: rgba(217, 154, 91, 0.75);
+  background: rgba(217, 154, 91, 0.16);
+  color: var(--text);
+}
+#seeds .seed.custom { cursor: default; font-variant-numeric: tabular-nums; }
+
+/* Nothing that only makes sense mid-climb belongs on top of a full-screen overlay: the two
+   pads used to float over the title's tap line and over the end screen's credits. */
+body.overlay-up #look, body.overlay-up #web { display: none; }
+
 /* LOOK: hold it and the free hand's stick turns your head instead of moving the hand. */
 #look {
   position: fixed;
@@ -288,7 +327,7 @@ button:focus-visible { outline: 2px solid var(--rune); outline-offset: 2px; }
 #custom {
   position: fixed; inset: 0; z-index: 60;
   display: grid; place-items: center;
-  padding: calc(20px + var(--sat)) 18px calc(20px + var(--sab));
+  padding: calc(20px + var(--sat)) calc(18px + var(--sar)) calc(20px + var(--sab)) calc(18px + var(--sal));
   background: rgba(10, 7, 6, 0.82);
   -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px);
 }
@@ -567,7 +606,7 @@ button:focus-visible { outline: 2px solid var(--rune); outline-offset: 2px; }
   display: flex; flex-direction: column;
   align-items: center; justify-content: center;
   text-align: center;
-  padding: calc(28px + var(--sat)) 22px calc(48px + var(--sab));
+  padding: calc(28px + var(--sat)) calc(22px + var(--sar)) calc(48px + var(--sab)) calc(22px + var(--sal));
   background:
     radial-gradient(ellipse at 50% 38%, rgba(91, 61, 110, 0.28), rgba(10, 12, 24, 0) 60%),
     linear-gradient(180deg, rgba(10, 12, 24, 0.58) 0%, rgba(10, 12, 24, 0.82) 55%, rgba(10, 12, 24, 0.95) 100%);
@@ -858,6 +897,16 @@ kbd {
 @keyframes bootslide { 0% { transform: translateX(-100%); } 100% { transform: translateX(350%); } }
 #boot .note { font: 500 11px/1 var(--sans); letter-spacing: 0.3em; text-indent: 0.3em; text-transform: uppercase; color: var(--faint); }
 
+/* very small portrait phones */
+@media (max-width: 360px) {
+  :root { --stick: 120px; --knob: 50px; --edge: 14px; }
+}
+/* large screens: keep the clusters thumb-sized but give the meter more presence */
+@media (min-width: 900px) {
+  :root { --stick: 150px; --knob: 60px; --edge: 34px; }
+  #height { font-size: 40px; }
+  #msg { font-size: 34px; }
+}
 /* ---- landscape phones: shorter controls, tighter title -------------------------- */
 @media (orientation: landscape) and (max-height: 520px) {
   :root { --stick: 112px; --knob: 48px; --edge: 14px; }
@@ -865,7 +914,7 @@ kbd {
   #height { font-size: 28px; }
   .overlay { padding-top: calc(12px + var(--sat)); padding-bottom: calc(30px + var(--sab)); }
   .overlay h1 { font-size: clamp(34px, 9vh, 64px); }
-  .sigil { width: 56px; margin: 8px 0 8px; }
+  .sigil { width: 50px; margin: 5px 0 6px; }   /* the route row needs the height */
   .card { padding: 10px 14px 9px; }
   .card h2 { margin-bottom: 6px; }
   .card .hint { margin-top: 6px; padding-top: 6px; }
@@ -877,16 +926,34 @@ kbd {
   .tap { margin-top: 12px; }
   .foot { display: none; }
   .overlay .inner { max-width: 560px; }
-}
-/* very small portrait phones */
-@media (max-width: 360px) {
-  :root { --stick: 120px; --knob: 50px; --edge: 14px; }
-}
-/* large screens: keep the clusters thumb-sized but give the meter more presence */
-@media (min-width: 900px) {
-  :root { --stick: 150px; --knob: 60px; --edge: 34px; }
-  #height { font-size: 40px; }
-  #msg { font-size: 34px; }
+  #seeds { margin-top: 8px; gap: 6px; }
+  #seeds .lbl { flex-basis: auto; margin: 0 3px 0 0; }
+  #seeds .seed { padding: 7px 12px; font-size: 11px; }
+
+  /* The end screen was built for a tall phone: 625 px of content in a 390 px window, clipped
+     top and bottom, with "Climb again" 56 px below the edge and no way to reach it. Trim it to
+     fit, and let it scroll anyway if a narrower phone still runs out of room. */
+  #end { padding-bottom: calc(12px + var(--sab)); justify-content: flex-start; overflow-y: auto; touch-action: pan-y; }
+  #end .inner { margin: auto 0; }            /* centred when it fits, never clipped when it does not */
+  #end .sigil { display: none; }
+  #end h1 { font-size: 26px; margin-top: 6px; }
+  #end .stats { margin: 12px 0 10px; gap: 8px; }
+  #end .stat { padding: 8px 6px 7px; }
+  #end .stat b { font-size: 22px; }
+  #end .stat span { font-size: 9px; }
+  #end .credits { max-height: 96px; overflow-y: auto; touch-action: pan-y; font-size: 10.5px; line-height: 1.5; padding: 9px 11px; }
+  #end .btn { margin-top: 10px; padding: 11px 22px; }
+
+  /* The hand panel: the square swatches pushed the panel past the bottom of the screen and the
+     Climb button under the home indicator. */
+  #custom { padding-top: calc(10px + var(--sat)); padding-bottom: calc(10px + var(--sab)); }
+  #custom .panel { padding: 14px 16px 12px; }
+  #custom h2 { font-size: 17px; }
+  #custom .hint { margin-bottom: 10px; font-size: 12px; }
+  #custom .skins { gap: 8px; }
+  #custom .skin { padding: 9px 8px 8px; }
+  #custom .swatch { aspect-ratio: auto; height: 74px; margin-bottom: 6px; }
+  #custom .close { margin-top: 10px; padding: 10px; }
 }
 @media (prefers-reduced-motion: reduce) {
   .sigil, .tap, .grip.armed, .grip.slipping, .stick .arc.crit, .stick.crit, #vig.beat, #runes .dot.pop, .card .mini-ring.push i { animation: none; }

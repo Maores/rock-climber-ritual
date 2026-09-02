@@ -455,6 +455,14 @@ export function createHud(root) {
   let titleShown = false;
   let started = false;
 
+  // The LOOK and WEB pads are fixed to the bottom of the screen above everything, which put them
+  // on top of the title's tap line in landscape and over the end screen's credits in both. They
+  // belong to the climb, so they go away whenever a full-screen overlay is up.
+  function syncOverlayFlag() {
+    const up = titleShown || endShown || !!(customEl && !customEl.hidden);
+    if (doc.body && doc.body.classList) doc.body.classList.toggle('overlay-up', up);
+  }
+
   function controlsHtml(touch) {
     if (touch) {
       // a picture of the two thumb clusters: the left one pushes its stick, the right one holds
@@ -488,6 +496,46 @@ export function createHud(root) {
     return CREDITS.slice(0, 3).map((c) => escapeHtml(c.text) + ' (' + escapeHtml(c.license.replace('Licensed under Creative Commons: By Attribution 4.0', 'CC BY 4.0')) + ')').join(' · ');
   }
 
+  // ---- the route picker -------------------------------------------------------------------
+  // Generation is deterministic per seed, so a seed is a route. The integrator hands over the
+  // hand-checked roster and which one is loaded; picking a different one is its business (it
+  // means rebuilding the cliff), so all this does is report the choice.
+  const seedCbs = [];
+  function onSeed(cb) {
+    if (typeof cb === 'function') seedCbs.push(cb);
+    return hud;
+  }
+  function renderSeeds(list, current) {
+    const inner = titleEl.querySelector('.inner');
+    let row = byId('seeds');
+    if (!Array.isArray(list) || !list.length) { if (row) row.remove(); return; }
+    if (!row) {
+      row = doc.createElement('div');
+      row.id = 'seeds';
+      row.setAttribute('role', 'group');
+      row.setAttribute('aria-label', 'Choose a route');
+      // a pointer on a route pill picks a route; it must not also start the climb
+      row.addEventListener('pointerdown', (e) => e.stopPropagation());
+      row.addEventListener('click', (e) => {
+        const b = e.target && e.target.closest ? e.target.closest('button[data-seed]') : null;
+        if (!b) return;
+        e.stopPropagation();
+        const n = +b.getAttribute('data-seed');
+        for (const cb of seedCbs) { try { cb(n); } catch (err) { console.error(err); } }
+      });
+      const tapEl = byId('tap');
+      if (tapEl && tapEl.parentNode === inner) inner.insertBefore(row, tapEl);
+      else inner.appendChild(row);
+    }
+    const known = list.some((r) => r.seed === current);
+    row.innerHTML = '<span class="lbl">Route</span>' +
+      list.map((r) => '<button class="seed' + (r.seed === current ? ' on' : '') + '" type="button" data-seed="' +
+        (r.seed | 0) + '" title="' + escapeHtml(r.note || '') + '" aria-pressed="' + (r.seed === current) + '">' +
+        escapeHtml(r.name) + '</button>').join('') +
+      // an unlisted ?seed= is shown as it is, so you can always see which line you are on
+      (known ? '' : '<span class="seed on custom" aria-current="true">Seed ' + (current | 0) + '</span>');
+  }
+
   function isStartKey(e) {
     if (e.metaKey || e.ctrlKey || e.altKey) return false;
     const k = e.key;
@@ -497,7 +545,7 @@ export function createHud(root) {
     return true;
   }
   function onTitlePointer(e) {
-    if (e.target && e.target.closest && e.target.closest('a, #mute')) return;
+    if (e.target && e.target.closest && e.target.closest('a, #mute, #seeds')) return;
     begin();
   }
   // ---- the code -------------------------------------------------------------------------
@@ -528,6 +576,8 @@ export function createHud(root) {
 
   function onTitleKey(e) {
     if (onTitleLetter(e)) { e.preventDefault(); e.stopPropagation(); return; }
+    // Enter or space on a focused route pill activates the pill, not the climb.
+    if ((e.key === 'Enter' || e.key === ' ') && e.target && e.target.closest && e.target.closest('#seeds')) return;
     if (!titleShown || !isStartKey(e)) return;
     e.preventDefault();
     // Registered in the capture phase on window: stopping here keeps the same keydown from reaching
@@ -557,16 +607,19 @@ export function createHud(root) {
     if (tap) tap.textContent = touch ? 'Tap to begin' : 'Click or press any key to begin';
     const foot = byId('title-foot');
     if (foot) foot.innerHTML = footHtml();
+    renderSeeds(opts.seeds, opts.seed);
     titleEl.hidden = false;
     titleEl.classList.remove('hide');
     dismissBoot();
     titleShown = true;
     started = false;
+    syncOverlayFlag();
     titleEl.addEventListener('pointerdown', onTitlePointer);
     window.addEventListener('keydown', onTitleKey, true);
   }
   function hideTitle() {
     titleShown = false;
+    syncOverlayFlag();
     titleEl.removeEventListener('pointerdown', onTitlePointer);
     window.removeEventListener('keydown', onTitleKey, true);
     titleEl.classList.add('hide');
@@ -600,6 +653,7 @@ export function createHud(root) {
   function showEnd(stats) {
     const s = normalizeStats(stats);
     endShown = true;
+    syncOverlayFlag();
     clearTimeout(endTimer);
     const inner = endEl.querySelector('.inner') || endEl;
     const h1 = ensure('end-title', 'h1', inner);
@@ -640,6 +694,7 @@ export function createHud(root) {
     if (hudEl && hudEl.classList) hudEl.classList.remove('dead');   // a fresh climb clears the veil
     if (endEl && endEl.classList) endEl.classList.remove('dead');
     endShown = false;
+    syncOverlayFlag();
     endEl.classList.add('hide');
     setTimeout(() => { if (!endShown) endEl.hidden = true; }, 950);
     showHud();
@@ -729,8 +784,8 @@ export function createHud(root) {
     if (!customEl) return;
     customEl.querySelectorAll('.skin').forEach((b) => b.classList.toggle('on', b.dataset.skin === cur));
   }
-  function openCustom() { if (customEl) { markSkin(); customEl.hidden = false; } }
-  function closeCustom() { if (customEl) customEl.hidden = true; }
+  function openCustom() { if (customEl) { markSkin(); customEl.hidden = false; syncOverlayFlag(); } }
+  function closeCustom() { if (customEl) { customEl.hidden = true; syncOverlayFlag(); } }
   function refreshCustomBtn() { if (customBtn) customBtn.hidden = !spiderUnlocked(); }
   if (customEl) {
     customEl.querySelectorAll('.skin').forEach((b) => b.addEventListener('click', () => {
@@ -803,6 +858,7 @@ export function createHud(root) {
     showTitle,
     hideTitle,
     onStart,
+    onSeed,
     showEnd,
     hideEnd,
     onRestart,

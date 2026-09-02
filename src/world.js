@@ -453,6 +453,54 @@ export async function createWorld({ renderer, scene, route, tier }) {
   }
 
   // ---------------------------------------------------------------------------------------
+  // Decoy dust: one small pool of grit, fired by the sim's `crumble` event. A decoy that gave way
+  // had the sound and the tumble but nothing in the air, so it read as a rock deciding to leave.
+  // Non-additive so it reads as dust rather than another glow, and dimmed with the night so it
+  // does not float on the dark like a lamp.
+  const DUST_MAX = 42;                 // two overlapping bursts; the pool never grows
+  const DUST_PER = 18;                 // particles per decoy
+  const DUST_COLOR = new THREE.Color(0xbda285);
+  const dust = createParticles({
+    count: DUST_MAX, texture: env.softTex, color: DUST_COLOR.getHex(),
+    size: 0.075, opacity: 0.95, additive: false, maxPx: 34,
+  });
+  dust.points.renderOrder = 3;
+  const dustVel = new Float32Array(DUST_MAX * 3);
+  const dustAge = new Float32Array(DUST_MAX);
+  const dustLife = new Float32Array(DUST_MAX);
+  const _dustCol = new THREE.Color();
+  let dustNext = 0, dustLive = 0;
+  for (let i = 0; i < DUST_MAX; i++) { dust.alphas[i] = 0; dustAge[i] = 1; dustLife[i] = 1; }
+  dust.commit();
+  root.add(dust.points);
+
+  // Decoys never move, so their positions can be looked up by id once.
+  const fakeById = new Map();
+  for (const f of fakes) fakeById.set(f.id, f);
+
+  // A burst: grit thrown out of the socket, mostly sideways and down, with the puff hanging
+  // where the rock was. Oldest particles are recycled, so a second decoy never grows the pool.
+  function burstDust(x, y, z) {
+    for (let n = 0; n < DUST_PER; n++) {
+      const i = dustNext;
+      dustNext = (dustNext + 1) % DUST_MAX;
+      const a = Math.random() * Math.PI * 2;
+      const sp = 0.25 + Math.random() * 1.05;
+      const k = i * 3;
+      dust.positions[k] = x + Math.cos(a) * 0.05;
+      dust.positions[k + 1] = y + Math.sin(a) * 0.05;
+      dust.positions[k + 2] = z + 0.02 + Math.random() * 0.05;
+      dustVel[k] = Math.cos(a) * sp;
+      dustVel[k + 1] = Math.sin(a) * sp * 0.55 - 0.25;      // biased downward: the rock is falling
+      dustVel[k + 2] = 0.25 + Math.random() * 0.5;          // out of the face, toward the climber
+      dustAge[i] = 0;
+      dustLife[i] = 0.55 + Math.random() * 0.55;
+      dust.alphas[i] = 0;
+    }
+    dustLive = DUST_MAX;                 // let the update loop find the dead ones itself
+  }
+
+  // ---------------------------------------------------------------------------------------
   // Rope: harness → anchor, our own tube so we can rewrite the vertices every frame without GC.
   const ropeTex = makeRopeTexture();
   const rope = createRopeMesh(ropeTex);
@@ -529,7 +577,7 @@ export async function createWorld({ renderer, scene, route, tier }) {
     for (const h of (r && r.holds) || []) holdById.set(h.id, h);
   }
 
-  function update(dt, state, camera) {
+  function update(dt, state, camera, events) {
     dt = Math.min(0.1, Math.max(0, dt || 0));
     t += dt;
     syncRoute(state);
@@ -600,6 +648,16 @@ export async function createWorld({ renderer, scene, route, tier }) {
     }
 
     // --- decoys: a rock that gave way tips out of the face and drops into the fog -----------
+    // The sim says when one gives; the dust is fired from that event so it lands on the frame
+    // the hand comes off, not a frame later from a polled flag.
+    if (events && events.length) {
+      for (let i = 0; i < events.length; i++) {
+        const e = events[i];
+        if (!e || e.type !== 'crumble') continue;
+        const f = fakeById.get(e.holdId);
+        if (f) burstDust(f.x, f.y, holdZ(f));
+      }
+    }
     for (const fp of fakeParts) {
       if (!fp.fake.broken) continue;
       if (fp.fall === 0) fp.vy = -0.4;
@@ -609,6 +667,32 @@ export async function createWorld({ renderer, scene, route, tier }) {
       fp.group.position.z += 0.35 * dt;
       fp.group.rotation.z += fp.spin * dt;
       if (fp.fall > 4 || fp.group.position.y < -60) fp.group.visible = false;
+    }
+
+    // --- decoy dust ------------------------------------------------------------------------
+    if (dustLive > 0) {
+      const p = dust.positions, a = dust.alphas;
+      let alive = 0;
+      for (let i = 0; i < DUST_MAX; i++) {
+        if (dustAge[i] >= dustLife[i]) { a[i] = 0; continue; }
+        dustAge[i] += dt;
+        const k = i * 3;
+        dustVel[k + 1] -= 3.2 * dt;                      // grit falls, but lightly: it is dust
+        const drag = Math.exp(-dt * 3.4);                // and it loses the throw fast
+        dustVel[k] *= drag; dustVel[k + 1] *= drag; dustVel[k + 2] *= drag;
+        p[k] += dustVel[k] * dt;
+        p[k + 1] += dustVel[k + 1] * dt;
+        p[k + 2] += dustVel[k + 2] * dt;
+        const life = Math.min(1, dustAge[i] / dustLife[i]);
+        a[i] = Math.min(1, life * 7) * (1 - life) * (1 - life);   // snaps on, hangs, thins out
+        alive++;
+      }
+      dustLive = alive;
+      dust.setHeightPx(_size.y);
+      // uTime is deliberately left at 0: the shader's twinkle then becomes a fixed per-particle
+      // brightness instead of a shimmer, which is what grit wants and embers do not.
+      dust.setColor(_dustCol.copy(DUST_COLOR).multiplyScalar(1 - 0.55 * night));
+      dust.commit();
     }
 
     // --- embers ----------------------------------------------------------------------------
@@ -716,6 +800,8 @@ export async function createWorld({ renderer, scene, route, tier }) {
   return {
     wallZ, holdZ, update, setTier,
     env, root, wall, holds: holdsMesh, chalk: chalkMesh, runes, altar, waymarks: waymarkMesh, rope: rope.mesh, embers, hoverRings,
+    dust,
+    get dustLive() { return dustLive; },
     get time() { return t; },
   };
 }

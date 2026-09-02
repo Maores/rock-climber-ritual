@@ -9,7 +9,7 @@
 
 import * as THREE from 'three';
 import { CFG, createClimber, startClimb, step, drainEvents, shoulder, hangTarget, aimPoint } from './sim.js';
-import { generateRoute, intendedHand } from './route.js';
+import { generateRoute, intendedHand, SEEDS, DEFAULT_SEED, normalizeSeed } from './route.js';
 import { createInput } from './input.js';
 import { createWebLine } from './webLine.js';
 import { createWebFx } from './webFx.js';
@@ -76,7 +76,11 @@ const camera = new THREE.PerspectiveCamera(80, window.innerWidth / Math.max(1, w
 // ---------------------------------------------------------------------------------------------
 // Domains that need no assets: sim, HUD, audio, input
 
-const route = generateRoute(7);
+// The cliff is generated from a seed and generation is deterministic, so a seed IS the route.
+// `?seed=` picks one; the four in SEEDS are the hand-checked lines the title screen offers, and
+// any other number still generates under the same rules with only the bot's word for it.
+const seed = query.has('seed') ? normalizeSeed(query.get('seed')) : DEFAULT_SEED;
+const route = generateRoute(seed);
 let state = createClimber(route);
 
 const hud = createHud(document.body);
@@ -382,6 +386,15 @@ function restart() {
 
 hud.onStart(start);
 hud.onRestart(restart);
+// Picking a route rebuilds the cliff, the holds, the decoys and the arms, so it goes through the
+// URL and one reload rather than a half-hearted in-place swap. It only happens on the title
+// screen, before anything has been climbed, and it leaves a link that opens the same route.
+hud.onSeed((next) => {
+  if (!Number.isFinite(next) || next === seed) return;
+  const q = new URLSearchParams(location.search);
+  q.set('seed', String(normalizeSeed(next)));
+  location.search = q.toString();
+});
 
 // ---------------------------------------------------------------------------------------------
 // Frame loop
@@ -443,7 +456,7 @@ function frame(now) {
 
   // Render domains, in contract order.
   renderer.info.reset();
-  world.update(dt, state, camera);
+  world.update(dt, state, camera, events);   // events: the decoy dust is fired by 'crumble'
   arms.update(dt, state, world.wallZ, camera);
   updateWebLine(dt);
   rig.update(dt, state, world.wallZ, events, lookIn,
@@ -491,7 +504,7 @@ async function boot() {
   post.setNight(state.night);
   post.render(0);
 
-  hud.showTitle({ touch });
+  hud.showTitle({ touch, seeds: SEEDS, seed });
   if (query.has('fps')) overlay(true);
   last = performance.now();
   requestAnimationFrame(frame);
@@ -504,13 +517,14 @@ window.__ritual = {
   get rig() { return rig; },
   get post() { return post; },
   hud, audio, input, renderer, scene, camera, tier, perf, errors, debug,
-  sim: { CFG, createClimber, startClimb, step, drainEvents, shoulder, generateRoute },
+  seed,
+  sim: { CFG, createClimber, startClimb, step, drainEvents, shoulder, generateRoute, SEEDS },
   get ready() { return !!(world && arms); },
 };
 
 boot().catch((err) => {
   console.error('[ritual] boot failed', err);
-  hud.showTitle({ touch });
+  hud.showTitle({ touch, seeds: SEEDS, seed });
   hud.message('Could not load the cliff — ' + (err && err.message ? err.message : err), 12000);
 });
 

@@ -47,6 +47,7 @@ export function createAudio() {
 
   const heart = { t: 0.4, beats: 0 };
   let gust = 0, gustV = 0, autoT = 0;
+  let duck = 0, duckSent = -1;      // 0 = music at full, 1 = fully under the wind
   let lastPhase = null;
   let cuesThisFrame = 0;
 
@@ -68,6 +69,7 @@ export function createAudio() {
         muted: audio.muted,
         wind: wind ? { level: +wind.level.toFixed(3), gain: +wind.gBp.gain.value.toFixed(3), rumble: +wind.gLp.gain.value.toFixed(3), hz: Math.round(wind.bp.frequency.value) } : null,
         music: music ? { url: musicUrl, playing: (!music.paused && !music.ended) || !!(musicFallback && musicFallback.src), time: +music.currentTime.toFixed(1), duration: isFinite(music.duration) ? +music.duration.toFixed(1) : null, gain: musicGain ? +musicGain.gain.value.toFixed(3) : null, readyState: music.readyState, fallback: !!musicFallback } : null,
+        duck: +duck.toFixed(3),
         heartIn: +heart.t.toFixed(2),
         heartbeats: heart.beats,
         rms: rms(),
@@ -286,14 +288,13 @@ export function createAudio() {
       const t = now();
       noise(t, 0.95, 0.42, { type: 'bandpass', f0: 280, f1: 1600, q: 0.7, a: 0.16 });
       noise(t, 0.95, 0.24, { type: 'lowpass', f0: 220, f1: 90, a: 0.1, q: 0.5 });
-      if (musicGain) musicGain.gain.setTargetAtTime(MUSIC_GAIN * 0.45, t, 0.12);
+      // the music gets out of the way on its own now — updateDuck() follows the wind bed
     },
     catch() {
       const t = now();
       tone('sine', 54, 30, t, 0.45, 0.78, 0.004);                 // harness thump
       noise(t, 0.15, 0.4, { type: 'lowpass', f0: 380, f1: 110, a: 0.002 });
       tone('sawtooth', 200, 105, t + 0.04, 0.28, 0.045, 0.02);    // rope creak
-      if (musicGain) musicGain.gain.setTargetAtTime(audio.muted ? 0 : MUSIC_GAIN, t + 0.6, 1.2);
     },
     summit() {
       const t = now();
@@ -344,6 +345,30 @@ export function createAudio() {
     }
   }
 
+  // The music sat at a fixed gain and fought the wind: during a plunge the bed roars up to five
+  // times its climbing level and the loop kept playing straight through it. The duck reads the
+  // same `wind.level` the bed is built from, so it is the wind that pushes the music down, not a
+  // list of events — a doomed fall that never gets a rope catch still comes back up afterwards.
+  // Fast to duck (0.16 s: the roar is already there), slow to lift (1.1 s), so the return is a
+  // fade rather than a switch.
+  const DUCK_FROM = 0.42;          // wind level where the music starts giving way
+  const DUCK_TO = 1.05;            // and where it is as far down as it goes
+  const DUCK_DEPTH = 0.75;         // 1 = silent; a plunge leaves the music at a quarter of full
+
+  function updateDuck(dt) {
+    if (!wind) return;
+    const level = wind.level;
+    const x = clamp((level - DUCK_FROM) / (DUCK_TO - DUCK_FROM), 0, 1);
+    const target = x * x * (3 - 2 * x);                   // smoothstep: no step when a gust crosses
+    const tc = target > duck ? 0.16 : 1.1;                // duck fast, come back slowly
+    duck += (target - duck) * (1 - Math.exp(-dt / tc));
+    if (!musicGain || !musicWanted || audio.muted) return;
+    const g = MUSIC_GAIN * (1 - DUCK_DEPTH * duck);
+    if (Math.abs(g - duckSent) < 0.002) return;           // only touch the graph when it moves
+    duckSent = g;
+    musicGain.gain.setTargetAtTime(g, now(), 0.08);
+  }
+
   function updateHeart(state, dt) {
     const L = state.hands && state.hands.L, R = state.hands && state.hands.R;
     const minS = Math.min(L ? L.stamina : 1, R ? R.stamina : 1);
@@ -376,6 +401,7 @@ export function createAudio() {
     if (!state || !ctx || !audio.unlocked) return;
     dt = clamp(+dt || 1 / 60, 0, 0.1);
     updateWind(state, dt);
+    updateDuck(dt);
     updateHeart(state, dt);
     lastPhase = state.phase;
   }
@@ -496,11 +522,13 @@ export function createAudio() {
     if (p && p.then) {
       p.then(() => {
         musicWanted = true;
-        if (musicGain) musicGain.gain.setTargetAtTime(MUSIC_GAIN, now(), 1.6);
+        duckSent = -1;
+        if (musicGain) musicGain.gain.setTargetAtTime(MUSIC_GAIN * (1 - DUCK_DEPTH * duck), now(), 1.6);
       }, () => armRetry());
     } else {
       musicWanted = true;
-      if (musicGain) musicGain.gain.setTargetAtTime(MUSIC_GAIN, now(), 1.6);
+      duckSent = -1;
+      if (musicGain) musicGain.gain.setTargetAtTime(MUSIC_GAIN * (1 - DUCK_DEPTH * duck), now(), 1.6);
     }
   }
 
@@ -556,7 +584,8 @@ export function createAudio() {
       src.start();
       musicFallback.src = src;
       musicWanted = true;
-      musicGain.gain.setTargetAtTime(MUSIC_GAIN, now(), 1.6);
+      duckSent = -1;
+      musicGain.gain.setTargetAtTime(MUSIC_GAIN * (1 - DUCK_DEPTH * duck), now(), 1.6);
     } catch (err) {
       console.warn('music: element and decoded fallback both failed', err);
       musicFallback = null;

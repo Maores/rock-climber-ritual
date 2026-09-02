@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { generateRoute, intendedHand, ROUTE } from '../src/route.js';
+import { generateRoute, intendedHand, ROUTE, SEEDS, DEFAULT_SEED, normalizeSeed } from '../src/route.js';
 import { CFG, restingShoulder } from '../src/sim.js';
 
 const route = generateRoute(7);
@@ -135,4 +135,23 @@ test('route: hold quality hardens with height, and the rests are always jugs', (
   if (grips.some((h) => h.grip === 'crimp') && grips.some((h) => h.grip === 'jug')) {
     assert.ok(avg('crimp') < avg('jug') * 0.85, `crimps ${avg('crimp').toFixed(3)} vs jugs ${avg('jug').toFixed(3)}`);
   }
+});
+
+test('route: ?seed= is parsed strictly, and each roster seed really is a different route', () => {
+  assert.equal(normalizeSeed('19'), 19);
+  assert.equal(normalizeSeed(19), 19);
+  assert.equal(normalizeSeed('19.7'), 19);              // trunc, not round: 19.7 is still route 19
+  assert.equal(normalizeSeed('abc'), DEFAULT_SEED);
+  assert.equal(normalizeSeed(''), DEFAULT_SEED);
+  assert.equal(normalizeSeed(null), DEFAULT_SEED);
+  assert.equal(normalizeSeed(undefined), DEFAULT_SEED);
+  assert.equal(normalizeSeed('0'), DEFAULT_SEED);        // 0 would fall back to the generator's own
+  assert.equal(normalizeSeed('-4'), DEFAULT_SEED);
+  assert.equal(normalizeSeed('100000'), DEFAULT_SEED);
+  assert.equal(normalizeSeed(Infinity), DEFAULT_SEED);
+  assert.equal(normalizeSeed('7'), 7);
+
+  const lines = SEEDS.map((r) => JSON.stringify(generateRoute(r.seed).holds.map((h) => [h.x, h.y])));
+  assert.equal(new Set(lines).size, SEEDS.length, 'two routes on the roster are the same wall');
+  for (const r of SEEDS) assert.equal(generateRoute(r.seed).seed, r.seed);
 });

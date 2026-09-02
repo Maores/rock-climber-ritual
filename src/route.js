@@ -59,6 +59,29 @@ const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
 const OTHER = { L: 'R', R: 'L' };
 const SIGN = { L: -1, R: 1 };
 
+// The routes the game offers. Generation is deterministic per seed and every seed from 1 to 40
+// was put through the playability bot, so this roster is a choice of character, not of validity:
+// each one was then walked in the browser as well. `test/playability.test.js` climbs every seed
+// listed here, so a seed cannot stay on the list if it stops being climbable.
+//   7  the line the game shipped with — a balanced wall
+//   21 the most generous: 42 jugs, only 5% poor rock down low, 40% up high
+//   4  the widest line, wandering 0.70 m either side of centre
+//   19 the meanest: 31 crimps and 18 slopers, 68% poor rock up high, and 9 decoys
+export const SEEDS = Object.freeze([
+  Object.freeze({ seed: 7, name: 'Ritual', note: 'The original line' }),
+  Object.freeze({ seed: 21, name: 'Ladder', note: 'Buckets, and a kinder top' }),
+  Object.freeze({ seed: 4, name: 'Serpent', note: 'Wanders furthest across the face' }),
+  Object.freeze({ seed: 19, name: 'Ordeal', note: 'Crimps, slopers and nine decoys' }),
+]);
+
+export const DEFAULT_SEED = 7;
+
+// A seed from outside the game (the ?seed= parameter). Anything unparseable is the default.
+export function normalizeSeed(v) {
+  const n = Math.trunc(Number(v));
+  return Number.isFinite(n) && n >= 1 && n <= 9999 ? n : DEFAULT_SEED;
+}
+
 export function generateRoute(seed = 7) {
   const rnd = mulberry32(seed);
   const U = (lo, hi) => lo + (hi - lo) * rnd();

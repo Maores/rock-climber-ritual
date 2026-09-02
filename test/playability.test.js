@@ -6,7 +6,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { CFG, createClimber, startClimb, step, drainEvents, shoulder, grabRadius } from '../src/sim.js';
-import { generateRoute, intendedHand, ROUTE } from '../src/route.js';
+import { generateRoute, intendedHand, ROUTE, SEEDS, DEFAULT_SEED } from '../src/route.js';
 
 const route = generateRoute(7);
 const climbing = route.holds.filter((h) => h.kind === 'hold');
@@ -83,4 +83,40 @@ test('playability: a steady climber tops out, and it does not take all afternoon
   assert.ok(out.t > 30, `the climb took only ${out.t.toFixed(0)} s: something is skipping the route`);
   assert.ok(out.misses < out.grabs * 0.35,
     `${out.misses} misses over ${out.grabs} grabs: aiming at a hold should usually land it`);
+});
+
+// B13: the title screen offers more than one line. A seed that stops being climbable must fail
+// here rather than reach a player, so every seed on the roster goes through the same bot.
+test('playability: every route the title screen offers can be topped out', () => {
+  for (const { seed, name } of SEEDS) {
+    const r = generateRoute(seed);
+    const at = `${name} (seed ${seed})`;
+    for (const h of r.holds) {
+      assert.ok(grabRadius(h) / CFG.REACH >= 0.15,
+        `${at}: hold ${h.id} is only ${(grabRadius(h) / CFG.REACH * 100).toFixed(1)}% of the reach circle`);
+    }
+    const s = createClimber(generateRoute(seed));
+    startClimb(s);
+    drainEvents(s);
+    const out = botClimb(s);
+    assert.equal(out.stuck, null, `${at}: stuck trying to reach hold ${out.stuck}`);
+    assert.equal(s.phase, 'summit', `${at}: ended in ${s.phase}`);
+    assert.equal(s.fallCount, 0, `${at}: a steady rhythm should never fall`);
+    assert.ok(out.t < 420, `${at}: the climb took ${(out.t / 60).toFixed(1)} min of game time`);
+    assert.ok(out.t > 30, `${at}: the climb took only ${out.t.toFixed(0)} s`);
+    assert.ok(out.misses < out.grabs * 0.35,
+      `${at}: ${out.misses} misses over ${out.grabs} grabs`);
+  }
+});
+
+test('playability: the roster is a real menu — unique seeds, named, and the default is on it', () => {
+  assert.ok(SEEDS.length >= 2, 'one route is not a choice');
+  const seeds = SEEDS.map((r) => r.seed);
+  assert.equal(new Set(seeds).size, seeds.length, 'duplicate seed on the roster');
+  assert.ok(seeds.includes(DEFAULT_SEED), 'the default route must be offered too');
+  for (const r of SEEDS) {
+    assert.ok(Number.isInteger(r.seed) && r.seed >= 1, `seed ${r.seed} is not a usable seed`);
+    assert.ok(typeof r.name === 'string' && r.name.length > 0 && r.name.length <= 12, `name ${r.name}`);
+    assert.ok(typeof r.note === 'string' && r.note.length > 0, `seed ${r.seed} has no description`);
+  }
 });
