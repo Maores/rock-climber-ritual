@@ -212,6 +212,13 @@ export function createAudio() {
       noise(t, 1.6, 0.16, { type: 'lowpass', f0: 110, f1: 900, a: 0.6, q: 0.5 });
       chime(330, 0.12, master, t + 0.2);
     },
+    // the ground arriving: one heavy hit, then the air goes out of the scene
+    impact() {
+      const t = now();
+      tone('sine', 90, 34, t, 0.9, 0.85, 0.002, null);
+      noise(t, 0.55, 0.7, { type: 'lowpass', f0: 900, f1: 90, a: 0.001 });
+      noise(t + 0.04, 1.6, 0.22, { type: 'lowpass', f0: 300, f1: 60, a: 0.02 });
+    },
     // aiming: the shooter primes with a short mechanical tick
     aim(e) {
       const t = now(), d = pan(e && e.hand);
@@ -312,7 +319,12 @@ export function createAudio() {
     const h01 = clamp((state.height || 0) / top, 0, 1);
     const night = clamp(state.night || 0, 0, 1);
     let level = 0.10 + 0.30 * h01 + 0.16 * night;
-    if (state.phase === 'falling') level += 0.5;
+    if (state.phase === 'falling') {
+      // A doomed plunge roars: the wind rises with speed instead of sitting at a fixed bump.
+      const doomed = state._fall && state._fall.doomed;
+      level += doomed ? 0.5 + 1.5 * Math.min(1, Math.abs(state.body.vy) / 22) : 0.5;
+    }
+    if (state.phase === 'fallen') level *= 0.25;        // after the ground, the air goes out
 
     // slow random-walk gusts on top of the LFO breathing
     gustV += (Math.random() - 0.5) * dt * 1.8;

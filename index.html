@@ -217,6 +217,23 @@ button:focus-visible { outline: 2px solid var(--rune); outline-offset: 2px; }
 }
 #look[hidden] { display: none; }
 
+/* The ground. A red bloom over the whole screen that fades to a dark hold. */
+@keyframes deadFlash {
+  0%   { opacity: 0; }
+  6%   { opacity: 0.92; }
+  100% { opacity: 0.42; }
+}
+#hud.dead::after, body.dead-veil::after {
+  content: '';
+  position: fixed; inset: 0; z-index: 45; pointer-events: none;
+  background:
+    radial-gradient(120% 80% at 50% 60%, rgba(120, 12, 10, 0) 30%, rgba(96, 8, 8, 0.85) 100%),
+    rgba(60, 4, 4, 0.35);
+  animation: deadFlash 1.5s ease-out forwards;
+}
+#end.dead h1 { color: #e8695f; }
+#end.dead .sigil { filter: grayscale(1) brightness(0.5); }
+
 /* Customisation: only ever shown once the code has been typed. */
 #custom {
   position: fixed; inset: 0; z-index: 60;

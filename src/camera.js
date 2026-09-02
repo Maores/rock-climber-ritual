@@ -93,6 +93,9 @@ export function createCameraRig(camera) {
   let shake = 0;                            // 0..1 envelope
   let fallBlend = 0;                        // 0..1 look-down amount
   let summitT = -1;                         // seconds since summit, -1 when not on the summit
+  let doom = 0;                             // 0..1 how far into a doomed plunge we are
+  let tumble = 0;                           // spin accumulated while plunging
+  let impact = 0;                           // jolt envelope when the ground arrives
   let titleBias = 1;                        // look higher on the title screen
   let t = 0;
   let initialised = false;
@@ -218,6 +221,19 @@ export function createCameraRig(camera) {
       lookX = THREE.MathUtils.lerp(lookX, body.x, fallBlend);
     }
 
+    // --- the plunge --------------------------------------------------------------------------
+    // Once the rope is spent the fall runs the whole cliff, so it gets its own treatment: the
+    // head pitches right over toward the ground, the world tumbles, the lens widens with speed
+    // and the wall streams past close to the lens. `doom` ramps with how fast you are going.
+    const doomed = state.phase === 'falling' && state._fall && state._fall.doomed;
+    const speed = doomed ? Math.min(1, Math.abs(body.vy) / 22) : 0;
+    doom = approach(doom, doomed ? 0.35 + 0.65 * speed : 0, doomed ? 3.2 : 6, dt);
+    if (state.phase === 'fallen') doom = approach(doom, 0, 1.4, dt);
+    if (doom > 0.001) {
+      lookY -= 4.2 * doom;                       // straight down the face
+      tumble += dt * (0.8 + 2.6 * doom);
+    } else tumble = 0;
+
     // Summit: the gaze settles on the altar while the crane rises.
     if (state.phase === 'summit') {
       summitT = summitT < 0 ? 0 : summitT + dt;
@@ -267,8 +283,9 @@ export function createCameraRig(camera) {
     camera.position.copy(eye);
     camera.position.y += breath * breathAmp + bounce.x;
     camera.position.x += sway * 0.006;
-    if (shake > 0.001) {
-      const s = shake * shake * 0.035;
+    const totalShake = Math.max(shake, doom * 0.8, impact);
+    if (totalShake > 0.001) {
+      const s = totalShake * totalShake * 0.055;
       camera.position.x += s * noise(t, 2.0);
       camera.position.y += s * noise(t, 5.0);
       camera.position.z += s * 0.5 * noise(t, 8.0);
@@ -304,11 +321,15 @@ export function createCameraRig(camera) {
       );
     }
 
-    const rollNow = roll.x + THREE.MathUtils.degToRad(2.5) * shake * noise(t, 11.0) + breath * 0.004;
+    if (state.phase === 'fallen' && impact < 0.001 && doom > 0.2) impact = 1;
+    impact = approach(impact, 0, 2.2, dt);
+    const rollNow = roll.x + THREE.MathUtils.degToRad(2.5) * shake * noise(t, 11.0) + breath * 0.004
+      + Math.sin(tumble * 0.9) * 0.5 * doom                       // the world turns over
+      + THREE.MathUtils.degToRad(9) * impact * noise(t, 23.0);    // and slams still
     camera.up.set(Math.sin(rollNow), Math.cos(rollNow), 0);
     camera.lookAt(look);
 
-    let fov = fov0 + fovKick.x + 6 * fallBlend + LOOK.vertigoFov * vertigo;
+    let fov = fov0 + fovKick.x + 6 * fallBlend + LOOK.vertigoFov * vertigo + 22 * doom - 10 * impact;
     if (summitT >= 0) fov -= 8 * (1 - Math.exp(-summitT / SUMMIT_TAU));
     fov = THREE.MathUtils.clamp(fov, 40, 110);
     if (Math.abs(fov - lastFov) > 1e-3) {

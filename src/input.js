@@ -220,11 +220,37 @@ export function createInput({ hud = null, keyboard = true, win, now = defaultNow
     on(target, 'keyup', (e) => { if (e.key === 'Shift') lookHeld = false; });
     on(target, 'blur', () => { lookHeld = false; });
   }
+  // On a phone the LOOK button is a drag-pad, not a modifier: press it and drag, with one
+  // thumb, and your head follows the drag. (It used to need a SECOND thumb on a stick to supply
+  // a direction, so pressing it on its own did nothing at all.)
+  const lookPad = { x: 0, y: 0 };
+  let padActive = false, padId = null, padCx = 0, padCy = 0;
+  const PAD_RADIUS = 84;                   // px of drag for a full turn
   if (hud && hud.lookButton) {
     const b = hud.lookButton;
-    on(b, 'pointerdown', (e) => { prevent(e); lookHeld = true; if (b.setPointerCapture) b.setPointerCapture(e.pointerId); });
-    on(b, 'pointerup', () => { lookHeld = false; });
-    on(b, 'pointercancel', () => { lookHeld = false; });
+    on(b, 'pointerdown', (e) => {
+      prevent(e);
+      const r = b.getBoundingClientRect();
+      padCx = r.left + r.width / 2; padCy = r.top + r.height / 2;
+      padActive = true; padId = e.pointerId; lookHeld = true;
+      lookPad.x = lookPad.y = 0;
+      b.classList.add('on');
+      if (b.setPointerCapture) { try { b.setPointerCapture(e.pointerId); } catch (err) {} }
+    });
+    on(b, 'pointermove', (e) => {
+      if (!padActive || e.pointerId !== padId) return;
+      lookPad.x = (e.clientX - padCx) / PAD_RADIUS;
+      lookPad.y = -(e.clientY - padCy) / PAD_RADIUS;    // screen y grows downward
+      clampDisc(lookPad);
+    });
+    const endPad = () => {
+      padActive = false; padId = null; lookHeld = false;
+      lookPad.x = lookPad.y = 0;
+      b.classList.remove('on');
+    };
+    on(b, 'pointerup', endPad);
+    on(b, 'pointercancel', endPad);
+    on(b, 'lostpointercapture', endPad);
   }
 
   function read() {
@@ -238,7 +264,8 @@ export function createInput({ hud = null, keyboard = true, win, now = defaultNow
     // While looking, the steering input turns the head and the hand stays put.
     look.active = lookHeld;
     if (lookHeld) {
-      const src = mSide ? mouseVec : (active.L !== null ? pointer.L : active.R !== null ? pointer.R : virtual.L);
+      const src = padActive ? lookPad
+        : (mSide ? mouseVec : (active.L !== null ? pointer.L : active.R !== null ? pointer.R : virtual.L));
       look.x = src.x; look.y = src.y;
     } else { look.x = 0; look.y = 0; }
     out.look = look;

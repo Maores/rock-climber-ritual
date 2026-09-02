@@ -87,8 +87,8 @@ export function generateRoute(seed = 7) {
     // A jug reads as a bucket and a crimp as a sliver, so the wall can be read before it is
     // touched. Holds only ever shrink here: the generator already fitted this size against its
     // neighbours, so growing one would let it overlap the rock beside it.
-    const scale = grip === 'jug' ? 1.0 : grip === 'edge' ? 0.90 : grip === 'sloper' ? 0.84 : 0.68;
-    const sized = (kind === 'rune' || kind === 'summit') ? size : Math.max(0.068, size * scale);
+    const scale = grip === 'jug' ? 1.0 : grip === 'edge' ? 0.95 : grip === 'sloper' ? 0.90 : 0.80;
+    const sized = (kind === 'rune' || kind === 'summit') ? size : Math.max(0.092, size * scale);
     const h = { id: holds.length, x: r4(x), y: r4(y), size: r4(sized), grip, kind, lit: false, angle: r4(rnd() * Math.PI * 2) };
     holds.push(h);
     return h;

@@ -59,9 +59,9 @@ test('route: regular moves spend nearly the whole reach (median gain ≥ 0.18 m)
   assert.ok(H.length <= 230, `hold count ${H.length}`);
 });
 
-test('route: sizes are 0.068–0.24 and no two holds overlap', () => {
-  // crimps are deliberately small: the lower bound is the crimp floor, not the old one-size-fits-all
-  for (const h of H) assert.ok(h.size >= 0.068 - 1e-9 && h.size <= 0.24 + 1e-9, `hold ${h.id} size ${h.size}`);
+test('route: sizes are 0.092–0.24 and no two holds overlap', () => {
+  // crimps are deliberately smaller than jugs, but never so small they stop being a target
+  for (const h of H) assert.ok(h.size >= 0.092 - 1e-9 && h.size <= 0.24 + 1e-9, `hold ${h.id} size ${h.size}`);
   for (let i = 0; i < H.length; i++) {
     for (let j = i + 1; j < H.length && H[j].y - H[i].y < 1.5; j++) {
       assert.ok(dist(H[i], H[j]) >= H[i].size + H[j].size + 0.02, `holds ${i} and ${j} overlap`);

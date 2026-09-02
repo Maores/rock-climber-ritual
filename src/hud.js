@@ -377,10 +377,11 @@ export function createHud(root) {
       clearTimeout(endTimer);
       endTimer = setTimeout(() => { if (!endShown) showEnd(state); }, 2800);
     } else if (next === 'fallen') {
-      // The rope only saves you once; the second fall ends the climb.
-      message('The rope is spent · the cliff keeps you', 3400, 'warn');
+      // The ground. Let the impact land before anything is asked of the player.
+      if (hudEl && hudEl.classList) hudEl.classList.add('dead');
+      message('The cliff keeps you', 3200, 'warn');
       clearTimeout(endTimer);
-      endTimer = setTimeout(() => { if (!endShown) showEnd(state); }, 2600);
+      endTimer = setTimeout(() => { if (!endShown) showEnd(state); }, 2400);
     }
   }
 
@@ -601,7 +602,8 @@ export function createHud(root) {
     clearTimeout(endTimer);
     const inner = endEl.querySelector('.inner') || endEl;
     const h1 = ensure('end-title', 'h1', inner);
-    h1.textContent = s.complete ? 'The ritual is complete' : 'The climb ends';
+    h1.textContent = s.complete ? 'The ritual is complete' : 'You fell';
+    if (endEl && endEl.classList) endEl.classList.toggle('dead', !s.complete);
     const grid = ensure('end-stats', 'div', inner, 'stats');
     grid.innerHTML =
       '<div class="stat"><b>' + fmtTime(s.time) + '</b><span>Time</span></div>' +
@@ -634,6 +636,8 @@ export function createHud(root) {
     hideHud();
   }
   function hideEnd() {
+    if (hudEl && hudEl.classList) hudEl.classList.remove('dead');   // a fresh climb clears the veil
+    if (endEl && endEl.classList) endEl.classList.remove('dead');
     endShown = false;
     endEl.classList.add('hide');
     setTimeout(() => { if (!endShown) endEl.hidden = true; }, 950);
@@ -738,6 +742,11 @@ export function createHud(root) {
     customEl.addEventListener('pointerdown', (e) => { if (e.target === customEl) closeCustom(); });
   }
   if (customBtn) customBtn.addEventListener('click', openCustom);
+  // Pressing LOOK with both hands on the rock does nothing by design — you need a free arm to
+  // turn — so say that rather than leaving the button feeling broken.
+  if (lookBtn) lookBtn.addEventListener('pointerdown', () => {
+    if (!canLookNow) message('Let a hand go to look around', 1800);
+  });
   refreshCustomBtn();
 
   const hud = {

@@ -12,7 +12,7 @@ export const CFG = Object.freeze({
   // --- contract constants -------------------------------------------------------------
   REACH: 0.72,          // shoulder → fingertips; free hands never leave this circle
   SNAP: 0.16,           // floor for the grab radius; real radius is grabRadius(hold) below
-  GRAB_EDGE: 0.015,     // the rock itself is the target: only a fingertip's width of forgiveness
+  GRAB_EDGE: 0.028,     // the rock itself is the target, plus a fingertip's width of forgiveness
   SHOULDER_DX: 0.19, SHOULDER_DY: 0.08,
   HANG_TWO: 0.42,       // body hangs this far below the mean of two gripped holds
   HANG_ONE: 0.50,       // ...and this far below a single gripped hold
@@ -33,8 +33,8 @@ export const CFG = Object.freeze({
   REST_Y: 0.30,
   LINGER: 0.50,         // after the stick is released the hand keeps its place this long (lift the thumb, tap GRIP)...
   DRIFT_TAU: 0.25,      // ...then drifts toward the rest offset with this time constant
-  HAND_OMEGA: 8.5, HAND_ZETA: 1.0,          // hand spring: slow and critically damped — an arm has mass,
-                                            // and it never overshoots the point you aimed at
+  HAND_OMEGA: 11.5, HAND_ZETA: 1.0,         // hand spring: weighty but not sluggish (~0.2 s per move),
+                                            // critically damped so it never overshoots where you aimed
   GRAB_OMEGA: 22,       // closing onto a hold takes ~0.3 s: the fingers arrive, they are not magneted in...
   GRAB_LOCK: 0.002,     // ...and locks exactly onto it once this close
   BODY_OMEGA: 7, BODY_ZETA_Y: 0.85, BODY_ZETA_X: 0.55,   // body: settles vertically, sways sideways
@@ -42,6 +42,7 @@ export const CFG = Object.freeze({
   SWING_OMEGA: 3, SWING_ZETA: 0.9,          // the rope swings the caught body back under the line of holds
   GRAVITY: 9.81,
   FLOOR: 0.75,          // lowest body height (standing at the base); the ground catches falls near the start
+  FALL_TERMINAL: 26,    // m/s cap on a doomed plunge, so the drop reads rather than blurs
   HOVER_RANGE: 0.40,    // Hand.hover fades to 0 at this distance from the nearest hold
   TREMBLE_AT: 0.30,     // tremble grows as stamina drops below this
   CURL_RATE: 12, TREMBLE_RATE: 6,
@@ -491,7 +492,10 @@ function beginFall(state) {
   state.phase = 'falling';
   state._fall.t = 0;
   state._fall.from = state.body.y;
-  push(state, { type: 'fall' });
+  // The rope saves you once. Once it is spent, this fall is the whole cliff: nothing stops the
+  // body until the ground does, which is what the falling animation and the death screen are for.
+  state._fall.doomed = state.fallCount >= 1;
+  push(state, { type: 'fall', doomed: state._fall.doomed });
 }
 
 function updateStamina(state, dt) {
@@ -548,6 +552,18 @@ function updateBody(state, dt, inp) {
     b.vx *= Math.exp(-3 * dt);
     b.x += b.vx * dt;
     b.y += b.vy * dt;
+    // A doomed fall has no catch: it runs all the way to the ground, gathering speed.
+    if (f.doomed) {
+      b.vy = Math.max(b.vy, -CFG.FALL_TERMINAL);       // terminal velocity, so it reads as a plunge
+      if (b.y <= CFG.FLOOR) {
+        b.y = CFG.FLOOR;
+        b.vx = 0; b.vy = 0;
+        state.phase = 'fallen';
+        push(state, { type: 'impact' });
+        push(state, { type: 'fallen' });
+      }
+      return;
+    }
     const catchY = Math.max(f.from - CFG.ROPE_SLACK, CFG.FLOOR);
     if (b.y <= catchY) {
       b.y = catchY;
@@ -555,14 +571,8 @@ function updateBody(state, dt, inp) {
       f.catchY = catchY;
       f.catchX = lineCenter(state, catchY + CFG.SHOULDER_DY + 0.35, b.x);
       state.fallCount += 1;
-      if (state.fallCount > 1) {
-        // One save per climb: the rope has already caught you once, so this fall ends the run.
-        state.phase = 'fallen';
-        push(state, { type: 'fallen' });
-      } else {
-        state.phase = 'caught';
-        push(state, { type: 'catch' });
-      }
+      state.phase = 'caught';
+      push(state, { type: 'catch' });
     }
     return;
   }
