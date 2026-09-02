@@ -269,7 +269,7 @@ and the URL accepts `?seed= ?auto ?tier=phone ?fps=1`.
 - Wall PBR: `assets/textures/rock_face_03/{Diffuse_2k,nor_gl_2k,Diffuse_1k,nor_gl_1k,Rough_1k,AO_1k,Displacement_1k}.jpg`
 - Hold PBR: `assets/textures/rock_boulder_dry/{Diffuse_1k,nor_gl_1k,Rough_1k,AO_1k}.jpg`
 - Sky HDRI: `assets/hdri/kloppenheim_06_puresky_{2k,1k}.hdr`
-- Hands: `assets/models/hands/realistic_hand.glb` (CC-BY 3.0, J-Toastie; credit in `assets/models/hands/LICENSE.md`; the credits screen must show it)
+- Hands: `assets/models/hands/realistic_hand.glb` (CC-BY 3.0, J-Toastie; credit in `assets/models/hands/LICENSE.md`; the title screen's footer shows it (the end-screen credits box was removed in B55))
 - Music: hud-audio finds one CC0 / CC-BY / public-domain track (dark ambient, ritual mood), saves it as `assets/audio/theme.mp3` (≤ 6 MB) with its credit in `assets/CREDITS.md`, and plays it via audio.setMusic after unlock. If no compliant track is found, ship without music and say so.
 - three.js: `vendor/three/**` (0.185). Do not add dependencies or CDN scripts. Google Fonts (Cinzel, Inter) allowed in index.html.
 
