@@ -32,12 +32,9 @@ const ARC_C = 2 * Math.PI * ARC_R;
 // B42: what each of the four routes actually is, from the numbers B13 measured when it picked
 // them. Keyed by seed, because generation is deterministic and a seed IS the route; route.js
 // owns the roster itself, so nothing here has to agree with it beyond the number.
-const ROUTE_LINE = {
-  7: 'The original line.',
-  21: '42 jugs, easy rock low down, poor rock up high.',
-  4: 'Wanders 0.70 m either side of centre.',
-  19: '31 crimps, 18 slopers, 68% poor rock up high. 9 decoys.',
-};
+// B42/B46: the line under the route pills comes from route.js's own roster notes (SEEDS[].note),
+// filled in by renderSeeds -- a private copy here went stale the moment the routes became a field.
+const seedNotes = new Map();
 const UNLISTED_LINE = 'An unlisted seed.';
 
 const CREDITS = [
@@ -574,7 +571,7 @@ export function createHud(root) {
   let seedNow = null;
   function setNote(seed) {
     const el = byId('seed-note');
-    if (el) el.textContent = ROUTE_LINE[seed] || UNLISTED_LINE;
+    if (el) el.textContent = seedNotes.get(seed | 0) || UNLISTED_LINE;
   }
   function previewNote(e) {
     const b = e.target && e.target.closest ? e.target.closest('[data-seed]') : null;
@@ -584,6 +581,8 @@ export function createHud(root) {
     const inner = titleEl.querySelector('.inner');
     let row = byId('seeds');
     if (!Array.isArray(list) || !list.length) { if (row) row.remove(); return; }
+    seedNotes.clear();
+    for (const r of list) if (r && r.note) seedNotes.set(r.seed | 0, r.note);
     if (!row) {
       row = doc.createElement('div');
       row.id = 'seeds';
