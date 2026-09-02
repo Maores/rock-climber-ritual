@@ -12,6 +12,7 @@
 // Optional injections: shoulder = sim.shoulder (else the CFG offsets are mirrored here), holdZ = world.holdZ (front z of a hold blob).
 
 import * as THREE from 'three';
+import { applySpiderSkin, spiderUnlocked } from './spiderHand.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { clone as cloneSkeleton } from 'three/addons/utils/SkeletonUtils.js';
 
@@ -497,6 +498,9 @@ export async function createArms({ scene, tier, shoulder, holdZ } = {}) {
         o.frustumCulled = false;
       }
     });
+    // The Easter egg: once the code has been typed, the RIGHT hand wears the glove. It is a
+    // repaint of this same skinned mesh, so the rig, the curl and the tremble are untouched.
+    if (side === 'R' && spiderUnlocked()) applySpiderSkin(model, { variant: 'classic' });
 
     // Finger curl: sample the Grab clip per bone, blended out of the bind pose near curl = 0.
     const curlTracks = [];

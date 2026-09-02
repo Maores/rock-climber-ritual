@@ -178,6 +178,14 @@ button:focus-visible { outline: 2px solid var(--rune); outline-offset: 2px; }
 }
 #mute:active { transform: scale(0.94); }
 
+/* the rune answers when the code lands */
+@keyframes codeHit {
+  0%   { filter: drop-shadow(0 0 0 rgba(127,224,255,0)); transform: scale(1); }
+  22%  { filter: drop-shadow(0 0 26px rgba(127,224,255,.95)); transform: scale(1.14); }
+  100% { filter: drop-shadow(0 0 0 rgba(127,224,255,0)); transform: scale(1); }
+}
+.code-hit { animation: codeHit 1.5s ease-out; }
+
 /* LOOK: hold it and the free hand's stick turns your head instead of moving the hand. */
 #look {
   position: fixed;

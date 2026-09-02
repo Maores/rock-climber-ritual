@@ -19,6 +19,8 @@
 //   • The keystroke that starts the climb is stopped in the capture phase on window, so input.js never
 //     sees it as a grip toggle; pointer starts never reach the sticks (the overlay is above them).
 
+import { SPIDER_CODE, spiderUnlocked, unlockSpider } from './spiderHand.js';
+
 const MUTE_KEY = 'ritual.muted';
 const ARC_R = 63;                              // radius of the SVG stamina arc in index.html
 const ARC_C = 2 * Math.PI * ARC_R;
@@ -496,7 +498,32 @@ export function createHud(root) {
     if (e.target && e.target.closest && e.target.closest('a, #mute')) return;
     begin();
   }
+  // ---- the code -------------------------------------------------------------------------
+  // No visible box. Type the word on the title screen and letters accumulate; get it right and
+  // the rune flashes. Any letter key is swallowed so it cannot also start the climb.
+  let typed = '';
+  function onTitleLetter(e) {
+    if (!titleShown || started) return false;
+    if (e.metaKey || e.ctrlKey || e.altKey) return false;
+    const k = e.key;
+    if (typeof k !== 'string' || k.length !== 1 || !/[a-z]/i.test(k)) return false;
+    typed = (typed + k.toUpperCase()).slice(-SPIDER_CODE.length);
+    if (typed === SPIDER_CODE) {
+      typed = '';
+      const already = spiderUnlocked();
+      unlockSpider();
+      codeFlash(already);
+    }
+    return true;                      // a letter never doubles as "press any key to begin"
+  }
+  function codeFlash(already) {
+    const sig = titleEl && titleEl.querySelector('.sigil');
+    if (sig) { sig.classList.remove('code-hit'); void sig.offsetWidth; sig.classList.add('code-hit'); }
+    message(already ? 'The web answers again' : 'The web answers', 2600, 'rune');
+  }
+
   function onTitleKey(e) {
+    if (onTitleLetter(e)) { e.preventDefault(); e.stopPropagation(); return; }
     if (!titleShown || !isStartKey(e)) return;
     e.preventDefault();
     // Registered in the capture phase on window: stopping here keeps the same keydown from reaching

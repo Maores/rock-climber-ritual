@@ -15,6 +15,21 @@
 
 import * as THREE from 'three';
 
+// ---------------------------------------------------------------------------------------------
+// The unlock. Typing the word on the title screen flips this on for good on this device.
+const UNLOCK_KEY = 'ritual.spider';
+export const SPIDER_CODE = 'ARACHNID';
+
+export function spiderUnlocked() {
+  try { return localStorage.getItem(UNLOCK_KEY) === '1'; } catch (e) { return false; }
+}
+export function unlockSpider() {
+  try { localStorage.setItem(UNLOCK_KEY, '1'); } catch (e) {}
+}
+export function relockSpider() {
+  try { localStorage.removeItem(UNLOCK_KEY); } catch (e) {}
+}
+
 export const SPIDER_VARIANTS = {
   classic: {
     label: 'Classic red and blue',
