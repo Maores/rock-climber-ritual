@@ -800,7 +800,7 @@ kbd {
   letter-spacing: 0.03em;
   text-align: center;
 }
-.foot a, .credits a { color: rgba(127, 224, 255, 0.8); text-decoration: none; }
+.foot a { color: rgba(127, 224, 255, 0.8); text-decoration: none; }
 
 .stats {
   display: grid;
@@ -834,26 +834,6 @@ kbd {
   text-transform: uppercase;
   color: var(--muted);
 }
-.credits {
-  width: 100%;
-  box-sizing: border-box;
-  font: 400 11.5px/1.6 var(--sans);
-  color: var(--muted);
-  text-align: left;
-  padding: 12px 14px;
-  border-radius: 14px;
-  background: rgba(20, 14, 11, 0.45);
-  border: 1px solid rgba(241, 230, 216, 0.08);
-}
-.credits h3 {
-  margin: 0 0 6px;
-  font: 600 9.5px/1 var(--sans);
-  letter-spacing: 0.34em;
-  text-transform: uppercase;
-  color: var(--gold);
-}
-.credits p { margin: 0 0 4px; }
-.credits b { color: var(--text); font-weight: 600; }
 .btn {
   margin-top: 18px;
   padding: 14px 30px;
@@ -946,7 +926,6 @@ kbd {
   #end .stat { padding: 8px 6px 7px; }
   #end .stat b { font-size: 22px; }
   #end .stat span { font-size: 9px; }
-  #end .credits { max-height: 96px; overflow-y: auto; touch-action: pan-y; font-size: 10.5px; line-height: 1.5; padding: 9px 11px; }
   #end .btn { margin-top: 10px; padding: 11px 22px; }
 
   /* The hand panel: the square swatches pushed the panel past the bottom of the screen and the
@@ -1068,7 +1047,8 @@ kbd {
   <div class="foot" id="title-foot"></div>
 </div>
 
-<!-- end screen; hud.js fills the stats and credits -->
+<!-- end screen; hud.js fills the stats. B55: the credits box was removed, owner said it was
+     annoying — attribution for the CC-BY hand model and music stays on the title footer (#title-foot). -->
 <div id="end" class="overlay" hidden>
   <div class="inner">
     <div class="eyebrow">Rock Climber</div>
@@ -1083,7 +1063,6 @@ kbd {
       <circle cx="60" cy="60" r="5.5" fill="#7fe0ff"/>
     </svg>
     <div class="stats" id="end-stats"></div>
-    <div class="credits" id="end-credits"></div>
     <div class="btns" id="end-btns">
       <button class="btn" id="end-restart" type="button">Climb again</button>
       <button class="btn ghost" id="end-menu" type="button">Menu</button>

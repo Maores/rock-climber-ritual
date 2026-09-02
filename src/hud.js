@@ -745,11 +745,9 @@ export function createHud(root) {
       '<div class="stat"><b>' + fmtTime(s.time) + '</b><span>Time</span></div>' +
       '<div class="stat"><b>' + (+s.high || 0).toFixed(1) + '<small style="font-size:.55em;color:var(--muted)"> m</small></b><span>Highest</span></div>' +
       '<div class="stat"><b>' + s.lit + (s.total != null ? '<small style="font-size:.55em;color:var(--muted)"> / ' + s.total + '</small>' : '') + '</b><span>Runes lit</span></div>';
-    const cred = ensure('end-credits', 'div', inner, 'credits');
-    cred.innerHTML = '<h3>Credits</h3>' + CREDITS.map((c) =>
-      '<p><b>' + escapeHtml(c.what) + ':</b> ' + escapeHtml(c.text) + ' — ' + escapeHtml(c.license) +
-      ' <a href="' + c.url + '" target="_blank" rel="noopener">' + escapeHtml(c.url.replace(/^https?:\/\//, '')) + '</a></p>').join('') +
-      '<p style="margin-top:6px">Design and code: Rock Climber: The Ritual, 2026. Sound effects are synthesised live in WebAudio.</p>';
+    // B55: the end-screen credits box is gone (owner: "annoying"). Attribution for the
+    // CC-BY hand model and music lives on in the title footer (footHtml(), below) and in
+    // README.md / assets/CREDITS.md — CREDITS itself stays, since footHtml() still reads it.
     const btns = ensure('end-btns', 'div', inner, 'btns');
     let btn = byId('end-restart');
     if (!btn) {
