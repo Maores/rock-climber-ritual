@@ -18,6 +18,36 @@ const WALL = { width: 13, height: 51.5, segX: 104, segY: 515, yCenter: 17.75, fl
 // Holds are squashed toward the wall (zScale), sit almost flush in it (sink) and have a flat front
 // face at `front` × zScale where the fingers grip — holdZ() is exact, not an estimate.
 const HOLD = { zScale: 0.42, sink: 0.05, front: 0.925 };
+// B52 — instanced holds. Plain holds are no longer one deformed icosahedron each, merged into a
+// single mesh; they are a small set of unit-scale prototype blobs drawn through InstancedMesh, so
+// the cost of the rock stops growing with the number of holds. A field route (B46) is ~1900 holds
+// where the old line was 125, and the merged build cost 39 MB of buffers and 3.6 s of boot for it.
+const PROTO = {
+  variants: 3,        // blob shapes per grip family; 4 families × 3 = 12 prototypes
+  back: 1.06,         // the back of a prototype is stretched to this many unit radii, so a SHARED
+                      // blob is never shallower in the rock than a per-hold one happened to be
+  sink: 0.03,         // and it is seated this much deeper again, in hold radii (3–6 mm): a
+                      // prototype cannot be conformed to this hold's own noise, so it pays a margin
+  tilt: 0.55,         // how much of the wall's local slope an instance leans with (0 = dead front)
+  tiltMax: 0.22,      // radians: ~12.6°, past which a hold starts to read as falling off the rock
+  jitter: 0.10,       // per-instance non-uniform scale in x and y, so 12 shapes are not 12 copies
+  shadowBand: 4.2,    // metres above the body still worth drawing into the shadow map (the shadow
+                      // camera is a 6.4 m box around the body, so anything higher cannot cast into it)
+  eps: 0.10,          // finite-difference step for the wall normal — half a hold, so an instance
+                      // leans with the seat it sits on and not with the grit
+};
+// Blob shaping per grip kind. Every range here is a slice of the one range the merged build drew
+// from (sx 1.15–1.55, sy 0.62–0.90, chalk 0.35–0.85), so no hold looks unlike something the old
+// wall could have produced; a jug is simply drawn from the fat end of it and a crimp from the flat.
+const FAMILIES = [
+  { grip: 'jug',    detail: 5, sx: [1.15, 1.35], sy: [0.78, 0.90], chalk: [0.50, 0.85] },
+  { grip: 'edge',   detail: 4, sx: [1.25, 1.55], sy: [0.66, 0.80], chalk: [0.40, 0.80] },
+  { grip: 'crimp',  detail: 4, sx: [1.30, 1.55], sy: [0.62, 0.72], chalk: [0.35, 0.70] },
+  { grip: 'sloper', detail: 4, sx: [1.15, 1.40], sy: [0.70, 0.88], chalk: [0.35, 0.60] },
+];
+const FAMILY_OF = { jug: 0, edge: 1, crimp: 2, sloper: 3 };
+const SHADE_MEAN = 0.92;                            // baked into the prototype; per-instance colour
+                                                    // then rides around 1.0 (0.89–1.11)
 const RUNE_LIGHTS = 2;                              // shared point lights re-parked on the nearest runes
 const WAYMARK_EVERY = 2.6;                          // metres between glyph waymarks along the route
 // The boulder set is beige; this multiplier lands it on the wall's own red stone. Vertex colours
@@ -162,6 +192,9 @@ export async function createWorld({ renderer, scene, route, tier }) {
   });
 
   const footprint = new Map();   // hold id → { sx, sy, rot } of its blob, for the contact shadow on the wall
+
+  // Runes, the summit and nothing else still get a blob of their own, baked at their world
+  // position with their own noise: there are three or four of them and they carry a sigil.
   function holdBlob(hold) {
     let g = new THREE.IcosahedronGeometry(1, hold.size < 0.15 ? 4 : 5);
     g.deleteAttribute('uv');
@@ -235,10 +268,107 @@ export async function createWorld({ renderer, scene, route, tier }) {
     return g;
   }
 
+  // ---------------------------------------------------------------------------------------
+  // Prototype blobs (B52). The same shaping as holdBlob, at unit scale, with no hold's position
+  // or size baked in — twelve of them stand in for every plain hold on the wall. The noise is
+  // sampled once per prototype instead of once per hold, which is the whole boot cost of a field.
+  function holdProto(fam, key) {
+    let g = new THREE.IcosahedronGeometry(1, fam.detail);
+    g.deleteAttribute('uv');
+    g.deleteAttribute('normal');
+    g = mergeVertices(g, 1e-4);
+    const p = g.attributes.position;
+    const n = p.count;
+    const uv = new Float32Array(n * 2);
+    const col = new Float32Array(n * 3);
+    const s = key * 3.17 + 0.5;
+    const tr = HOLD_TINT[0] * SHADE_MEAN, tg = HOLD_TINT[1] * SHADE_MEAN, tb = HOLD_TINT[2] * SHADE_MEAN;
+    const sx = lerp(fam.sx[0], fam.sx[1], rnd());          // edges are wider than tall
+    const sy = lerp(fam.sy[0], fam.sy[1], rnd());
+    const chalkAmt = lerp(fam.chalk[0], fam.chalk[1], rnd());   // some holds are well used, some barely
+    let back = 0;
+    for (let i = 0; i < n; i++) {
+      let x = p.getX(i), y = p.getY(i), z = p.getZ(i);
+      const ny = y, nz = z;                 // unit-sphere direction, before deformation
+      const n1 = noise.noise3d(x * 0.9 + s, y * 0.9, z * 0.9 + s * 0.5);
+      const n2 = noise.noise3d(x * 2.4 + 41, y * 2.4 + s, z * 2.4);
+      const r = 1 + 0.22 * n1 + 0.07 * n2;
+      x *= r; y *= r; z *= r;
+      if (y > 0) y *= 0.72;                                 // flat top lip
+      if (z > 0.78) z = 0.78 + (z - 0.78) * 0.25;           // flat front face (fingers grip here)
+      if (z < back) back = z;
+      const len = Math.hypot(x, y, z) || 1;
+      // chalk: patchy along the top lip, a little on the front where fingers smear it
+      const patch = smoothstep(0.05, 0.55, noise.noise3d(x * 3.1 + s, y * 3.1 + 7, z * 3.1));
+      const lip = smoothstep(0.55, 0.95, ny) * (0.3 + 0.7 * patch);
+      const front = 0.15 * smoothstep(0.75, 1.0, nz) * patch;
+      const chalk = clamp01((lip + front) * chalkAmt);
+      // contact: darker toward the wall plane so the hold reads as growing out of the rock
+      const seat = 1 - 0.45 * (1 - smoothstep(-0.1, 0.45, nz));
+      // chalk is white powder: the map's mid-grey has to be pushed well past 1 to read as white
+      col[i * 3] = lerp(tr * seat, 1.9, chalk);
+      col[i * 3 + 1] = lerp(tg * seat, 1.88, chalk);
+      col[i * 3 + 2] = lerp(tb * seat, 1.85, chalk);
+      // spherical uv with the seam at the back (inside the wall)
+      uv[i * 2] = (Math.atan2(x, z) / (Math.PI * 2) + 0.5) * 2;
+      uv[i * 2 + 1] = Math.asin(Math.max(-1, Math.min(1, y / len))) / Math.PI + 0.5;
+      p.setXYZ(i, x * sx, y * sy, z);
+    }
+    // Seat the shared shape: stretch whatever back this prototype happens to have out to PROTO.back
+    // radii, so a reused blob can never sit shallower in the rock than a per-hold one did. The
+    // back is inside the wall and is never seen; only its depth matters.
+    const grow = back < -1e-3 ? PROTO.back / -back : 1;
+    if (grow > 1) for (let i = 0; i < n; i++) { const z = p.getZ(i); if (z < 0) p.setZ(i, z * grow); }
+    for (let i = 0; i < n; i++) p.setZ(i, p.getZ(i) * HOLD.zScale);
+    g.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+    g.setAttribute('uv1', new THREE.BufferAttribute(uv.slice(), 2));
+    g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+    g.computeVertexNormals();
+    g.computeBoundingSphere();
+    return { geo: g, sx, sy, grip: fam.grip };
+  }
+  const protos = [];
+  for (let f = 0; f < FAMILIES.length; f++) {
+    for (let v = 0; v < PROTO.variants; v++) protos.push(holdProto(FAMILIES[f], f * PROTO.variants + v));
+  }
+  const protoOf = (hold) => {
+    const f = FAMILY_OF[hold.grip] !== undefined ? FAMILY_OF[hold.grip] : 1;   // no grip → edge
+    return f * PROTO.variants + (hold.id % PROTO.variants);
+  };
+
+  // Where one instance sits. `holdZ` is untouched by all of this: the placement uses the same
+  // single wallZ sample the merged build used, minus PROTO.sink, and the instance leans with the
+  // wall's local slope (four more wallZ samples — five per hold, against 250 per hold of noise
+  // before). Writes the matrix into `m` and returns the footprint the contact shadow needs.
+  const _ip = new THREE.Vector3(), _iq = new THREE.Quaternion(), _is = new THREE.Vector3();
+  const _iz = new THREE.Vector3(0, 0, 1), _in = new THREE.Vector3(), _ilean = new THREE.Quaternion();
+  const clampAbs = (v, lim) => (v > lim ? lim : v < -lim ? -lim : v);
+  function instanceMatrix(hold, proto, r, m) {
+    const e = PROTO.eps, T = Math.tan(PROTO.tiltMax);
+    const gx = (wallZ(hold.x + e, hold.y) - wallZ(hold.x - e, hold.y)) / (2 * e);
+    const gy = (wallZ(hold.x, hold.y + e) - wallZ(hold.x, hold.y - e)) / (2 * e);
+    _in.set(clampAbs(-gx * PROTO.tilt, T), clampAbs(-gy * PROTO.tilt, T), 1).normalize();
+    _iq.setFromUnitVectors(_iz, _in);
+    // keep the long axis roughly horizontal: ±20° of lean, not a random spin
+    const rot = (((hold.angle || 0) % (Math.PI / 2)) - Math.PI / 4) * 0.45;
+    _ilean.setFromAxisAngle(_iz, rot);
+    _iq.multiply(_ilean);
+    const jx = 1 + (r() - 0.5) * 2 * PROTO.jitter;
+    const jy = 1 + (r() - 0.5) * 2 * PROTO.jitter;
+    _ip.set(hold.x, hold.y, wallZ(hold.x, hold.y) + hold.size * (HOLD.sink - PROTO.sink));
+    _is.set(hold.size * jx, hold.size * jy, hold.size);     // never in z: holdZ depends on it
+    m.compose(_ip, _iq, _is);
+    return { sx: proto.sx * jx, sy: proto.sy * jy, rot };
+  }
+  // One PRNG per hold rather than one shared stream, so a hold's shade and jitter depend on its
+  // own id and nothing else — the wall is the same whatever order it is built in.
+  const holdRnd = (hold) => mulberry32((Math.imul(hold.id + 1, 2654435761) ^ (seed * 7919)) >>> 0);
+
   const chalkTex = makeChalkTexture(rnd);
   const skirtTex = makeSkirtTexture();
-  const plainGeos = [], chalkGeos = [], skirtGeos = [];
+  const chalkGeos = [], skirtGeos = [];
   const runes = [];            // { hold, blob, mat, sigilMat, k, flash, wasLit, pos }
+  const buckets = protos.map(() => []);        // plain holds, per prototype
   for (const hold of holds) {
     if (hold.kind === 'rune' || hold.kind === 'summit') {
       const mat = holdMat.clone();
@@ -247,6 +377,7 @@ export async function createWorld({ renderer, scene, route, tier }) {
       mat.emissiveIntensity = 0.3;
       const blob = new THREE.Mesh(holdBlob(hold), mat);
       blob.castShadow = true; blob.receiveShadow = true;
+      blob.userData.holdBucket = 'holds';
       root.add(blob);
       // sigil carved around the hold
       const sz = Math.max(0.46, hold.size * 2.6);   // ~0.55 m: reads as a carving, not a portal
@@ -259,8 +390,73 @@ export async function createWorld({ renderer, scene, route, tier }) {
       root.add(sigil);
       runes.push({ hold, blob, mat, sigilMat, k: 0.2, flash: 0, wasLit: !!hold.lit, pos: new THREE.Vector3(hold.x, hold.y, holdZ(hold)) });
     } else {
-      plainGeos.push(holdBlob(hold));
+      buckets[protoOf(hold)].push(hold);
     }
+  }
+
+  // --- the instanced wall of rock ---------------------------------------------------------
+  // One InstancedMesh per prototype, its instances sorted up the wall so the shadow pass can stop
+  // at the top of the shadow camera's box instead of re-drawing the whole cliff into a 6.4 m frame.
+  const holdsGroup = new THREE.Group();
+  holdsGroup.name = 'holds';
+  holdsGroup.userData.holdBucket = 'holds';
+  root.add(holdsGroup);
+  const holdMeshes = [];
+  {
+    const m = new THREE.Matrix4();
+    const c = new THREE.Color();
+    for (let i = 0; i < protos.length; i++) {
+      const list = buckets[i];
+      if (!list.length) continue;
+      list.sort((a, b) => a.y - b.y);
+      const mesh = new THREE.InstancedMesh(protos[i].geo, holdMat, list.length);
+      mesh.name = `holds-${protos[i].grip}-${i % PROTO.variants}`;
+      mesh.castShadow = true; mesh.receiveShadow = true;
+      mesh.userData.holdBucket = 'holds';
+      const ys = new Float32Array(list.length);
+      for (let k = 0; k < list.length; k++) {
+        const hold = list[k];
+        const r = holdRnd(hold);
+        footprint.set(hold.id, instanceMatrix(hold, protos[i], r, m));
+        mesh.setMatrixAt(k, m);
+        // per-hold shade, as the merged build had it — now a multiplier on the prototype's colours
+        const shade = (0.82 + r() * 0.2) / SHADE_MEAN;
+        c.setRGB(shade * (0.96 + r() * 0.08), shade * (0.96 + r() * 0.08), shade * (0.96 + r() * 0.08));
+        mesh.setColorAt(k, c);
+        ys[k] = hold.y;
+      }
+      mesh.instanceMatrix.needsUpdate = true;
+      if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+      mesh.computeBoundingSphere();
+      mesh.userData.ys = ys;
+      mesh.userData.full = list.length;
+      mesh.userData.shadowCount = list.length;
+      mesh.onBeforeShadow = onBeforeHoldShadow;
+      mesh.onAfterShadow = onAfterHoldShadow;
+      holdsGroup.add(mesh);
+      holdMeshes.push(mesh);
+    }
+  }
+  // Only the band around the climber can land in the shadow camera's 6.4 m box; the rest of the
+  // cliff is drawn into the depth map for nothing. Instances are sorted by height, so the cut is
+  // one count — and it cannot change a pixel, because what it drops could not have cast anything.
+  function onBeforeHoldShadow() { this.count = this.userData.shadowCount; }
+  function onAfterHoldShadow() { this.count = this.userData.full; }
+  function updateShadowCounts(bodyY) {
+    const lim = bodyY + PROTO.shadowBand;
+    for (const mesh of holdMeshes) {
+      const ys = mesh.userData.ys;
+      let lo = 0, hi = ys.length;
+      while (lo < hi) { const mid = (lo + hi) >> 1; if (ys[mid] <= lim) lo = mid + 1; else hi = mid; }
+      mesh.userData.shadowCount = lo;
+    }
+  }
+
+  // Chalk and contact shadows, one patch each per hold, still merged into a single mesh apiece:
+  // a 5×5 and a 4×4 grid is 61 vertices a hold, so a whole field of them is ~5 MB and two draw
+  // calls — a fiftieth of what the blobs cost. They stay conformed to the rock, which is what
+  // makes a hold read as growing out of the wall at arm's length.
+  for (const hold of holds) {
     // chalk splat on the wall around the hold, biased upward where the hand comes from
     chalkGeos.push(conformedPatch(hold.x, hold.y + hold.size * 0.15, hold.size * 2.3, 5, (rnd() - 0.5) * 0.8, 0.012));
     // contact shadow: a dark ellipse under the blob's footprint, so the hold grows out of the rock
@@ -268,23 +464,29 @@ export async function createWorld({ renderer, scene, route, tier }) {
     skirtGeos.push(conformedPatch(hold.x, hold.y - hold.size * 0.12, hold.size * 2.4 * fp.sy, 4, fp.rot, 0.008, fp.sx / fp.sy));
   }
   // --- decoys: the same rock, but each one is its own mesh so it can fall away when it gives ---
+  // They are cut from the prototypes too, with the per-hold shade on a cloned material instead of
+  // an instance colour, so a decoy is still pixel-for-pixel a hold until you weigh it.
   const fakeParts = [];
-  for (const f of fakes) {
-    const g = new THREE.Group();
-    const blob = new THREE.Mesh(holdBlob(f), holdMat);
-    blob.castShadow = true; blob.receiveShadow = true;
-    g.add(blob);
-    root.add(g);
-    fakeParts.push({ fake: f, group: g, blob, fall: 0, vy: 0, spin: (rnd() - 0.5) * 4 });
+  {
+    const m = new THREE.Matrix4();
+    for (const f of fakes) {
+      const g = new THREE.Group();
+      const proto = protos[protoOf(f)];
+      const r = holdRnd(f);
+      footprint.set(f.id, instanceMatrix(f, proto, r, m));
+      const mat = holdMat.clone();
+      const shade = (0.82 + r() * 0.2) / SHADE_MEAN;    // the prototype already carries SHADE_MEAN
+      mat.color.setRGB(shade * (0.96 + r() * 0.08), shade * (0.96 + r() * 0.08), shade * (0.96 + r() * 0.08));
+      const blob = new THREE.Mesh(proto.geo, mat);
+      m.decompose(blob.position, blob.quaternion, blob.scale);
+      blob.castShadow = true; blob.receiveShadow = true;
+      blob.userData.holdBucket = 'holds';
+      g.add(blob);
+      root.add(g);
+      fakeParts.push({ fake: f, group: g, blob, fall: 0, vy: 0, spin: (rnd() - 0.5) * 4 });
+    }
   }
 
-  let holdsMesh = null;
-  if (plainGeos.length) {
-    holdsMesh = new THREE.Mesh(mergeGeometries(plainGeos, false), holdMat);
-    holdsMesh.name = 'holds';
-    holdsMesh.castShadow = true; holdsMesh.receiveShadow = true;
-    root.add(holdsMesh);
-  }
   if (skirtGeos.length) {
     const skirtMat = new THREE.MeshBasicMaterial({
       map: skirtTex, color: 0x000000, transparent: true, opacity: 0.55, depthWrite: false,
@@ -293,6 +495,7 @@ export async function createWorld({ renderer, scene, route, tier }) {
     const skirtMesh = new THREE.Mesh(mergeGeometries(skirtGeos, false), skirtMat);
     skirtMesh.name = 'hold-skirts';
     skirtMesh.renderOrder = 0;
+    skirtMesh.userData.holdBucket = 'holds';
     root.add(skirtMesh);
   }
   let chalkMesh = null;
@@ -305,6 +508,7 @@ export async function createWorld({ renderer, scene, route, tier }) {
     chalkMesh.name = 'chalk';
     chalkMesh.receiveShadow = true;
     chalkMesh.renderOrder = 1;
+    chalkMesh.userData.holdBucket = 'holds';
     root.add(chalkMesh);
   }
 
@@ -479,7 +683,9 @@ export async function createWorld({ renderer, scene, route, tier }) {
 
   // A burst: grit thrown out of the socket, mostly sideways and down, with the puff hanging
   // where the rock was. Oldest particles are recycled, so a second decoy never grows the pool.
-  function burstDust(x, y, z) {
+  // `up` biases the throw upward: a decoy sheds grit downward out of its socket (the default), a
+  // body hitting the ground kicks it up out of the dirt (B53).
+  function burstDust(x, y, z, up = 0) {
     for (let n = 0; n < DUST_PER; n++) {
       const i = dustNext;
       dustNext = (dustNext + 1) % DUST_MAX;
@@ -490,7 +696,7 @@ export async function createWorld({ renderer, scene, route, tier }) {
       dust.positions[k + 1] = y + Math.sin(a) * 0.05;
       dust.positions[k + 2] = z + 0.02 + Math.random() * 0.05;
       dustVel[k] = Math.cos(a) * sp;
-      dustVel[k + 1] = Math.sin(a) * sp * 0.55 - 0.25;      // biased downward: the rock is falling
+      dustVel[k + 1] = Math.sin(a) * sp * 0.55 - 0.25 + up; // biased downward: the rock is falling
       dustVel[k + 2] = 0.25 + Math.random() * 0.5;          // out of the face, toward the climber
       dustAge[i] = 0;
       dustLife[i] = 0.55 + Math.random() * 0.55;
@@ -523,10 +729,150 @@ export async function createWorld({ renderer, scene, route, tier }) {
     hoverRings[side] = { mesh: m, glow, k: 0 };
   }
 
+  // =========================================================================================
+  // B53 — THE GROUND. Everything from here to END OF GROUND is the floor of the world.
+  //
+  // WHY IT IS AT -0.55. The sim's `CFG.FLOOR` (0.75) is the body point — the SHOULDER — when you
+  // stand at the base with nothing held, and the eye sits at body.y + 0.30. So the dirt has to be
+  // a shoulder's height below FLOOR, not at it: GROUND.y = FLOOR - 1.30 puts the standing eye at
+  // 1.05, which is 1.60 m above the open terrace and 1.40 m above the scree banked against the
+  // rock — a person, either way. Anything shallower and the climber is a child staring at his own
+  // knees, and the start holds at y ≈ 1.2 stop reading as something you reach up to. It is the far
+  // end of the range the row allowed (FLOOR minus 0.75 to 1.30), taken because that is the end
+  // where the numbers come out as a human.
+  //
+  // WHY THERE IS NO SEAM. Nothing is skirted and `wallZ` is untouched: the wall plane already runs
+  // from y = -8 to 43.5 (WALL.height/yCenter), so it passes 7.45 m THROUGH the ground and out the
+  // bottom. The join is a real intersection, and what sells it is scree — the ground banks up
+  // against the rock (GROUND.talus) and darkens into the corner (the vertex colours below).
+  const GROUND = {
+    y: -0.55,
+    halfX: 15, back: -6, front: 24,   // 30 × 30 m: under the whole 9 m face, out past the camera
+    seg: 96,                          // 0.31 m cells — the near ground is where you die
+    tile: WALL.tile,                  // the same 3 m of stone as the wall, and the same textures
+    rim: 3.4,                         // the outer ring of the terrace falls away into the cloud sea
+    rimFrom: 0.72,                    // ...starting at this fraction of the half-extent
+    talus: 0.12, talusRun: 1.4,       // scree banked against the foot of the rock. Kept small on
+                                      // purpose: it is banked exactly where the climber stands, so
+                                      // every centimetre of it comes off his height
+    boulders: 12,                     // ONE InstancedMesh of ONE prototype. Measured at tier phone:
+                                      // the whole ground is +3 draw calls and +30,432 triangles
+                                      // standing at the base (the third call is the boulders' own
+                                      // shadow pass), +1 and +18,432 from 12 m up, nothing above ~20
+  };
+  const GROUND_ZMID = (GROUND.back + GROUND.front) / 2;
+  const GROUND_ZHALF = (GROUND.front - GROUND.back) / 2;
+  // How far a point on the terrace is toward the edge, 0 at the middle and 1 at the rim.
+  function groundEdge(x, z) {
+    return Math.max(Math.abs(x) / GROUND.halfX, Math.abs(z - GROUND_ZMID) / GROUND_ZHALF);
+  }
+  // The ground's surface. Three octaves of the same noise the wall is made of, plus the talus, less
+  // the rim roll-off. Exported on `world` so the camera knows where to put a head that has landed.
+  function groundAt(x, z) {
+    let h = GROUND.y
+      + 0.155 * noise.noise(x * 0.11 + 210, z * 0.11 - 90)
+      + 0.070 * noise.noise(x * 0.43 + 60, z * 0.43 + 130)
+      + 0.028 * noise.noise(x * 1.35 + 5, z * 1.35 + 22);
+    const out = Math.max(0, z - wallZ(x, GROUND.y));          // metres out from the rock face
+    h += GROUND.talus * Math.exp(-Math.pow(out / GROUND.talusRun, 2));
+    const rim = smoothstep(GROUND.rimFrom, 1, groundEdge(x, z));
+    return h - GROUND.rim * rim * rim;
+  }
+  // The camera rig is handed `world.wallZ` by the integrator and nothing else, so the one number it
+  // needs from down here rides along on the function. (CONTRACTS: world-light → arms-camera.)
+  wallZ.groundY = GROUND.y;
+
+  const groundGeo = new THREE.PlaneGeometry(GROUND.halfX * 2, GROUND_ZHALF * 2, GROUND.seg, GROUND.seg);
+  groundGeo.rotateX(-Math.PI / 2);
+  groundGeo.translate(0, 0, GROUND_ZMID);
+  {
+    const pos = groundGeo.attributes.position;
+    const uv = groundGeo.attributes.uv;
+    const col = new Float32Array(pos.count * 3);
+    for (let i = 0; i < pos.count; i++) {
+      const x = pos.getX(i), z = pos.getZ(i);
+      pos.setY(i, groundAt(x, z));
+      uv.setXY(i, x / GROUND.tile, z / GROUND.tile);
+      // Dust and bare stone in patches, fine grit over both, the corner at the foot of the wall in
+      // shadow (this is what hides the join more than any geometry does), the rim rolling to dark.
+      const patch = smoothstep(-0.15, 0.45, noise.noise(x * 0.33 + 410, z * 0.33 - 260));
+      const grit = 0.5 + 0.5 * noise.noise(x * 1.7 + 13, z * 1.7 + 77);
+      const out = Math.max(0, z - wallZ(x, GROUND.y));
+      let k = (0.68 + 0.30 * patch) * (0.90 + 0.10 * grit);
+      // The corner has to be dark enough to read as a corner and no darker: it is the first metre
+      // in front of the climber's boots and the last thing he sees, and at 0.55 over 0.9 m the
+      // ground he lands on came out nearly black.
+      k *= 1 - 0.34 * Math.exp(-Math.pow(out / 0.7, 2));
+      k *= 1 - 0.40 * smoothstep(GROUND.rimFrom, 1, groundEdge(x, z));
+      // Dust is paler and greyer than the wall's iron red; bare stone keeps the wall's own colour,
+      // which is what stops the floor reading as more wall lying down.
+      col[i * 3] = lerp(0.99, 1.10, patch) * k;
+      col[i * 3 + 1] = lerp(0.95, 1.07, patch) * k;
+      col[i * 3 + 2] = lerp(0.91, 1.05, patch) * k;
+    }
+    groundGeo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+    groundGeo.setAttribute('uv1', new THREE.BufferAttribute(uv.array.slice(), 2));
+    groundGeo.computeVertexNormals();
+    groundGeo.computeBoundingSphere();
+  }
+  // The same material as the wall, so the ground is the same stone under the same dusk → night
+  // schedule with no second copy of it: env.update drives the lights, the fog and the exposure, and
+  // this picks all three up for free. Only the normal scale drops — the wall is read head-on, the
+  // ground at a grazing angle, where 1.45 boils into sparkle.
+  const groundMat = wallMat.clone();
+  groundMat.normalScale = new THREE.Vector2(0.85, 0.85);
+  const ground = new THREE.Mesh(groundGeo, groundMat);
+  ground.name = 'ground';
+  ground.receiveShadow = true;      // no castShadow: there is nothing under it to cast onto
+  ground.matrixAutoUpdate = false;
+  root.add(ground);
+
+  // Scree and boulders, so the floor is not a carpet. Twelve instances of ONE hold prototype — the
+  // sloper family, the one with the least chalk on it — laid on its back so the blob's flat front
+  // face is the weathered top and its stretched back is buried. One draw call for all twelve.
+  let boulders = null;
+  {
+    const proto = protos[FAMILY_OF.sloper * PROTO.variants];
+    const brnd = mulberry32(seed * 2654435761 + 991);
+    const mesh = new THREE.InstancedMesh(proto.geo, holdMat, GROUND.boulders);
+    mesh.name = 'ground-boulders';
+    mesh.castShadow = true; mesh.receiveShadow = true;
+    const m = new THREE.Matrix4();
+    const p = new THREE.Vector3(), q = new THREE.Quaternion(), s = new THREE.Vector3();
+    const lay = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), -Math.PI / 2);
+    const c = new THREE.Color();
+    for (let i = 0; i < GROUND.boulders; i++) {
+      // The first five are scree banked into the corner where the ground meets the rock; the rest
+      // are boulders out on the terrace, kept back from where the climber lands so a rock cannot
+      // end up inside the lens on the last frame of a fall.
+      const near = i < 5;
+      const x = (brnd() - 0.5) * (near ? 11 : 22);
+      const z = near ? wallZ(x, GROUND.y) + 0.18 + brnd() * 0.75
+        : (Math.abs(x) < 3.2 ? 2.6 : 1.5) + brnd() * 6.5;
+      const size = near ? 0.15 + brnd() * 0.16 : 0.34 + brnd() * 0.5;
+      p.set(x, groundAt(x, z) + size * 0.14, z);
+      q.setFromEuler(new THREE.Euler((brnd() - 0.5) * 0.36, brnd() * Math.PI * 2, (brnd() - 0.5) * 0.36, 'YXZ'));
+      q.multiply(lay);
+      s.set(size * (0.9 + brnd() * 0.4), size * (0.9 + brnd() * 0.4), size * (0.7 + brnd() * 0.5));
+      mesh.setMatrixAt(i, m.compose(p, q, s));
+      // duller and a shade cooler than the rock on the wall: these have been down here in the shade
+      const k = 0.60 + brnd() * 0.28;
+      c.setRGB(k * 0.98, k, k * 1.06);
+      mesh.setColorAt(i, c);
+    }
+    mesh.instanceMatrix.needsUpdate = true;
+    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+    mesh.computeBoundingSphere();
+    root.add(mesh);
+    boulders = mesh;
+  }
+  // END OF GROUND ===========================================================================
+
   // ---------------------------------------------------------------------------------------
   // Per-frame
   let t = 0;
   let routeRef = null;
+  let shadowY = Infinity;                 // body height the shadow-band counts were cut for
   const holdById = new Map();
   const _a = new THREE.Vector3(), _b = new THREE.Vector3();
   const _size = new THREE.Vector2();
@@ -574,6 +920,13 @@ export async function createWorld({ renderer, scene, route, tier }) {
     renderer.getDrawingBufferSize(_size);
     embers.setHeightPx(_size.y);
     embers.setTime(t);
+
+    // The shadow band moves with the climber, a quarter metre at a time — a binary search per
+    // instanced mesh, not per hold, and only when the body has actually gone somewhere.
+    if (holdMeshes.length && Math.abs(body.y - shadowY) > 0.25) {
+      shadowY = body.y;
+      updateShadowCounts(body.y);
+    }
 
     // --- runes -----------------------------------------------------------------------------
     runeByDist.length = 0;
@@ -652,6 +1005,24 @@ export async function createWorld({ renderer, scene, route, tier }) {
       fp.group.rotation.z += fp.spin * dt;
       if (fp.fall > 4 || fp.group.position.y < -60) fp.group.visible = false;
     }
+
+    // --- B53: the ground ---------------------------------------------------------------------
+    // Two things only. (1) The ground you hit: the sim's `impact` is the frame the body reaches
+    // CFG.FLOOR, and it throws a puff of grit out of the dirt from the existing dust pool — the
+    // screen is cutting to black over the next 80 ms, and this is what the last of those frames
+    // shows. `grounded` (letting go with your feet on the ground) never fires `impact`, so it
+    // never puffs. (2) The boulders leave the shadow pass once the climber is above the shadow
+    // camera's box, exactly as the holds do; the ground plane itself is never hidden, because
+    // looking down the drop from 30 m up is the whole point of it being there.
+    if (events && events.length) {
+      for (let i = 0; i < events.length; i++) {
+        const e = events[i];
+        if (!e || e.type !== 'impact') continue;
+        const gz = wallZ(body.x, GROUND.y) + 0.85;      // half a metre past the eye, not in it
+        burstDust(body.x, groundAt(body.x, gz) + 0.08, gz, 1.1);
+      }
+    }
+    if (boulders) boulders.castShadow = body.y < GROUND.y + PROTO.shadowBand;
 
     // --- decoy dust ------------------------------------------------------------------------
     if (dustLive > 0) {
@@ -742,7 +1113,13 @@ export async function createWorld({ renderer, scene, route, tier }) {
 
   return {
     wallZ, holdZ, update, setTier,
-    env, root, wall, holds: holdsMesh, chalk: chalkMesh, runes, altar, waymarks: waymarkMesh, embers, hoverRings,
+    // B53: the floor of the world. `groundY` is the nominal plane the row settled on; `groundAt`
+    // is the surface itself (relief + the talus banked against the rock), for anything that has to
+    // put something down on it. The camera reads `wallZ.groundY`, which is the same number.
+    groundY: GROUND.y, groundAt, ground, boulders,
+    // `holds` is the group the instanced rock hangs in (B52); `holdMeshes` is one InstancedMesh
+    // per prototype blob, in case anything ever needs to reach past the group.
+    env, root, wall, holds: holdsGroup, holdMeshes, chalk: chalkMesh, runes, altar, waymarks: waymarkMesh, embers, hoverRings,
     dust,
     get dustLive() { return dustLive; },
     get time() { return t; },
