@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Web-zip — the line and the calls</title>
+<link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root { --bg:#14100d; --panel:#1f1813; --line:#3a2c22; --text:#f1e6d8; --muted:#b9a58f; --teal:#7fe0ff; --gold:#d99a5b; --ok:#8ddc9b; }
+  * { box-sizing:border-box; }
+  body { margin:0; padding-bottom:40px; background:radial-gradient(1200px 700px at 50% -10%, #3a2333 0%, var(--bg) 62%); color:var(--text); font-family:Inter, system-ui, sans-serif; line-height:1.5; }
+  body.wide { min-width:1260px; }
+  main { max-width:1240px; margin:0 auto; padding:26px 24px; }
+  h1 { font-family:Cinzel, serif; letter-spacing:.05em; color:var(--gold); font-size:clamp(20px,2.6vw,32px); margin:0 0 4px; text-align:center; }
+  .sub { text-align:center; color:var(--muted); margin:0 auto 6px; max-width:860px; }
+  .done { text-align:center; color:var(--ok); font-size:13px; margin:0 0 8px; }
+  h2 { font-size:12.5px; letter-spacing:.12em; text-transform:uppercase; color:var(--teal); margin:30px 0 2px; }
+  h2 .q { color:var(--muted); text-transform:none; letter-spacing:0; font-size:13.5px; font-weight:400; margin-left:10px; }
+  .row { display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:14px; margin-top:11px; }
+  .card { position:relative; background:var(--panel); border:1px solid var(--line); border-radius:15px; overflow:hidden; cursor:pointer; transition:border-color .15s, box-shadow .15s, transform .15s; }
+  .card:hover { transform:translateY(-2px); border-color:rgba(127,224,255,.45); }
+  .card.sel { border-color:var(--teal); box-shadow:0 0 0 3px rgba(127,224,255,.16); }
+  .card canvas, .card .art { display:block; width:100%; aspect-ratio:16/10; background:linear-gradient(180deg,#2b2030,#140f14); }
+  .bd { padding:12px 14px 14px; }
+  .bd h3 { margin:0 0 3px; font-size:15px; display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  .bd p { margin:0; font-size:13px; color:var(--muted); }
+  .rec { font-size:10px; letter-spacing:.08em; text-transform:uppercase; padding:2px 7px; border-radius:999px; background:rgba(127,224,255,.14); color:var(--teal); border:1px solid rgba(127,224,255,.4); font-weight:600; }
+  .tick { position:absolute; right:11px; top:11px; width:25px; height:25px; border-radius:50%; background:var(--teal); color:#06222b; display:none; align-items:center; justify-content:center; font-weight:800; font-size:14px; }
+  .card.sel .tick { display:flex; }
+  .note { font-size:12.5px; color:var(--muted); margin-top:16px; border-left:2px solid var(--line); padding-left:11px; max-width:940px; }
+  #bar { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-top:24px; background:rgba(20,14,11,.9); border:1px solid var(--line); border-radius:14px; padding:13px 16px; }
+  #bar .sum { flex:1 1 300px; font-size:13px; color:var(--muted); }
+  #bar .sum b { color:var(--teal); }
+  #bar input { flex:1 1 220px; padding:10px 12px; border-radius:10px; border:1px solid var(--line); background:rgba(255,255,255,.05); color:var(--text); font:inherit; }
+  #bar button { border:0; border-radius:10px; padding:11px 18px; font:inherit; font-weight:600; cursor:pointer; background:var(--teal); color:#06222b; }
+  #bar .st { flex-basis:100%; font-size:13px; color:var(--ok); }
+  .shot { position:relative; }
+  .shot img { display:block; width:100%; aspect-ratio:16/10; object-fit:cover; }
+  .shot svg { position:absolute; inset:0; width:100%; height:100%; }
+  .err { padding:14px; color:#ffb0b0; font-size:13px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>THE WEB-ZIP — THE LINE, AND WHAT IS LEFT</h1>
+  <p class="sub">The glove is in the game already. These are the calls left before the zip itself gets built. The first row is live 3D under the game's dusk light; drag any of them to turn it.</p>
+  <p class="done">✔ glove: classic red and blue &nbsp;·&nbsp; ✔ code: ARACHNID on the title screen &nbsp;·&nbsp; ✔ 🤘 activation &nbsp;·&nbsp; ✔ sticky + endless grip</p>
+
+  <h2>1 · The line <span class="q">What does the web look like when it flies?</span></h2>
+  <div class="row" id="rowLine"></div>
+
+  <h2>2 · The pull <span class="q">What happens once it bites?</span></h2>
+  <div class="row" id="rowPull"></div>
+
+  <h2>3 · Aiming <span class="q">Where does it go?</span></h2>
+  <div class="row" id="rowAim"></div>
+
+  <h2>4 · The cost <span class="q">How often can you use it?</span></h2>
+  <div class="row" id="rowCost"></div>
+
+  <p class="note">The web line is generated in code (<em>src/webLine.js</em>): several thin strands helixed around the shot axis with a deterministic wobble, splaying into a fan and a splat where it bites. Matched to the reference you sent.</p>
+
+  <div id="bar">
+    <div class="sum" id="sum">Pick one in each row.</div>
+    <input id="note" placeholder="Anything else about the zip…">
+    <button id="send">Send to Claude →</button>
+    <div class="st" id="st"></div>
+  </div>
+</main>
+
+<script type="importmap">{ "imports": { "three": "../vendor/three/three.module.js", "three/addons/": "../vendor/three/addons/" } }</script>
+<script type="module">
+import * as THREE from 'three';
+import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
+import { createWebLine, WEB_VARIANTS } from '../src/webLine.js';
+
+if (new URLSearchParams(location.search).has('wide')) document.body.classList.add('wide');
+
+const picks = {};
+const LABEL = { line: 'Line', pull: 'Pull', aim: 'Aim', cost: 'Cost' };
+function card(row, group, value, title, blurb, rec) {
+  const el = document.createElement('div');
+  el.className = 'card';
+  el.innerHTML = `<span class="tick">✓</span><div class="slot"></div>
+    <div class="bd"><h3>${title}${rec ? ' <span class="rec">Recommended</span>' : ''}</h3><p>${blurb}</p></div>`;
+  row.appendChild(el);
+  el.addEventListener('click', (e) => {
+    if (e.target.closest('input')) return;
+    row.querySelectorAll('.card').forEach((c) => c.classList.remove('sel'));
+    el.classList.add('sel'); picks[group] = value;
+    document.getElementById('sum').innerHTML = Object.keys(picks).map((k) => LABEL[k] + ': <b>' + picks[k] + '</b>').join(' &nbsp;·&nbsp; ');
+  });
+  return el.querySelector('.slot');
+}
+
+// ---------------------------------------------------------------------------------------------
+// Row 1: the line, in live 3D against the game's own sky.
+const LINES = [
+  ['rope', 'Twisted rope', 'Four thin strands wound around each other with an irregular sway, splaying into a fan where it bites. Closest to your reference, and it reads as something spun rather than fired.', true],
+  ['thin', 'Single clean strand', 'One smooth filament. Reads instantly at speed and costs the least to draw, but it looks more like a wire than a web.', false],
+  ['rune', 'Ritual web', 'The same twist, glowing the rune teal so the bloom catches it. Ties the egg to this cliff instead of importing another world.', false],
+];
+
+try {
+  const hdr = await new RGBELoader().loadAsync('../assets/hdri/kloppenheim_06_puresky_1k.hdr');
+  hdr.mapping = THREE.EquirectangularReflectionMapping;
+  const rowLine = document.getElementById('rowLine');
+
+  for (const [id, title, blurb, rec] of LINES) {
+    const slot = card(rowLine, 'line', id, title, blurb, rec);
+    const canvas = document.createElement('canvas');
+    slot.appendChild(canvas);
+
+    const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
+    renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    const scene = new THREE.Scene();
+    const pm = new THREE.PMREMGenerator(renderer);
+    scene.environment = pm.fromEquirectangular(hdr).texture;
+    scene.environmentIntensity = 0.8;
+    scene.add(new THREE.DirectionalLight(0xffb572, 2.6).translateX(-2).translateY(2).translateZ(3));
+    const fill = new THREE.DirectionalLight(0x8fa8ff, 0.7); fill.position.set(2, 0, -1); scene.add(fill);
+
+    const camera = new THREE.PerspectiveCamera(34, 1.6, 0.05, 60);
+    camera.position.set(0, 0.05, 2.35);
+
+    // a slab of rock for it to bite into, so the fan has something to sit on
+    const rock = new THREE.Mesh(new THREE.BoxGeometry(0.9, 1.6, 0.25),
+      new THREE.MeshStandardMaterial({ color: 0x6b4a38, roughness: 0.95 }));
+    rock.position.set(0.72, 0, -0.2);
+    scene.add(rock);
+
+    const web = createWebLine({ variant: id });
+    scene.add(web.group);
+    const holder = new THREE.Group(); holder.add(web.group); holder.add(rock); scene.add(holder);
+    web.set(new THREE.Vector3(-0.75, -0.35, 0.15), new THREE.Vector3(0.6, 0.42, -0.06), { grow: 1 });
+
+    let rx = 0.05, ry = 0, drag = false, lx = 0, ly = 0;
+    canvas.addEventListener('pointerdown', (e) => { drag = true; lx = e.clientX; ly = e.clientY; canvas.setPointerCapture(e.pointerId); });
+    canvas.addEventListener('pointermove', (e) => { if (!drag) return; ry += (e.clientX - lx) * 0.01; rx = Math.max(-1, Math.min(1, rx + (e.clientY - ly) * 0.01)); lx = e.clientX; ly = e.clientY; });
+    canvas.addEventListener('pointerup', () => { drag = false; });
+    const fit = () => { const w = canvas.clientWidth, h = canvas.clientHeight; if (w && h) { renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix(); } };
+    new ResizeObserver(fit).observe(canvas); fit();
+    renderer.setAnimationLoop(() => { holder.rotation.set(rx, ry, 0); renderer.render(scene, camera); });
+  }
+} catch (err) {
+  document.getElementById('rowLine').innerHTML = '<div class="err">Could not render the web: ' + (err && err.message ? err.message : err) + '</div>';
+  console.error(err);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Rows 2-4: drawn over a real frame from the game.
+const SHOT = 'spider-ingame.jpeg';
+function overlay(slot, svg) {
+  slot.innerHTML = `<div class="shot"><img src="${SHOT}" alt=""><svg viewBox="0 0 320 200">${svg}</svg></div>`;
+}
+const WEB_PATH = 'M40 170 C 120 140, 200 90, 268 46';
+
+const PULL = [
+  ['reel', 'Reel yourself in', 'The web goes taut and hauls you up the line in about a second, hands free, then plants both hands where it bit. Direct, readable, and it never leaves you dangling somewhere the route cannot continue.', true,
+   `<path d="${WEB_PATH}" stroke="#eaf6ff" stroke-width="3" fill="none"/><g stroke="#7fe0ff" stroke-width="3" fill="none"><path d="M120 128 l16 -10 M150 110 l16 -10 M180 92 l16 -10"/></g><circle cx="268" cy="46" r="10" fill="none" stroke="#7fe0ff" stroke-width="2.5"/>`],
+  ['swing', 'Swing on it', 'The line becomes a pendulum: you keep your momentum, arc across the face, and let go when you want. The most Spider-Man, and by far the most physics to get right on a cliff you are meant to be climbing.', false,
+   `<path d="${WEB_PATH}" stroke="#eaf6ff" stroke-width="3" fill="none"/><path d="M40 170 A 150 150 0 0 1 168 176" stroke="#7fe0ff" stroke-width="2.5" fill="none" stroke-dasharray="7 6"/><circle cx="268" cy="46" r="10" fill="none" stroke="#7fe0ff" stroke-width="2.5"/>`],
+  ['climb', 'Climb the line', 'The web stays and you go hand over hand along it. Keeps the game about hands, but it turns a power fantasy into more of the same work.', false,
+   `<path d="${WEB_PATH}" stroke="#eaf6ff" stroke-width="3" fill="none"/><g fill="#7fe0ff"><circle cx="120" cy="128" r="5"/><circle cx="168" cy="99" r="5"/><circle cx="214" cy="74" r="5"/></g>`],
+];
+const AIM = [
+  ['free', 'Free aim, anywhere', 'The web goes where you point, hold or bare rock. With a sticky glove the whole cliff becomes a landing, which is the point of the egg.', true,
+   `<path d="M40 170 C 130 150, 210 110, 276 62" stroke="#eaf6ff" stroke-width="2.5" fill="none" stroke-dasharray="8 6"/><g stroke="#7fe0ff" stroke-width="2.5" fill="none"><circle cx="276" cy="62" r="15"/><path d="M276 38 v9 M276 77 v9 M252 62 h9 M291 62 h9"/></g>`],
+  ['snap', 'Snap to holds', 'Aim roughly, the web takes the nearest real hold. Kind to a thumb on a phone, but the cliff stays a ladder.', false,
+   `<path d="M40 170 C 130 150, 210 110, 276 62" stroke="#eaf6ff" stroke-width="2.5" fill="none"/><ellipse cx="276" cy="62" rx="34" ry="17" fill="none" stroke="#7fe0ff" stroke-width="2.5"/>`],
+  ['look', 'Fire where you look', 'Reuses the look-around: turn your head, fire along your gaze. Elegant, but you cannot watch your body and aim at once.', false,
+   `<path d="M60 40 A 130 130 0 0 1 292 88" stroke="#3a2c22" stroke-width="14" fill="none"/><path d="M120 44 A 130 130 0 0 1 276 66" stroke="#7fe0ff" stroke-width="4" fill="none"/><path d="M40 170 C 130 150, 210 110, 276 66" stroke="#eaf6ff" stroke-width="2.5" fill="none"/>`],
+];
+const COST = [
+  ['stamina', 'It costs stamina', 'A shot drains a chunk of the right hand. You can zip whenever you like, but you pay for it and have to rest. Fits the game already there, and it cannot trivialise the climb.', true,
+   `<g stroke="#7fe0ff" stroke-width="9" fill="none" stroke-linecap="round"><path d="M60 160 A 44 44 0 0 1 148 160" opacity=".25"/><path d="M60 160 A 44 44 0 0 1 116 122" /></g><path d="${WEB_PATH}" stroke="#eaf6ff" stroke-width="2.5" fill="none" opacity=".8"/>`],
+  ['cooldown', 'A cooldown', 'Free, but only every few seconds. Simple to read, and it makes the zip a rhythm rather than a resource.', false,
+   `<circle cx="160" cy="110" r="42" fill="none" stroke="#3a2c22" stroke-width="9"/><path d="M160 68 A 42 42 0 0 1 196 132" stroke="#7fe0ff" stroke-width="9" fill="none" stroke-linecap="round"/><path d="${WEB_PATH}" stroke="#eaf6ff" stroke-width="2.5" fill="none" opacity=".6"/>`],
+  ['free', 'Unlimited', 'Shoot as often as you like. It is a cheat code, after all. Honest about what it is, and it does end the climb as a challenge.', false,
+   `<path d="${WEB_PATH}" stroke="#eaf6ff" stroke-width="3" fill="none"/><path d="M40 170 C 110 170, 190 150, 280 130" stroke="#eaf6ff" stroke-width="2" fill="none" opacity=".6"/><path d="M40 170 C 130 120, 200 70, 262 20" stroke="#eaf6ff" stroke-width="2" fill="none" opacity=".6"/>`],
+];
+for (const [rowId, group, defs] of [['rowPull', 'pull', PULL], ['rowAim', 'aim', AIM], ['rowCost', 'cost', COST]]) {
+  const row = document.getElementById(rowId);
+  for (const [id, title, blurb, rec, svg] of defs) overlay(card(row, group, id, title, blurb, rec), svg);
+}
+
+document.getElementById('send').addEventListener('click', async () => {
+  const st = document.getElementById('st');
+  st.textContent = 'Sending…';
+  try {
+    const r = await fetch('/api/event', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: 'submit', topic: 'webzip-2', picks, note: document.getElementById('note').value.trim() }) });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    st.textContent = 'Sent ✓ Claude has your picks.';
+  } catch (e) { st.textContent = 'Could not send (' + e.message + ').'; }
+});
+</script>
+</body>
+</html>
