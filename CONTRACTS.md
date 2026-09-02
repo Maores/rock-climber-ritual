@@ -272,7 +272,8 @@ hud.onPause(cb)                                       // cb(true/false) around t
 // but the cut belongs to the ground arriving. `grounded` fires no `impact` and never reaches 'fallen', so letting go with
 // your feet down is untouched by all of it. Timings, from the frame `impact` lands:
 //   0 ms      camera.js starts the eye's last drop, to 0.35 m above the ground over 120 ms, with the existing roll jolt;
-//             audio.js's `impact` cue fires (it always did — it is keyed on the event's own name)
+//             audio.js's `impact` cue fires — keyed on the event's own name and scheduled at the frame's audio time
+//             (B62: before it, the cue threw on a null destination and had never actually sounded)
 //   0–80 ms   the screen CUTS TO BLACK: `body.dead-veil::after`, opaque #000, z-index 15 — over the canvas and the HUD,
 //             under the overlays — animated 0 → 1 by `deadCut 80ms linear`. `#hud.dead` goes on at the same moment and
 //             hides the HUD outright, and `#mute` / `#customBtn` / `#menuBtn` (z-index 40, not in #hud) go with it
@@ -283,7 +284,10 @@ hud.onPause(cb)                                       // cb(true/false) around t
 hud.openCustom() / closeCustom() / refreshCustomBtn() / onSkinChange(cb)                 // the hand panel behind the ✦ button
 export function createAudio() → audio                                                   // audio.js — WebAudio; call audio.unlock() on first user gesture
 audio.handle(events, state, dt)                       // wind bed follows height/night, cues per event, heartbeat when any stamina < 0.25
-audio.setMusic(url); audio.setMuted(b); audio.muted
+audio.setMusic(url, { night?, decode? }); audio.setMuted(b); audio.muted
+// B61: `url` is the climb's theme. The night track defaults to `assets/audio/theme2.mp3` beside it (audio.js knows
+// its own assets; pass `night: null` for none) and plays silently from the same gesture, then takes over in a 2 s
+// crossfade once state.night passes 0.55 and hands back when a new climb starts under 0.45. setMusic(null) stops both.
 ```
 Required DOM ids in `index.html`: `#gl` (canvas), `#hud`, `#title`, `#end`, `#stick-l`, `#stick-r`,
 `#ctl-l`, `#ctl-r`, `#web`, `#height`, `#runes`, `#msg`, `#falls`, `#mute`, `#vig`, `#seeds`, `#custom`, `#customBtn`, `#menuBtn`, `#confirm`, `#boot`.
@@ -336,6 +340,8 @@ question. The URL accepts `?seed= ?auto ?tier=phone ?fps=1`.
 - Sky HDRI: `assets/hdri/kloppenheim_06_puresky_{2k,1k}.hdr`
 - Hands: `assets/models/hands/realistic_hand.glb` (CC-BY 3.0, J-Toastie; credit in `assets/models/hands/LICENSE.md`; the title screen's footer shows it (the end-screen credits box was removed in B55))
 - Music: hud-audio finds one CC0 / CC-BY / public-domain track (dark ambient, ritual mood), saves it as `assets/audio/theme.mp3` (≤ 6 MB) with its credit in `assets/CREDITS.md`, and plays it via audio.setMusic after unlock. If no compliant track is found, ship without music and say so.
+  A second track of the same kind, `assets/audio/theme2.mp3` (≤ 6 MB, credited the same way), is the night track (B61):
+  audio.js loads it beside the theme itself and cross-fades to it past state.night 0.55.
 - three.js: `vendor/three/**` (0.185). Do not add dependencies or CDN scripts. Google Fonts (Cinzel, Inter) allowed in index.html.
 
 ## Quality tiers

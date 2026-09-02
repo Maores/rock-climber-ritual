@@ -55,6 +55,6 @@ are pure logic with no renderer imports, covered by `node --test test/`.
 ## Credits
 
 - "Realistic Hand" by J-Toastie via [Poly Pizza](https://poly.pizza/m/2lEkhDqfQf) — CC-BY 3.0
-- "Ritual" by Kevin MacLeod ([incompetech.com](https://incompetech.com)) — CC BY 4.0
+- "Ritual" and "Ossuary 6 - Air" by Kevin MacLeod ([incompetech.com](https://incompetech.com)) — CC BY 4.0
 - `rock_face_03`, `rock_boulder_dry`, `kloppenheim_06_puresky` by [Poly Haven](https://polyhaven.com) — CC0
 - Fonts: Cinzel and Inter via Google Fonts

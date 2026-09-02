@@ -1,22 +1,41 @@
 // audio.js — Rock Climber: The Ritual
 // Every sound effect is synthesised live in WebAudio (no samples): a wind bed that follows height and
-// night, grip / release / rune / fall / impact cues, a heartbeat under low stamina, plus one looped music
-// track routed through the same graph so iOS respects our ~0.35 gain (HTMLAudioElement.volume is
-// read-only there). The single export is createAudio(); see CONTRACTS.md, section "hud-audio".
+// night, grip / release / rune / fall / impact cues, a heartbeat under low stamina, plus two looped
+// music tracks routed through the same graph so iOS respects our ~0.35 gain (HTMLAudioElement.volume
+// is read-only there). The single export is createAudio(); see CONTRACTS.md, section "hud-audio".
 //
 // Lifecycle: the AudioContext is created inside unlock(), which must run in a user gesture on iOS.
 // main.js calls unlock() on the first gesture; this module also arms its own one-shot listeners as a
 // fallback, and unlock() is idempotent.
 //
-// Integration notes for main.js: setMusic(url) may be called before or after unlock(). If the track
-// stays silent on a device (e.g. iPhone Safari against a LAN server without HTTP Range support), call
-// setMusic(url, { decode: true }) to play the decoded loop instead; the element path also falls back
-// to it on a media error or after 8 s without decodable data. audio.debug() exposes wind level,
-// music state, heartbeat count and the master RMS for evidence capture.
+// Music (B61): setMusic(url) plays `url` as the climb's theme and, unless told otherwise, the night
+// track that lives beside it (NIGHT_URL, assets/audio/theme2.mp3). The night track is a second
+// element that runs SILENTLY under the theme from the same gesture, so iOS has already let it play
+// by the time it is wanted. Past state.night 0.55 (about the second rune) the two cross-fade over
+// 2 s; a new climb — night back under 0.45 while climbing — fades the theme back in; setMusic(null),
+// the title, stops both. Both sit under one bus that the wind ducks (B26) and the mute silences.
+//
+// Integration notes for main.js: setMusic(url, { night, decode }) may be called before or after
+// unlock(). If a track stays silent on a device (e.g. iPhone Safari against a LAN server without
+// HTTP Range support), call setMusic(url, { decode: true }) to play the decoded loops instead; the
+// element path also falls back to it on a media error or after 8 s without decodable data.
+// audio.debug() exposes wind level, music state, the fade, the last cue, heartbeat count and the
+// master RMS for evidence capture.
 
 const MUTE_KEY = 'ritual.muted';
 const MUSIC_GAIN = 0.35;
 const MAX_CUES_PER_FRAME = 6;
+
+// The second track (B61). hud-audio owns assets/audio/*, so this module knows where its own night
+// track lives and main.js keeps calling setMusic(url) with the theme alone.
+const NIGHT_URL = new URL('../assets/audio/theme2.mp3', import.meta.url).href;
+const NIGHT_AT = 0.55;        // state.night where the night track takes over: about the second rune
+const NIGHT_BACK = 0.45;      // and under which a NEW climb brings the theme back (a fall never does)
+const XFADE_S = 2.0;          // the crossfade, both ways
+// The night track is 5 LU quieter than the theme as shipped (-22.9 against -17.7 LUFS integrated,
+// ffmpeg's ebur128 over the two files in assets/audio), so it is levelled in the graph rather than
+// in the file. Its peak is -6.9 dBFS, so there is room for it.
+const NIGHT_TRIM = 1.8;
 
 function readMuted() {
   try { return localStorage.getItem(MUTE_KEY) === '1'; } catch (e) { return false; }
@@ -26,6 +45,22 @@ function writeMuted(b) {
 }
 const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
 
+// One music track: an HTMLAudioElement first, and a decoded looping buffer if the element gives up.
+function makeTrack(name) {
+  return {
+    name,
+    url: null,
+    el: null,             // HTMLAudioElement
+    node: null,           // MediaElementAudioSourceNode, or `true` on an engine that refused one
+    fade: null,           // this track's side of the crossfade, into the shared bus
+    wanted: false,        // play() succeeded at least once → the element is unlocked on iOS
+    fallback: null,       // { src: AudioBufferSourceNode|null } once the track is decoded instead
+    checkTimer: 0,
+    pendingDecode: false, // setMusic(url, { decode: true }) before unlock
+    deferred: false,      // the night track's decode waits until the fade wants it
+  };
+}
+
 export function createAudio() {
   let ctx = null;
   let master = null;
@@ -33,23 +68,24 @@ export function createAudio() {
   let noiseBuf = null;
   let wind = null;
 
-  let music = null;          // HTMLAudioElement
-  let musicUrl = null;
-  let musicNode = null;      // MediaElementAudioSourceNode
-  let musicGain = null;
-  let musicWanted = false;   // play() succeeded at least once → element is unlocked on iOS
+  // The two tracks share one bus (musicGain: MUSIC_GAIN, ducked by the wind) and each cross-fades
+  // through a gain of its own. `xfade` runs 0 (the theme) → 1 (the night track) at 1 / XFADE_S per second.
+  const tracks = { day: makeTrack('day'), night: makeTrack('night') };
+  let musicUrl = null;       // the theme, as setMusic was last told it; null is silence (the title)
+  let musicGain = null;      // the shared bus
   let retryArmed = false;
-  let musicFallback = null;  // { src: AudioBufferSourceNode|null } once the element gave up and the track is decoded instead
-  let musicCheckTimer = 0;
-  let pendingDecode = false; // setMusic(url, { decode: true }) before unlock
+  let xfade = 0, xfadeTo = 0, xfadeSent = -1;
   let meter = null;          // AnalyserNode on the master bus, for tests and evidence only
   let meterBuf = null;
 
   const heart = { t: 0.4, beats: 0 };
   let gust = 0, gustV = 0, autoT = 0;
   let duck = 0, duckSent = -1;      // 0 = music at full, 1 = fully under the wind
-  let lastPhase = null;
   let cuesThisFrame = 0;
+  let curState = null;              // what handle() was last given, for cues that read the route
+  const frameRunes = new Set();     // hold ids the 'rune' cue is answering this frame
+  let lastCue = null;               // { type, at (audio s), wall (ms) } of the last cue that fired
+  let holdMap = null, holdMapRoute = null;
 
   const audio = {
     muted: readMuted(),
@@ -63,15 +99,24 @@ export function createAudio() {
     dispose,
     // read-only snapshot for tests and evidence capture (window.__ritual.audio.debug())
     debug() {
+      const day = tracks.day, night = tracks.night;
       return {
         ctx: ctx ? ctx.state : 'none',
         unlocked: audio.unlocked,
         muted: audio.muted,
         wind: wind ? { level: +wind.level.toFixed(3), gain: +wind.gBp.gain.value.toFixed(3), rumble: +wind.gLp.gain.value.toFixed(3), hz: Math.round(wind.bp.frequency.value) } : null,
-        music: music ? { url: musicUrl, playing: (!music.paused && !music.ended) || !!(musicFallback && musicFallback.src), time: +music.currentTime.toFixed(1), duration: isFinite(music.duration) ? +music.duration.toFixed(1) : null, gain: musicGain ? +musicGain.gain.value.toFixed(3) : null, readyState: music.readyState, fallback: !!musicFallback } : null,
+        music: day.el ? { url: day.url, playing: trackPlaying(day), time: +day.el.currentTime.toFixed(1), duration: isFinite(day.el.duration) ? +day.el.duration.toFixed(1) : null, gain: musicGain ? +musicGain.gain.value.toFixed(3) : null, readyState: day.el.readyState, fallback: !!day.fallback } : null,
+        night: night.el ? { url: night.url, playing: trackPlaying(night), time: +night.el.currentTime.toFixed(1), duration: isFinite(night.el.duration) ? +night.el.duration.toFixed(1) : null, readyState: night.el.readyState, fallback: !!night.fallback } : null,
+        track: xfadeTo ? 'night' : 'day',
+        xfade: +xfade.toFixed(3),
+        fades: { day: day.fade ? +day.fade.gain.value.toFixed(3) : null, night: night.fade ? +night.fade.gain.value.toFixed(3) : null },
+        nightTrim: NIGHT_TRIM,
         duck: +duck.toFixed(3),
         heartIn: +heart.t.toFixed(2),
         heartbeats: heart.beats,
+        lastCue,
+        // ms between a cue's scheduled start and the speaker, as the engine reports it
+        latency: ctx ? +(((ctx.baseLatency || 0) + (ctx.outputLatency || 0)) * 1000).toFixed(1) : null,
         rms: rms(),
       };
     },
@@ -163,14 +208,15 @@ export function createAudio() {
     param.exponentialRampToValueAtTime(p, t + Math.max(a, 0.001));
     param.exponentialRampToValueAtTime(0.0002, t + a + Math.max(d, 0.01));
   }
-  function tone(type, f0, f1, t, dur, peak, a = 0.005, dest = master) {
+  // `dest` may be omitted or null: both mean the master bus
+  function tone(type, f0, f1, t, dur, peak, a = 0.005, dest = null) {
     const o = ctx.createOscillator();
     o.type = type;
     o.frequency.setValueAtTime(f0, t);
     if (f1 && f1 !== f0) o.frequency.exponentialRampToValueAtTime(f1, t + dur);
     const g = ctx.createGain();
     env(g.gain, t, peak, a, dur - a);
-    o.connect(g).connect(dest);
+    o.connect(g).connect(dest || master);
     o.start(t);
     o.stop(t + dur + 0.08);
     return o;
@@ -207,6 +253,30 @@ export function createAudio() {
       tone('sine', fr, fr, t, d, vol * g, 0.008, dest);
     }
   }
+  // Loose rock: `n` short bright ticks scattered over `span` seconds after `t`, each its own pitch
+  // and (without a `dest`) its own side, front-loaded and dying away as the stones settle. The tail
+  // of the ground hit and of a decoy going.
+  function scatter(t, n, span, vol, dest) {
+    for (let i = 0; i < n; i++) {
+      const at = t + span * Math.pow(Math.random(), 0.7);
+      const k = 1 - (at - t) / span;                        // the late ones are the quiet ones
+      const d = dest || pan(Math.random() < 0.5 ? 'L' : 'R');
+      const f = 1200 + Math.random() * 2400;
+      noise(at, 0.02 + Math.random() * 0.02, vol * (0.35 + 0.65 * k), { type: 'bandpass', f0: f, q: 3.5, a: 0.001, dest: d });
+      tone('sine', f * 0.5, f * 0.42, at, 0.03, vol * 0.25 * k, 0.001, d);
+    }
+  }
+  // The hold behind an event, looked up in the route handle() was last given. One Map per route.
+  function holdOf(id) {
+    const route = curState && curState.route;
+    if (!route || !route.holds || id == null) return null;
+    if (holdMapRoute !== route) {
+      holdMapRoute = route;
+      holdMap = new Map();
+      for (const h of route.holds) holdMap.set(h.id, h);
+    }
+    return holdMap.get(id) || null;
+  }
 
   const CUES = {
     start() {
@@ -214,12 +284,16 @@ export function createAudio() {
       noise(t, 1.6, 0.16, { type: 'lowpass', f0: 110, f1: 900, a: 0.6, q: 0.5 });
       chime(330, 0.12, master, t + 0.2);
     },
-    // the ground arriving: one heavy hit, then the air goes out of the scene
+    // the ground arriving (B53, B62): one heavy hit and the body's slap, then loose rock scattering
+    // and settling while the air goes out of the scene. Scheduled at the frame's own audio time, so
+    // the thud and the cut to black start together.
     impact() {
       const t = now();
-      tone('sine', 90, 34, t, 0.9, 0.85, 0.002, null);
-      noise(t, 0.55, 0.7, { type: 'lowpass', f0: 900, f1: 90, a: 0.001 });
-      noise(t + 0.04, 1.6, 0.22, { type: 'lowpass', f0: 300, f1: 60, a: 0.02 });
+      tone('sine', 90, 34, t, 0.9, 0.85, 0.002);                                      // the thud
+      noise(t, 0.55, 0.7, { type: 'lowpass', f0: 900, f1: 90, a: 0.001 });            // the slap
+      noise(t + 0.04, 1.6, 0.22, { type: 'lowpass', f0: 300, f1: 60, a: 0.02 });      // the air going out
+      noise(t + 0.02, 0.45, 0.16, { type: 'highpass', f0: 2200, f1: 700, a: 0.01 });  // grit sliding
+      scatter(t + 0.05, 8, 0.5, 0.22, null);                                          // stones settling
     },
     // aiming: the shooter primes with a short mechanical tick
     aim(e) {
@@ -246,19 +320,25 @@ export function createAudio() {
       const t = now(), d = pan(e && e.hand);
       noise(t, 0.10, 0.10, { type: 'bandpass', f0: 800, q: 1.2, a: 0.002, dest: d });
     },
-    // a decoy giving way: dry crack, then grit falling away from under the fingers
+    // a decoy giving way (B62): a dry snap and crack, then grit falling away from under the fingers
     crumble(e) {
       const t = now(), d = pan(e.hand);
-      tone('square', 190, 60, t, 0.05, 0.16, 0.001, d);
+      noise(t, 0.012, 0.5, { type: 'highpass', f0: 3000, a: 0.001, dest: d });          // the snap
+      tone('square', 190, 60, t, 0.05, 0.16, 0.001, d);                               // the crack
       noise(t, 0.10, 0.34, { type: 'bandpass', f0: 1500, f1: 380, q: 0.8, a: 0.001, dest: d });
-      noise(t + 0.05, 0.55, 0.20, { type: 'highpass', f0: 900, f1: 240, a: 0.02, dest: d });
-      tone('sine', 70, 44, t + 0.02, 0.28, 0.20, 0.004, d);
+      noise(t + 0.05, 0.55, 0.20, { type: 'highpass', f0: 900, f1: 240, a: 0.02, dest: d });  // grit
+      tone('sine', 70, 44, t + 0.02, 0.28, 0.20, 0.004, d);                            // the weight going
+      scatter(t + 0.04, 4, 0.3, 0.12, d);
     },
     grab(e) {
       const t = now(), d = pan(e.hand);
       tone('sine', 82, 40, t, 0.17, 0.55, 0.003, d);            // thud
       noise(t, 0.09, 0.32, { type: 'lowpass', f0: 520, f1: 160, a: 0.002, dest: d });
       noise(t, 0.05, 0.10, { type: 'highpass', f0: 2600, a: 0.001, dest: d }); // chalk grit
+      // Taking a rune again — the checkpoint you rest on — answers with a soft chime (B62). The
+      // first time, the 'rune' cue in the same frame is the answer and this stays quiet.
+      const h = holdOf(e.holdId);
+      if (h && h.kind === 'rune' && !frameRunes.has(h.id)) chime(660, 0.09, d, t + 0.03);
     },
     release(e) {
       const t = now(), d = pan(e.hand);
@@ -303,6 +383,7 @@ export function createAudio() {
     const fn = CUES[type];
     if (!fn || cuesThisFrame >= MAX_CUES_PER_FRAME) return false;
     cuesThisFrame++;
+    lastCue = { type, at: +ctx.currentTime.toFixed(3), wall: +performance.now().toFixed(1) };
     try { fn(e); } catch (err) { console.warn('audio cue failed', type, err); }
     return true;
   }
@@ -344,7 +425,7 @@ export function createAudio() {
   // same `wind.level` the bed is built from, so it is the wind that pushes the music down, not a
   // list of events — a fall that ends on the ground still lets the bed come back up afterwards.
   // Fast to duck (0.16 s: the roar is already there), slow to lift (1.1 s), so the return is a
-  // fade rather than a switch.
+  // fade rather than a switch. It works on the bus, so both tracks duck as one.
   const DUCK_FROM = 0.42;          // wind level where the music starts giving way
   const DUCK_TO = 1.05;            // and where it is as far down as it goes
   const DUCK_DEPTH = 0.75;         // 1 = silent; a plunge leaves the music at a quarter of full
@@ -356,11 +437,47 @@ export function createAudio() {
     const target = x * x * (3 - 2 * x);                   // smoothstep: no step when a gust crosses
     const tc = target > duck ? 0.16 : 1.1;                // duck fast, come back slowly
     duck += (target - duck) * (1 - Math.exp(-dt / tc));
-    if (!musicGain || !musicWanted || audio.muted) return;
+    if (!musicGain || !anyWanted() || audio.muted) return;
     const g = MUSIC_GAIN * (1 - DUCK_DEPTH * duck);
     if (Math.abs(g - duckSent) < 0.002) return;           // only touch the graph when it moves
     duckSent = g;
     musicGain.gain.setTargetAtTime(g, now(), 0.08);
+  }
+
+  // The switch (B61). Past NIGHT_AT the night track takes over; a new climb, back under NIGHT_BACK
+  // while climbing (or standing at the foot), hands the theme back. A plunge runs the whole cliff
+  // and so runs `night` back down to 0, but the ground is not a new climb: the fall keeps its track
+  // until restart() starts one, and the title (setMusic(null)) resets everything anyway.
+  function updateMusic(state, dt) {
+    if (tracks.night.url) {
+      const night = clamp(state.night || 0, 0, 1);
+      const ph = state.phase;
+      if (xfadeTo === 0 && night >= NIGHT_AT && ph !== 'title') switchTo(1);
+      else if (xfadeTo === 1 && night < NIGHT_BACK && (ph === 'climbing' || ph === 'grounded')) switchTo(0);
+    } else if (xfadeTo !== 0) switchTo(0);
+    if (xfade !== xfadeTo) {
+      const step = dt / XFADE_S;
+      xfade = xfadeTo > xfade ? Math.min(xfadeTo, xfade + step) : Math.max(xfadeTo, xfade - step);
+      if (Math.abs(xfade - xfadeTo) < 1e-6) xfade = xfadeTo;     // land exactly, not a rounding error away
+    }
+    applyXfade(false);
+  }
+  function switchTo(to) {
+    xfadeTo = to;
+    if (to === 1 && tracks.night.deferred) fallbackTrack(tracks.night);   // the decoded path waited for this
+  }
+  // equal-power, so the two never dip in the middle of the fade
+  function fadeOf(tr) {
+    return tr === tracks.night ? NIGHT_TRIM * Math.sin(xfade * Math.PI / 2) : Math.cos(xfade * Math.PI / 2);
+  }
+  function applyXfade(force) {
+    if (!force && Math.abs(xfade - xfadeSent) < 0.002) return;
+    xfadeSent = xfade;
+    for (const tr of [tracks.day, tracks.night]) {
+      const g = fadeOf(tr);
+      if (tr.fade) tr.fade.gain.setTargetAtTime(g, now(), 0.05);
+      else if (tr.node === true && tr.el) { try { tr.el.volume = MUSIC_GAIN * g; } catch (e) { /* ignore */ } }
+    }
   }
 
   function updateHeart(state, dt) {
@@ -386,7 +503,14 @@ export function createAudio() {
   // ---- public: handle -----------------------------------------------------------------------------------
   function handle(events, state, dt = 1 / 60) {
     cuesThisFrame = 0;
+    if (state) curState = state;
     if (events && events.length && ctx && audio.unlocked) {
+      // which runes light this frame, so a grab of one does not chime twice
+      frameRunes.clear();
+      for (let i = 0; i < events.length; i++) {
+        const e = events[i];
+        if (e && e.type === 'rune' && e.holdId != null) frameRunes.add(e.holdId);
+      }
       for (let i = 0; i < events.length; i++) {
         const e = events[i];
         if (e && e.type) cue(e.type, e);
@@ -396,8 +520,8 @@ export function createAudio() {
     dt = clamp(+dt || 1 / 60, 0, 0.1);
     updateWind(state, dt);
     updateDuck(dt);
+    updateMusic(state, dt);
     updateHeart(state, dt);
-    lastPhase = state.phase;
   }
 
   // ---- public: unlock ------------------------------------------------------------------------------------
@@ -422,7 +546,9 @@ export function createAudio() {
       wind.gBp.gain.value = 0;
       wind.gLp.gain.value = 0;
     }
-    if (pendingDecode) { pendingDecode = false; fallbackMusic(); } else startMusic();
+    for (const tr of [tracks.day, tracks.night]) {
+      if (tr.pendingDecode) { tr.pendingDecode = false; fallbackTrack(tr); } else startTrack(tr);
+    }
     return true;
   }
 
@@ -449,81 +575,105 @@ export function createAudio() {
   function onVisibility() {
     if (!ctx) return;
     if (document.hidden) {
-      if (music && !music.paused) music.pause();
+      for (const tr of [tracks.day, tracks.night]) if (tr.el && !tr.el.paused) tr.el.pause();
       if (ctx.state === 'running') ctx.suspend().catch(() => {});
     } else {
       if (ctx.state !== 'running') ctx.resume().catch(() => armRetry());
-      if (musicWanted && !audio.muted) startMusic();
+      if (anyWanted() && !audio.muted) startMusic();
     }
   }
   document.addEventListener('visibilitychange', onVisibility);
 
   // ---- public: music --------------------------------------------------------------------------------------
-  // setMusic(url, { decode: true }) skips the element and plays the decoded loop directly (LAN
-  // servers without byte-range support, or when the element stays silent on a device).
+  // setMusic(url, opts): `url` is the theme; opts.night is the second track (default NIGHT_URL, the
+  // file beside it; null for none); opts.decode skips the elements and plays the decoded loops
+  // directly (LAN servers without byte-range support, or when an element stays silent on a device).
+  // setMusic(null) stops both — the title. Every call is a fresh start: the theme leads, the night
+  // track waits under it.
   function setMusic(url, opts = {}) {
     musicUrl = url || null;
-    if (musicFallback && musicFallback.src) { try { musicFallback.src.stop(); } catch (e) { /* ignore */ } }
-    musicFallback = null;
-    if (!musicUrl) {
-      if (music) music.pause();
+    const night = opts.night === undefined ? NIGHT_URL : (opts.night || null);
+    setTrack(tracks.day, musicUrl, !!opts.decode);
+    setTrack(tracks.night, musicUrl ? night : null, !!opts.decode);
+    xfade = 0;
+    xfadeTo = 0;
+    applyXfade(true);
+  }
+  function setTrack(tr, url, decode) {
+    tr.url = url || null;
+    stopFallback(tr);
+    tr.deferred = false;
+    if (!tr.url) {
+      if (tr.el) tr.el.pause();
+      tr.pendingDecode = false;
       return;
     }
-    if (opts.decode) {
-      if (audio.unlocked) fallbackMusic(); else pendingDecode = true;
+    if (decode) {
+      if (audio.unlocked) fallbackTrack(tr); else tr.pendingDecode = true;
       return;
     }
-    pendingDecode = false;
-    if (!music) {
-      music = new Audio();
-      music.loop = true;
-      music.preload = 'auto';
-      music.setAttribute('playsinline', '');
+    tr.pendingDecode = false;
+    if (!tr.el) {
+      tr.el = new Audio();
+      tr.el.loop = true;
+      tr.el.preload = 'auto';
+      tr.el.setAttribute('playsinline', '');
       // A server without byte-range support (or a codec quirk) makes iOS refuse the element; the
       // track is then fetched and decoded into a looping buffer instead of staying silent.
-      music.addEventListener('error', () => { if (audio.unlocked) fallbackMusic(); });
+      tr.el.addEventListener('error', () => { if (audio.unlocked && tr.url) fallbackTrack(tr); });
     }
-    if (music.getAttribute('src') !== musicUrl) {
-      music.setAttribute('src', musicUrl);
-      music.load();
+    if (tr.el.getAttribute('src') !== tr.url) {
+      tr.el.setAttribute('src', tr.url);
+      tr.el.load();
     }
-    if (audio.unlocked) startMusic();
+    if (audio.unlocked) startTrack(tr);
   }
   function startMusic() {
-    if (!music || !musicUrl || !ctx || !audio.unlocked || audio.muted) return;
-    if (musicFallback) return;   // the decoded loop is already playing (or loading)
-    if (!musicCheckTimer) {
-      musicCheckTimer = setTimeout(() => {
-        musicCheckTimer = 0;
+    startTrack(tracks.day);
+    startTrack(tracks.night);
+  }
+  function ensureBus() {
+    if (musicGain) return;
+    musicGain = ctx.createGain();
+    musicGain.gain.value = 0;
+    musicGain.connect(master);
+  }
+  function startTrack(tr) {
+    if (!tr.el || !tr.url || !ctx || !audio.unlocked || audio.muted) return;
+    if (tr.fallback) return;   // the decoded loop is already playing (or loading)
+    if (!tr.checkTimer) {
+      tr.checkTimer = setTimeout(() => {
+        tr.checkTimer = 0;
         // eight seconds after the first attempt nothing is decodable: give up on the element
-        if (music && !musicFallback && audio.unlocked && (music.readyState < 2 || music.error)) fallbackMusic();
+        if (tr.el && tr.url && !tr.fallback && audio.unlocked && (tr.el.readyState < 2 || tr.el.error)) fallbackTrack(tr);
       }, 8000);
     }
-    if (!musicNode) {
+    if (!tr.node) {
       try {
-        musicNode = ctx.createMediaElementSource(music);
-        musicGain = ctx.createGain();
-        musicGain.gain.value = 0;
-        musicNode.connect(musicGain).connect(master);
+        ensureBus();
+        tr.node = ctx.createMediaElementSource(tr.el);
+        tr.fade = ctx.createGain();
+        tr.fade.gain.value = fadeOf(tr);
+        tr.node.connect(tr.fade).connect(musicGain);
       } catch (e) {
         // very old engines: fall back to the element's own volume
-        musicNode = true;
-        try { music.volume = MUSIC_GAIN; } catch (e2) { /* ignore */ }
+        tr.node = true;
+        try { tr.el.volume = MUSIC_GAIN * fadeOf(tr); } catch (e2) { /* ignore */ }
       }
     }
-    if (!music.paused && musicWanted) return;
-    const p = music.play();
-    if (p && p.then) {
-      p.then(() => {
-        musicWanted = true;
-        duckSent = -1;
-        if (musicGain) musicGain.gain.setTargetAtTime(MUSIC_GAIN * (1 - DUCK_DEPTH * duck), now(), 1.6);
-      }, () => armRetry());
-    } else {
-      musicWanted = true;
-      duckSent = -1;
-      if (musicGain) musicGain.gain.setTargetAtTime(MUSIC_GAIN * (1 - DUCK_DEPTH * duck), now(), 1.6);
-    }
+    if (!tr.el.paused && tr.wanted) return;
+    const p = tr.el.play();
+    const playing = () => { tr.wanted = true; liftBus(); };
+    if (p && p.then) p.then(playing, () => armRetry()); else playing();
+  }
+  // the bus opens (or re-opens) over 1.6 s once anything is playing
+  function liftBus() {
+    duckSent = -1;
+    if (musicGain) musicGain.gain.setTargetAtTime(MUSIC_GAIN * (1 - DUCK_DEPTH * duck), now(), 1.6);
+  }
+  function anyWanted() { return tracks.day.wanted || tracks.night.wanted; }
+  function trackPlaying(tr) {
+    return !!(tr.el && !tr.el.paused && !tr.el.ended) || !!(tr.fallback && tr.fallback.src);
   }
 
   // ---- one-shot samples -------------------------------------------------------------------
@@ -557,33 +707,43 @@ export function createAudio() {
       .catch(() => { samples.delete(name); });                 // silent: the synth still fires
   }
 
-  async function fallbackMusic() {
-    if (musicFallback || !ctx || !musicUrl) return;
-    musicFallback = { src: null };
+  // The decoded path for one track: fetch, decode, loop a buffer through the same fade. The night
+  // track's decode is minutes of stereo floats it may never need, so on this path it waits until
+  // the fade actually asks for it (switchTo).
+  async function fallbackTrack(tr) {
+    if (tr.fallback || !ctx || !tr.url) return;
+    if (tr === tracks.night && xfadeTo === 0) { tr.deferred = true; return; }
+    tr.deferred = false;
+    const url = tr.url;
+    tr.fallback = { src: null };
     try {
-      const res = await fetch(musicUrl);
+      const res = await fetch(url);
       if (!res.ok) throw new Error('HTTP ' + res.status);
       const ab = await ctx.decodeAudioData(await res.arrayBuffer());
-      if (!musicFallback) return;   // disposed meanwhile
-      if (music && !music.paused) music.pause();
-      if (!musicGain) {
-        musicGain = ctx.createGain();
-        musicGain.gain.value = 0;
-        musicGain.connect(master);
+      if (!tr.fallback || tr.url !== url || !ctx) return;   // stopped or re-pointed meanwhile
+      if (tr.el && !tr.el.paused) tr.el.pause();
+      ensureBus();
+      if (!tr.fade) {
+        tr.fade = ctx.createGain();
+        tr.fade.gain.value = fadeOf(tr);
+        tr.fade.connect(musicGain);
       }
       const src = ctx.createBufferSource();
       src.buffer = ab;
       src.loop = true;
-      src.connect(musicGain);
+      src.connect(tr.fade);
       src.start();
-      musicFallback.src = src;
-      musicWanted = true;
-      duckSent = -1;
-      musicGain.gain.setTargetAtTime(MUSIC_GAIN * (1 - DUCK_DEPTH * duck), now(), 1.6);
+      tr.fallback.src = src;
+      tr.wanted = true;
+      liftBus();
     } catch (err) {
-      console.warn('music: element and decoded fallback both failed', err);
-      musicFallback = null;
+      console.warn('music: element and decoded fallback both failed', tr.name, err);
+      tr.fallback = null;
     }
+  }
+  function stopFallback(tr) {
+    if (tr.fallback && tr.fallback.src) { try { tr.fallback.src.stop(); } catch (e) { /* ignore */ } }
+    tr.fallback = null;
   }
 
   // ---- public: mute -----------------------------------------------------------------------------------------
@@ -595,7 +755,12 @@ export function createAudio() {
       master.gain.setTargetAtTime(b ? 0 : 1, now(), 0.04);
     }
     if (b) {
-      if (music && !music.paused) setTimeout(() => { if (audio.muted && music) music.pause(); }, 120);
+      if (tracks.day.el || tracks.night.el) {
+        setTimeout(() => {
+          if (!audio.muted) return;
+          for (const tr of [tracks.day, tracks.night]) if (tr.el && !tr.el.paused) tr.el.pause();
+        }, 120);
+      }
     } else if (audio.unlocked) {
       startMusic();
     }
@@ -604,10 +769,12 @@ export function createAudio() {
   function dispose() {
     for (const ev of gestureEvents) window.removeEventListener(ev, onFirstGesture, true);
     document.removeEventListener('visibilitychange', onVisibility);
-    if (music) { music.pause(); music.removeAttribute('src'); music.load(); }
-    if (musicFallback && musicFallback.src) { try { musicFallback.src.stop(); } catch (e) { /* ignore */ } }
-    musicFallback = null;
-    clearTimeout(musicCheckTimer);
+    for (const tr of [tracks.day, tracks.night]) {
+      if (tr.el) { tr.el.pause(); tr.el.removeAttribute('src'); tr.el.load(); }
+      stopFallback(tr);
+      clearTimeout(tr.checkTimer);
+      tr.checkTimer = 0;
+    }
     if (ctx) { try { ctx.close(); } catch (e) { /* ignore */ } }
     ctx = null;
     audio.unlocked = false;

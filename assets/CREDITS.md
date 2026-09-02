@@ -16,7 +16,17 @@ All textures and HDRIs here are CC0 from Poly Haven (https://polyhaven.com):
   - Shipped as `assets/audio/theme.mp3`: re-encoded from the 320 kbps original to 160 kbps MP3 (5.3 MB) so the file
     fits the 6 MB budget; no other change (no cuts, no level or dynamics processing, no added parts). Played in-game at
     about 0.35 gain under the synthesised wind bed.
-  - Attribution is shown in-game on the title screen footer (`src/hud.js`, footHtml()).
+- **"Ossuary 6 - Air"** — Kevin MacLeod (incompetech.com)
+  Licensed under Creative Commons: By Attribution 4.0
+  https://creativecommons.org/licenses/by/4.0/
+  - Track page: https://incompetech.com/music/royalty-free/index.html?isrc=USUAN1500048 (ISRC USUAN1500048, part six
+    of the "Ossuary" series, 2015, 4:10, described by the author as a "slow-moving drone of impending doom")
+  - Original file: https://incompetech.com/music/royalty-free/mp3-royaltyfree/Ossuary%206%20-%20Air.mp3 (256 kbps, 8.0 MB)
+  - Shipped as `assets/audio/theme2.mp3`: re-encoded from the 256 kbps original to 160 kbps MP3 (5.0 MB) so the file
+    fits the 6 MB budget; no other change (no cuts, no level or dynamics processing, no added parts). It is the night
+    track (B61): loaded beside the theme, it takes over in a 2 s crossfade once the climb passes `state.night` 0.55,
+    about the second rune, and is raised 1.8× in the graph (it is 5 LU quieter than the theme as published).
+- Attribution for both tracks is shown in-game on the title screen footer (`src/hud.js`, footHtml()).
 
 ## Hand model
 
