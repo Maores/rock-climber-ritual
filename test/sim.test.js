@@ -1,7 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { CFG, createClimber, startClimb, step, drainEvents, shoulder, hangTarget, restingShoulder, grabRadius } from '../src/sim.js';
-import { ROUTE, generateRoute, intendedHand } from '../src/route.js';
+import { ROUTE, generateRoute } from '../src/route.js';
+import { reachGraph, inEdges, costToGoal, chooseMove } from './climb-graph.js';
 
 const DT = 1 / 120;
 const near = (a, b, tol, msg) => assert.ok(Math.abs(a - b) <= tol, `${msg ?? ''} expected ${b} ± ${tol}, got ${a}`);
@@ -595,15 +596,21 @@ test('stamina: reaching zero forces a release with a slip event, the other hand 
 });
 
 test('slip: a spent hand does not ping-pong between two overlapping holds (B51)', () => {
-  // Seed 7's holds 126 and 128 overlap by 20 mm, and every route on the roster has such a pair:
-  // one place a hand can be that is on two holds at once. A hand with nothing left slipped off
-  // the first, closed on the second, slipped, closed on the first — for ever, with the climber
-  // hanging there on a hand that could never hold it. A slip means shake out: the hand takes
-  // nothing at all until it has CFG.SLIP_REST back.
-  const roster = generateRoute(7);
-  const p = roster.holds[126], q = roster.holds[128];
-  assert.ok(Math.hypot(p.x - q.x, p.y - q.y) < grabRadius(p) + grabRadius(q),
-    'the pair this was found on must really overlap');
+  // Every route on the roster has pairs whose grab discs overlap: one place a hand can be that
+  // is on two holds at once. A hand with nothing left slipped off the first, closed on the
+  // second, slipped, closed on the first — for ever, with the climber hanging there on a hand
+  // that could never hold it. A slip means shake out: the hand takes nothing at all until it
+  // has CFG.SLIP_REST back.
+  // Found by search rather than by index: on the field (B46) an id is only height order, and
+  // the pair this was originally written against was seed 7's holds 126 and 128.
+  const roster = generateRoute(7).holds;
+  let overlaps = 0;
+  for (let i = 0; i < roster.length; i++) {
+    for (let j = i + 1; j < roster.length && roster[j].y - roster[i].y < 0.6; j++) {
+      if (Math.hypot(roster[i].x - roster[j].x, roster[i].y - roster[j].y) < grabRadius(roster[i]) + grabRadius(roster[j])) overlaps++;
+    }
+  }
+  assert.ok(overlaps > 0, 'the wall this was found on must really have overlapping grab discs');
 
   const s = climber([{ x: 4, y: 30 }, { x: 4.2, y: 30 }]);   // placed under the hand in a moment
   const a = s.route.holds[2], b = s.route.holds[3];
@@ -854,21 +861,20 @@ test('events: drainEvents returns and clears; undrained events are capped', () =
 // ---------------------------------------------------------------------------------------
 // Autopilot: plays the generated route through the public Input interface only.
 
-// Drive `side` toward hold `holdId` with the two primitives and nothing else: push the stick
+// Drive `side` onto `hold` with the two primitives and nothing else: push the stick
 // toward the next hold (that is the release), then keep steering until the hand comes to rest on
 // rock and closes on it. Like a player, it keeps whatever hold the hand actually takes; returns
 // that hold's id.
-function botGrab(state, holdId, side, log) {
+function botGrab(state, hold, side, log) {
   const hand = state.hands[side], other = state.hands[side === 'L' ? 'R' : 'L'];
-  const hold = state.route.holds[holdId];
   const startHold = hand.gripping ? hand.holdId : null;
   const t0 = state.t;
   for (;;) {
     if (hand.gripping && hand.holdId !== startHold) return hand.holdId;
-    if (state.t - t0 > 8) throw new Error(`stuck reaching hold ${holdId} with ${side} (phase ${state.phase}, hand at ${hand.x.toFixed(2)},${hand.y.toFixed(2)})`);
+    if (state.t - t0 > 1.5 || state.phase === 'fallen') return null;   // a move a person would have given up on
     const v = steerToHold(state, side, hold);
     if (hand.gripping) {
-      if (!other.gripping && state.phase === 'climbing') throw new Error(`bot would fall releasing ${side} for hold ${holdId}`);
+      if (!other.gripping && state.phase === 'climbing') throw new Error(`bot would fall releasing ${side} for hold ${hold.id}`);
       releaseHand(state, side, v);
     } else {
       step(state, inp({ [side]: v }), DT);
@@ -876,15 +882,29 @@ function botGrab(state, holdId, side, log) {
     for (const e of drainEvents(state)) log.push(e.type);
   }
 }
-// Alternate hands up the route from hold `from` to hold `to`. A hand may close on a different
-// hold of its side on the way: a higher one skips ahead, a lower one is retried.
-function botClimb(state, from, to, log) {
-  let retries = 0;
-  for (let i = from; i <= to;) {
-    const got = botGrab(state, i, intendedHand(i), log);
-    if (intendedHand(got) !== intendedHand(i)) throw new Error(`hand ${intendedHand(i)} closed on hold ${got}, meant for the other hand`);
-    if (got >= i) { i = got + 1; retries = 0; }
-    else if (++retries > 3) throw new Error(`cannot get past hold ${got} to reach hold ${i}`);
+// Climb the FIELD (B46) rather than a line: there is no next hold, so at every move the bot
+// looks at where its two hands ACTUALLY are and takes the reachable hold with the lowest cost
+// to the next goal — which is why a hand closing on the wrong rock costs it nothing.
+// `stopAtY` ends the climb partway up.
+function botClimb(state, log, stopAtY = Infinity) {
+  const r = state.route;
+  const graph = reachGraph(r);
+  const inE = inEdges(graph);
+  const goals = r.holds.filter((h) => h.kind === 'rune' || h.kind === 'summit').sort((a, b) => a.y - b.y);
+  const refused = new Set();
+  let lastSide = null;
+  for (const goal of goals) {
+    const dist = costToGoal(r, graph, inE, goal.id);
+    for (let move = 0; move < 500; move++) {
+      const { L, R } = state.hands;
+      if (L.holdId === goal.id || R.holdId === goal.id) break;
+      if (state.body.y >= stopAtY) return;
+      const best = chooseMove(state, r, graph, dist, refused, lastSide);
+      if (!best) throw new Error(`no way on toward hold ${goal.id}`);
+      const got = botGrab(state, r.holds[best.j], best.side, log);
+      if (got === null) { refused.add(`${best.from}:${best.side}:${best.j}`); continue; }
+      lastSide = best.side;
+    }
   }
 }
 
@@ -893,7 +913,7 @@ test('autopilot: the generated route can be climbed to the summit without a fall
   const s = createClimber(route);
   startClimb(s);
   const log = [];
-  botClimb(s, 2, route.holds.length - 1, log);
+  botClimb(s, log);
   assert.equal(s.phase, 'summit');
   assert.ok(!log.includes('fall'), 'a steady rhythm should never fall');
   assert.equal(s.runesLit.length, Math.ceil(ROUTE.TOP / ROUTE.RUNE_EVERY) - 1);
@@ -905,30 +925,29 @@ test('autopilot: the generated route can be climbed to the summit without a fall
 
 test('autopilot: a fall from anywhere on the route runs to the ground and ends the climb', () => {
   const route = generateRoute(7);
-  const holds = route.holds;
-  const n = holds.length;
-  for (const fallAt of [12, 60, Math.floor(n * 0.45), Math.floor(n * 0.75), n - 3]) {
+  // heights up the field, rather than hold indices: on a field an index is only height order
+  for (const fallAt of [2.5, 7, 12, 18, ROUTE.TOP - 1]) {
     const s = createClimber(route);
     startClimb(s);
     const log = [];
-    botClimb(s, 2, fallAt, log);
+    botClimb(s, log, fallAt);
     const from = s.body.y;
-    assert.ok(from > CFG.FLOOR + CFG.HANG_TWO, `hold ${fallAt} is above standing height`);
+    assert.ok(from > CFG.FLOOR + CFG.HANG_TWO, `${fallAt} m is above standing height`);
     drainEvents(s);
     const away = { L: { x: -1, y: -0.5 }, R: { x: 1, y: -0.5 } };
     releaseHand(s, 'L', away.L);                       // both hands off, pushed clear of the rock
     releaseHand(s, 'R', away.R);
     run(s, 0.4, inp(away));                            // ...and past the grace window
-    assert.equal(s.phase, 'falling', `fall from hold ${fallAt}`);
+    assert.equal(s.phase, 'falling', `fall from ${fallAt} m`);
     // Nothing may stop it: not a hold it passes, not a rune, not the height it started from.
     run(s, 12, inp());
     assert.equal(s.phase, 'fallen', `fall from hold ${fallAt} never reached the ground`);
-    near(s.body.y, CFG.FLOOR, 1e-9, `fall from hold ${fallAt}`);
+    near(s.body.y, CFG.FLOOR, 1e-9, `fall from ${fallAt} m`);
     const ev = types(s);
     assert.ok(!ev.includes('catch'), 'B43: nothing catches a fall any more');
-    assert.equal(ev.filter((e) => e === 'impact').length, 1, `fall from hold ${fallAt}`);
-    assert.equal(ev.filter((e) => e === 'fallen').length, 1, `fall from hold ${fallAt}`);
+    assert.equal(ev.filter((e) => e === 'impact').length, 1, `fall from ${fallAt} m`);
+    assert.equal(ev.filter((e) => e === 'fallen').length, 1, `fall from ${fallAt} m`);
     // and a fall from higher up must take longer, or the plunge is not being integrated
-    assert.ok(s.t > 0, `fall from hold ${fallAt}`);
+    assert.ok(s.t > 0, `fall from ${fallAt} m`);
   }
 });

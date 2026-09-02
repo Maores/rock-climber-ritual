@@ -14,7 +14,9 @@ change the code and change this in the same commit, or the drift starts again.
 - The simulation is 2-D in (x, y) on the wall plane. Rendering adds depth with `world.wallZ(x, y)`,
   a deterministic noise displacement, |z| ≤ 0.35. Body sits at z = wallZ(body) + 0.55; a hand touching the
   wall sits at z = wallZ(hand) + 0.02; camera at body + (0, 0.30, 0.62) before rig effects.
-- Route runs from y ≈ 1.2 (start holds) to y ≈ 40 (summit altar). Cliff is ~9 m wide (x in [-4.5, 4.5]).
+- The cliff is ~9 m wide (x in [-4.5, 4.5]). The holds are a FIELD across it (B46), not a line: they run from
+  y ≈ 1.2 (the two start holds) to y = 24 (the summit altar) and spread over x in [-3.6, 3.6] — about 1965 holds
+  per route, or 1711 with `ROUTE.DENSITY` set (the thinning knob; null by default). There is no "next hold": you pick your own way through, and the runes and the altar are the goals.
 - **The ground is at y = -0.55** (B53), a 30 × 30 m terrace: x in [-15, 15], z in [-6, 24], with relief
   of about ±0.25 m, scree banked up to +0.12 m against the foot of the rock, and the outer ring
   rolling away into the cloud sea. `CFG.FLOOR` (0.75) is the SHOULDER of someone standing on it, so
@@ -72,7 +74,9 @@ Hand  = { side:'L'|'R', x, y, vx, vy, tx, ty, gripping, holdId|null, armed, stam
   // `nearId`/`nearDist`/`hover` are the CUE: the rock the hand is over, even one it may not take
   // (the hold it just released), so the glow is always on the rock under the hand.
 Hold  = { id, x, y, size (0.10..0.24 radius), kind: 'hold'|'rune'|'summit', lit:boolean, angle }
-Fake  = a Hold with ids from 10000 up and `broken` set once it has given way. Never on the line, never the only way up.
+Fake  = a Hold with ids from 10000 up and `broken` set once it has given way. A decoy is a field hold LIFTED OUT
+        of `holds`, so it sits exactly where a hold would sit and is worth trying; never a rune or the altar, and
+        never the only way past — the field in `holds` is already the field without them.
 Web   = { mode: 'idle'|'aiming'|'flying'|'attached', ax, ay,   // anchor the line bit
           tipX, tipY, len, cd, aimX, aimY, unlocked,           // cd = cooldown left, 3 s after a shot
           grounded, walled }                                   // while swinging: the floor / the edge of the cliff is
@@ -134,7 +138,8 @@ Input = { L:{x,y,active}, R:{x,y,active},
 Constants live in `sim.js` as `CFG`: REACH 0.72, SNAP 0.16, SHOULDER_DX 0.19, SHOULDER_DY 0.08, HANG_TWO 0.42, HANG_ONE 0.50,
 GRACE 0.25, FLOOR 0.75, FALL_TERMINAL 26, drain per gripping hand 0.022/s with two hands on, 0.085/s with one, both times the hold's own multiplier (jug 0.65 to crimp 1.85), refill free 0.30/s, rune refill 0.50/s, forced release at 0,
 HOVER_GRAB_DWELL 0.12, HOVER_HYST 0.012, MISS_COOLDOWN 0.30, RELEASE_DEADZONE 0.35, RELEASE_CONFIRM 0.016, SLIP_REST 0.15,
-REGRIP_LOCK 0.14, SKIP_CLEAR 0.04 (those eight are B51's; the first five and SLIP_REST are feel, and the owner may retune them).
+CATCH_HOLD 0.5, CATCH_CONE 30, REGRIP_LOCK 0.14, SKIP_CLEAR 0.04 (those ten are B51's; all but REGRIP_LOCK and SKIP_CLEAR are
+feel constants, and the owner may retune them).
 
 Behavior (kinematic with physical feel): free hands spring-damp toward `shoulder + stick × REACH`, and letting go of the stick
 leaves the hand there — the target is kept as an offset from the shoulder, so a parked hand rides along when the body moves, and it
@@ -166,14 +171,19 @@ refills as above, rune holds are rest holds and checkpoints, grabbing the summit
   on it inside the window.
 - **The right hand does not grab while the web line is out** (`web.mode` other than `idle`): a hand that is aiming, or has
   just shot, must not snag a hold and cancel the shot.
-- **Mid-swing it takes a reach at THAT rock.** While `phase === 'swinging'` a hand only closes on a hold its own stick
-  is SENDING it to: the stick past `RELEASE_DEADZONE` and the resting place it picks (`shoulder + stick`, the same
-  target `updateHand` springs to) inside that hold's radius, for the whole dwell. Both hands are free on the line and
-  ride the body across the whole face, so on a wall with rock everywhere a parked hand is inside some hold within a few
-  frames and every swing died as it began. An ANGLE is not enough to tell a reach from a pump — a pump is a stick swept
-  through the ring and it sits inside any given 45° arc for 0.61 s of a 1.4 s cycle, five dwells — but where the stick
-  parks the hand is: a pump sends it to arm's length, past everything. Catching rock mid-swing still ends the swing; it
-  just has to be something you did.
+- **Mid-swing a catch is a HELD reach.** While `phase === 'swinging'` a hand closes on a hold only after its own stick
+  has stayed on that one hold for `CATCH_HOLD` (0.5 s), unbroken: past `RELEASE_DEADZONE`, sending the hand into that
+  hold (the resting place the stick picks — `shoulder + stick`, the same target `updateHand` springs to — is on the
+  rock) and within `CATCH_CONE` (±30°) of the hold's own direction from the shoulder. The hold changing, any condition
+  lapsing, or the stick reversing (the new direction more than 90° off the last) starts the clock again; the ordinary
+  `HOVER_GRAB_DWELL` still has to run on top, with the hand actually on the rock.
+  Both hands are free on the line and ride the body across the whole face, and on a field that is 59–67% covered there
+  is rock wherever the arm points, so anything weaker catches by accident and ends the swing. Measured on B46's field:
+  a pushed stick alone, or a stick merely pointing the right way, let a *pumped* swing end in a grab 24 times out of 24
+  (median 4.45 s) — a pump lingers ~0.3 s at each end of its stroke, which any short test reads as an aim — and a
+  constant-speed circle still caught 7 in 24. With the held reach: idle, pumped and circling all keep 24/24 for 12 s,
+  and a deliberate reach still catches. Catching rock mid-swing is still how you get off the line; it just has to be
+  something you did on purpose.
 - **A hand that slips takes nothing until it has rested.** `SLIP_REST` (0.15 stamina). Two holds whose radii overlap —
   every route has such a pair — otherwise gave a spent hand somewhere to go the instant it came off: slip off A, close
   on B, slip, close on A, for ever, on a hand that could never hold.
@@ -200,7 +210,9 @@ same clamp the anchor gets): a long line pumped sideways used to carry the climb
 ```js
 // sim-input
 export const CFG;                                    // sim.js
-export function generateRoute(seed = 7) → route      // route.js — deterministic, every hold reachable (≤ 0.9·REACH from the projected shoulder), rune every ~8 m, last hold kind 'summit'
+export function generateRoute(seed = 7) → route      // route.js — deterministic. A field of holds over x ∈ [-3.6, 3.6], ordered by height with ids equal to their index; holds[0] and holds[1] are the two start holds; every hold has at least one hold above it within 0.9·REACH of restingShoulder(hold, that hand); one rune per RUNE_EVERY (6 m) band; exactly one hold of kind 'summit', last in the array, at y = ROUTE.TOP
+export function canReach(anchor, target, side, limit = REACH_LINK) → boolean   // route.js — THE reach rule, so nothing re-derives it: can the hand `side` take `target` while the other hand hangs alone on `anchor`
+export const REACH_LINK                              // route.js — 0.9·REACH, the longest link the field ever relies on
 export function createClimber(route) → state         // sim.js — phase 'title'; both hands on the two start holds
 export function startClimb(state)                    // → phase 'climbing', event 'start'
 export function step(state, input, dt)               // mutates; dt clamped to ≤ 1/20 inside
@@ -209,6 +221,7 @@ export function shoulder(state, side) → { x, y }
 export function aimPoint(state) → { x, y } | null     // where the web shot would land; the camera rig and the HUD reticle both read it
 export function cutWeb(state)                        // drop the line from outside the sim
 export function generateRoute(seed) also returns `fakes`; SEEDS / DEFAULT_SEED / normalizeSeed(v) back the route picker
+export function intendedHand(holdId, route?) → 'L' | 'R'   // route.js — a HINT only, kept because main.js's debug autopilot calls it. On a field no hold is meant for a particular hand, so it answers which side of the wall's centre line the hold sits on. Nothing in sim.js or route.js reads it
 export function createInput({ hud, keyboard = true, win, now, mouse, getHands, surface = mouse }) → { read(): Input, dispose() }   // input.js — touch/mouse on hud.sticks + hud.webButton (pointer events), and the LOOK DRAG on `surface`, the canvas: a pointer that reaches it was not on a control, which is how the gesture stays out of the sticks (hit region, not z-index). Keyboard WASD / arrows, Shift + a stick turns the head, Escape centres both keyboard sticks (which is how the keyboard re-arms a release); sticks: position mapping, zero and `active` false the moment the finger lifts; keyboard: integrating virtual stick that holds its value, `active` only while a key is down; the WEB pad fills `web` (and `R.web`) and leaves `R` to the right stick, and a press there becomes an aim only once it commits (held past 250 ms, or dragged past 0.15 of the pad radius) so a brush does nothing; the right mouse button is hold-to-aim and click-to-cut, and neither button grips. `win` and `now` are injected so the tests can drive it headless
 
 // world-light

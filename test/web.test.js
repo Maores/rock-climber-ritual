@@ -230,6 +230,38 @@ test('swing: twelve seconds of pumping past holds never grabs one (B51)', () => 
   assert.ok(!ev.includes('webcut'), 'and so kept the line');
 });
 
+test('swing: a stick circling at a constant speed never grabs either (B51)', () => {
+  // The sine pump is not the only way a thumb moves on a ring. A stick swept round at a constant
+  // speed never lingers anywhere at all, and it still caught 7 swings in 24 on the field when the
+  // rule was "the stick is sending the hand there" — it sweeps THROUGH the sending, hold after
+  // hold. Against a held reach it cannot: it is inside any one hold's cone for a fraction of a
+  // turn, and CFG.CATCH_HOLD is longer than that.
+  const s = climber();
+  shoot(s, { x: 0.35, y: 1 });
+  run(s, 0.6, inp({ L: HANG }));
+  assert.equal(s.phase, 'swinging');
+  const jug = { id: s.route.holds.length, x: s.hands.L.x, y: s.hands.L.y, size: 0.20, kind: 'hold', grip: 'jug', lit: false, angle: 0 };
+  s.route.holds.push(jug);
+  s._holdById.set(jug.id, jug);
+  drainEvents(s);
+  let onRock = 0;
+  const TURN = 2.0;                                  // one revolution of the stick every two seconds
+  for (let t = 0; t < 12; t += DT) {
+    step(s, inp({ L: { x: Math.cos(2 * Math.PI * t / TURN), y: Math.sin(2 * Math.PI * t / TURN) } }), DT);
+    for (const side of ['L', 'R']) {
+      const h = s.hands[side];
+      if (h.nearId !== null && h.nearDist <= grabRadius(s._holdById.get(h.nearId))) onRock++;
+    }
+  }
+  assert.ok(onRock * DT > CFG.HOVER_GRAB_DWELL,
+    `the circle only spent ${(onRock * DT).toFixed(2)} s with a hand on rock: it never met any`);
+  assert.equal(s.phase, 'swinging', 'the circling stick kept the swing');
+  assert.equal(s.hands.L.gripping, false);
+  const ev = types(s);
+  assert.ok(!ev.includes('grab'), `a circling stick grabbed something: [${ev}]`);
+  assert.ok(!ev.includes('webcut'));
+});
+
 test('swing: reaching for a hold with the stick catches it, and ends the swing (B51)', () => {
   const s = climber();
   shoot(s, { x: 0.35, y: 1 });
