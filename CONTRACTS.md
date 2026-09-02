@@ -288,7 +288,8 @@ audio.setMusic(url, { night?, decode? }); audio.setMuted(b); audio.muted
 // B61: `url` is the climb's theme. The night track defaults to `assets/audio/theme2.mp3` beside it (audio.js knows
 // its own assets; pass `night: null` for none) and plays silently from the same gesture, then takes over in a 2 s
 // crossfade once state.night passes 0.55; a NEW climb (a fresh state from restart()) seen under 0.45 hands the theme back,
-// the same climb never does; the fade only advances while the night track can be heard. setMusic(null) stops both.
+// the same climb never does; the fade only advances while the night track can be heard, and the theme comes back if
+// that track stops. setMusic(null) stops both.
 ```
 Required DOM ids in `index.html`: `#gl` (canvas), `#hud`, `#title`, `#end`, `#stick-l`, `#stick-r`,
 `#ctl-l`, `#ctl-r`, `#web`, `#height`, `#runes`, `#msg`, `#falls`, `#mute`, `#vig`, `#seeds`, `#custom`, `#customBtn`, `#menuBtn`, `#confirm`, `#boot`.

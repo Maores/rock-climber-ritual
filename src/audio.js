@@ -14,9 +14,10 @@
 // by the time it is wanted. Past state.night 0.55 (about the second rune) the two cross-fade over
 // 2 s; a NEW climb (a fresh state from restart()) seen under 0.45 while climbing fades the theme back
 // in, and the same climb never hands back on its own; setMusic(null), the title, stops both. The
-// fade only advances while the night track can be heard, so the theme never fades into silence, and
-// a night track that fails outright is written off and the climb stays on the theme. Both sit under
-// one bus that the wind ducks (B26) and the mute silences.
+// fade only advances while the night track can be heard, and if that track stops later the theme
+// comes back rather than silence; a night track that fails outright is written off until the next
+// setMusic (the title) and the climb stays on the theme. Both sit under one bus that the wind ducks
+// (B26) and the mute silences.
 //
 // Integration notes for main.js: setMusic(url, { night, decode }) may be called before or after
 // unlock(). If a track stays silent on a device (e.g. iPhone Safari against a LAN server without
@@ -61,7 +62,7 @@ function makeTrack(name) {
     checkTimer: 0,
     pendingDecode: false, // setMusic(url, { decode: true }) before unlock
     deferred: false,      // the night track's decode waits until the fade wants it
-    dead: false,          // gave up (a media error and a failed decode): the climb stays on the theme
+    dead: false,          // gave up (a media error and a failed decode): the theme, until the next setMusic
   };
 }
 
@@ -80,6 +81,7 @@ export function createAudio() {
   let retryArmed = false;
   let xfade = 0, xfadeTo = 0, xfadeSent = -1;
   let lastState = null, armedBack = false;   // a fresh climber arms the hand-back; going up disarms it
+  let disposed = false;
   let meter = null;          // AnalyserNode on the master bus, for tests and evidence only
   let meterBuf = null;
 
@@ -455,8 +457,9 @@ export function createAudio() {
   // theme back; the same climb never does on its own, so swinging down under the line and climbing
   // again keeps the night track, and a plunge, which runs `night` to 0, keeps it too. The title
   // (setMusic(null)) resets everything anyway. The fade towards the night track only advances while
-  // that track can be heard (nightReady), so a slow one holds the theme until it is ready and the
-  // theme never fades into silence; one that fails outright is written off (`dead`).
+  // that track can be heard (nightReady), so a slow one holds the theme until it is ready; if it
+  // stops later without an error (a stall) the theme comes back and the fade resumes once it is
+  // heard again; one that fails outright is written off (`dead`) until the next setMusic.
   function updateMusic(state, dt) {
     if (state !== lastState) { lastState = state; armedBack = true; }
     const n = tracks.night;
@@ -466,10 +469,14 @@ export function createAudio() {
       if (xfadeTo === 0 && night >= NIGHT_AT && ph !== 'title') switchTo(1);
       else if (xfadeTo === 1 && armedBack && night < NIGHT_BACK && (ph === 'climbing' || ph === 'grounded')) switchTo(0);
     } else if (xfadeTo !== 0) switchTo(0);
-    if (xfade !== xfadeTo && (xfadeTo === 0 || nightReady())) {
-      const step = dt / XFADE_S;
+    const step = dt / XFADE_S;
+    const heard = nightReady();
+    if (xfade !== xfadeTo && (xfadeTo === 0 || heard)) {
       xfade = xfadeTo > xfade ? Math.min(xfadeTo, xfade + step) : Math.max(xfadeTo, xfade - step);
       if (Math.abs(xfade - xfadeTo) < 1e-6) xfade = xfadeTo;     // land exactly, not a rounding error away
+    } else if (xfadeTo === 1 && xfade > 0 && !heard && !audio.muted) {
+      // the night track went away after the fade, with no error to say so: the theme rather than silence
+      xfade = Math.max(0, xfade - step);
     }
     applyXfade(false);
   }
@@ -636,6 +643,7 @@ export function createAudio() {
       tr.pendingDecode = false;
       return;
     }
+    if (disposed) return;                     // nothing to play into any more; the url is kept
     if (decode) {
       if (audio.unlocked) fallbackTrack(tr); else tr.pendingDecode = true;
       return;
@@ -796,6 +804,7 @@ export function createAudio() {
   }
 
   function dispose() {
+    disposed = true;
     for (const ev of gestureEvents) window.removeEventListener(ev, onFirstGesture, true);
     document.removeEventListener('visibilitychange', onVisibility);
     for (const tr of [tracks.day, tracks.night]) {

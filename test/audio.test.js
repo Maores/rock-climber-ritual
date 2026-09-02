@@ -317,13 +317,43 @@ test('audio: the theme never fades into silence: the fade waits for a night trac
   audio.dispose();
 });
 
+test('audio: a night track that stops after the fade, with no error, hands the theme back until it is heard again (B61 re-review)', async () => {
+  const { audio } = boot();
+  audio.setMusic('http://x/theme.mp3');
+  await flush();
+  const [, night] = FakeAudio.all;
+  const st = climb({ night: 0.7 });
+  run(audio, st, 2.5);
+  assert.equal(audio.debug().xfade, 1);
+  night.readyState = 1;                       // a stall: the element is 'playing' with nothing to play
+  run(audio, st, 1);
+  near(audio.debug().xfade, 0.5, 0.02, 'the theme is on its way back after 1 s');
+  run(audio, st, 1.5);
+  assert.equal(audio.debug().xfade, 0, 'and fully back');
+  assert.equal(audio.debug().track, 'night', 'the intent is unchanged');
+  night.readyState = 4;
+  run(audio, st, 2.5);
+  assert.equal(audio.debug().xfade, 1, 'the fade resumes the moment the track is heard again');
+  // the mute pauses both elements, which is not a stall: the fade holds where it is
+  audio.setMuted(true);
+  await new Promise((r) => setTimeout(r, 160));
+  assert.equal(audio.debug().nightReady, false);
+  run(audio, st, 1);
+  assert.equal(audio.debug().xfade, 1, 'held under the mute');
+  audio.setMuted(false);
+  audio.dispose();
+});
+
 test('audio: setMusic after dispose is a no-op, not a throw (B61 fix pass)', async () => {
   const { audio } = boot();
   audio.setMusic('http://x/theme.mp3');
   await flush();
+  const [day] = FakeAudio.all;
   audio.dispose();
+  const loads = day.loads;
   assert.doesNotThrow(() => audio.setMusic(null));
   assert.doesNotThrow(() => audio.setMusic('http://x/theme.mp3'));
+  assert.equal(day.loads, loads, 'and nothing is loaded into a graph that is gone');
   assert.doesNotThrow(() => audio.setMuted(true));
   assert.doesNotThrow(() => audio.handle([{ type: 'impact' }], climb(), 1 / 60));
   audio.setMuted(false);
@@ -366,15 +396,16 @@ test('audio: setMusic(null) is the title and stops both; mute pauses both; theme
 });
 
 test('audio: the wind still ducks the music, on the bus both tracks share (B26 under B61)', async () => {
-  const { audio } = boot();
+  const { audio, ctx } = boot();
   audio.setMusic('http://x/theme.mp3');
   await flush();
-  near(audio.debug().music.gain, 0.35, 1e-6, 'the bus opens to MUSIC_GAIN');
+  const bus = chainOf(ctx, FakeAudio.all[0]).bus.gain;    // what the bus was told, not where a real param would be yet
+  near(bus.target, 0.35, 1e-6, 'the bus opens towards MUSIC_GAIN');
   run(audio, climb({ phase: 'falling', night: 0.6, body: { x: 0, y: 10, vx: 0, vy: -22 } }), 1);
   assert.ok(audio.debug().duck > 0.95, `the plunge saturates the duck (${audio.debug().duck})`);
-  assert.ok(audio.debug().music.gain < 0.1, `and the bus is a quarter of full (${audio.debug().music.gain})`);
+  assert.ok(bus.target < 0.1, `and the bus is sent to a quarter of full (${bus.target})`);
   run(audio, climb({ night: 0.6 }), 5);
-  assert.ok(audio.debug().music.gain > 0.33, `and comes back once the wind dies (${audio.debug().music.gain})`);
+  assert.ok(bus.target > 0.33, `and back up once the wind dies (${bus.target})`);
   audio.dispose();
 });
 
