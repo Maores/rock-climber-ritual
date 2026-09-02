@@ -415,8 +415,33 @@ function restart() {
   hud.message('Light every rune · reach the altar', 3000);
 }
 
+// B40: the way back to the title, from the Menu button mid-climb or on the end screen. Same
+// rebuild as restart() — a fresh climber on the same seed — but it stops short of startClimb, so
+// the state is left in phase 'title' exactly as it was at boot and "Tap to begin" starts a clean
+// climb. hud.showTitle puts its own shell back (end screen, dead veil, pending end timer).
+function toTitle() {
+  state = createClimber(generateRoute(route.seed));
+  state.web.unlocked = spiderUnlocked();
+  rig = createCameraRig(camera);
+  rig.setPortrait(window.innerHeight >= window.innerWidth);
+  auto.target = null;
+  auto.restUntil = 0;
+  pendingTap.L = pendingTap.R = false;
+  debug.pause = false;                  // the confirmation's freeze never outlives the climb
+  // The theme belongs to the climb, and start() is the only thing that ever asked for it, so a
+  // title reached this way would keep playing over a screen the boot title leaves silent.
+  // setMusic(null) pauses the element (and stops the decoded fallback); start()'s setMusic(MUSIC_URL)
+  // finds the same src already loaded and simply plays it again.
+  audio.setMusic(null);
+  hud.showTitle({ touch, seeds: SEEDS, seed });
+}
+
 hud.onStart(start);
 hud.onRestart(restart);
+hud.onMenu(toTitle);
+// The mid-climb confirmation freezes the sim while it is up — the same freeze the evidence
+// harness uses — so a one-hand hang cannot run out while the question is being read.
+hud.onPause((on) => { debug.pause = !!on; });
 // Picking a route rebuilds the cliff, the holds, the decoys and the arms, so it goes through the
 // URL and one reload rather than a half-hearted in-place swap. It only happens on the title
 // screen, before anything has been climbed, and it leaves a link that opens the same route.
