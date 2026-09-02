@@ -6,6 +6,10 @@
 // spring-damped toward targets, weight shifts on one-arm hangs, gravity acts only
 // while falling. Nothing catches a fall: it runs to the ground and ends the climb.
 //
+// There are no grip buttons (B51). A free hand that stays on a piece of rock for
+// HOVER_GRAB_DWELL closes on it; a gripping hand lets go when its own stick is pushed past
+// RELEASE_DEADZONE. Every control the sim has is two sticks.
+//
 // Hold ids must equal their index in route.holds (route.js guarantees this).
 
 export const CFG = Object.freeze({
@@ -21,10 +25,36 @@ export const CFG = Object.freeze({
   DRAIN_ONE: 0.085,     // stamina/s for the only gripping hand (~12 s of hanging, was ~5 s)
   REFILL_FREE: 0.30,    // stamina/s for a free hand: shaking out recovers you quickly
   REFILL_RUNE: 0.50,    // stamina/s for a hand gripping a rune (runes never drain)
-  ARM_TIME: 2.5,        // an armed hand grabs the first hold that comes within SNAP for this long
-  SKIP_TIME: 6.0,       // backstop only: a released hold is skipped until the hand actually leaves it
+  SKIP_CLEAR: 0.04,     // the hold a hand just came off is locked out until the hand is this far
+                        // outside its grab radius — a distance, never a timer (see updateHand)
   REGRIP_LOCK: 0.14,    // after letting go, a hand needs this long before it can take rock again
   MAX_DT: 1 / 20,
+
+  // --- the grab, without a button (B51) ------------------------------------------------
+  // There is no GRIP any more: a hand that hovers over rock closes on it, and a gripping hand
+  // lets go when its own stick is pushed. Both of these are FEEL constants — the owner may want
+  // them retuned once he has climbed on them; the grab radius itself must not move (B3, B5).
+  HOVER_GRAB_DWELL: 0.12,   // seconds a free hand must stay on a hold before the fingers close,
+                            // so a hand sweeping across rock does not snag it
+  HOVER_HYST: 0.012,        // ...and it has to leave by this much more than it came in by. Without
+                            // the hysteresis a hand resting exactly on a hold's rim crossed in and
+                            // out with a millimetre of body sway and fired ~49 misses a second.
+  MISS_COOLDOWN: 0.30,      // and one hand reports a miss at most this often, whatever it does:
+                            // every miss shakes the ring, plays a cue and kicks the camera
+  RELEASE_DEADZONE: 0.35,   // fraction of full stick deflection past which a gripping hand lets
+                            // go. Below it a gripping hand does not move, so a resting thumb
+                            // (or a thumb reaching for the other stick) can never drop you.
+  RELEASE_CONFIRM: 0.016,   // ...and it must stay past it this long (two 120 Hz steps) to count,
+                            // so a thumb that clips the deadzone in passing does not drop you
+  SLIP_REST: 0.15,          // a hand that has just slipped takes nothing until it has this much
+                            // stamina back: a slip is the game telling you to shake out, and
+                            // without it a spent hand grabbed, slipped and grabbed for ever
+                            // (Mid-swing a hand catches only rock its own stick is SENDING it to:
+                            // the resting place the stick picks has to be on that rock, for the
+                            // whole dwell. An angle alone does not separate a reach from a pump —
+                            // a sine pump sits within 45 degrees of one direction for 0.61 s of
+                            // every 1.4 s cycle, five dwells' worth — but where the stick parks
+                            // the hand does: a pump sends it to arm's length, past everything.)
 
   // --- feel ---------------------------------------------------------------------------
   SWAY: 0.05,           // one-hand hang: the body target leans this far past the loaded hold
@@ -77,7 +107,7 @@ export const CFG = Object.freeze({
 });
 
 const ZERO_STICK = Object.freeze({ x: 0, y: 0 });
-const ZERO_INPUT = Object.freeze({ L: ZERO_STICK, R: ZERO_STICK, tapL: false, tapR: false });
+const ZERO_INPUT = Object.freeze({ L: ZERO_STICK, R: ZERO_STICK });
 const SIGN = { L: -1, R: 1 };
 const OTHER = { L: 'R', R: 'L' };
 
@@ -89,11 +119,19 @@ const clamp01 = (v) => (v < 0 ? 0 : v > 1 ? 1 : v);
 function makeHand(side, hold) {
   return {
     side, x: hold.x, y: hold.y, vx: 0, vy: 0, tx: hold.x, ty: hold.y,
-    gripping: true, holdId: hold.id, armed: false,
+    gripping: true, holdId: hold.id,
+    // `armed` never becomes true since B51 (nothing arms: hovering grabs). It stays on the hand
+    // because world.js reads it for the hover ring; it is a constant false, not a state.
+    armed: false,
     stamina: 1, tremble: 0, curl: 1, hover: 1,
     nearId: hold.id, nearDist: 0,             // nearest hold (extra, read-only convenience)
-    _stick: { x: 0, y: 0 }, _armT: 0,               // internal; _stick is also where a free hand is parked
-    _skipId: null, _skipT: 0,                       // the hold just let go of, not re-grabbed at once
+    _stick: { x: 0, y: 0 },                         // internal; _stick is also where a free hand is parked
+    _hoverId: null, _hoverT: 0,                     // rock the fingers are on, and for how long (B51)
+    _relArm: false, _relT: 0,                       // the stick has been back at centre since this grab,
+                                                    // and how long it has been past the deadzone since
+    _skipId: null,                                  // the hold just let go of, until the hand leaves it
+    _spent: false,                                  // slipped off: takes nothing until it has rested
+    _missT: 0,                                      // cooldown on the miss event
     _regripT: 0,                                    // brief beat after a release before rock can be taken
   };
 }
@@ -186,10 +224,12 @@ export function step(state, input, dt) {
   const live = state.phase === 'climbing' || state.phase === 'falling' || state.phase === 'swinging' ||
     state.phase === 'grounded';
 
-  const webAteTap = updateWeb(state, inp, dt);   // may swallow the right tap as an aim / a cut
+  updateWeb(state, inp, dt);                      // nothing to swallow any more: there are no taps (B51)
   if (live) {
-    if (inp.tapL) tap(state, state.hands.L);
-    if (inp.tapR && !webAteTap) tap(state, state.hands.R);
+    // Letting go is a stick push now, one stick per hand (B51). Done before the hands move so a
+    // release and the reach it starts land on the same frame.
+    releaseFromStick(state, state.hands.L, inp.L, dt);
+    releaseFromStick(state, state.hands.R, inp.R, dt);
     updateStamina(state, dt);
   }
   updateBody(state, dt, inp);
@@ -445,17 +485,32 @@ function canGrab(state) {
 }
 
 // A hand grabs anywhere on a hold's surface (its own radius plus a fingertip's overlap), so a
-// big rock is a big target and a crimp is a small one.
+// big rock is a big target and a crimp is a small one. Since B51 this is also the HOVER radius:
+// stay inside it for HOVER_GRAB_DWELL and the fingers close on their own.
 export function grabRadius(hold) {
   // Deliberately NOT floored at SNAP any more: a crimp is a small target and should feel like
   // one. You must have the hand on the rock, anywhere on it, and nowhere else.
   return (hold.size || 0.12) + CFG.GRAB_EDGE;
 }
 
-// An ARMED hand sweeping past the cliff uses a tighter radius than a deliberate tap. Without
-// this an armed hand snags rock it was never reaching for — including holds behind it.
-export function armRadius(hold) {
-  return (hold.size || 0.12) * 0.92;
+// Letting go, with no button to do it (B51): push this hand's own stick past the deadzone and
+// the fingers open, and the same push is already steering the hand where it is going. A stick
+// under the deadzone leaves a gripping hand exactly where it is. One stick, one hand — pushing
+// the left stick can never drop the right hand, so no single thumb can let go of the cliff.
+//
+// It is the PUSH that lets go, not the pushed stick: the stick has to come back inside the
+// deadzone before it can let go again. Without that latch the stick you steered a hand across
+// the wall with would drop that hand again the frame after it closed on the rock, for ever.
+// And it must MEAN it: the push has to hold past the deadzone for RELEASE_CONFIRM (two 120 Hz
+// steps) before the fingers open, so a thumb crossing the line on its way somewhere else — or one
+// frame of 0.3501 — is not a hand off the wall.
+function releaseFromStick(state, hand, stick, dt) {
+  if (!hand.gripping) return;
+  const sx = (stick && +stick.x) || 0, sy = (stick && +stick.y) || 0;
+  if (Math.hypot(sx, sy) <= CFG.RELEASE_DEADZONE) { hand._relArm = true; hand._relT = 0; return; }
+  if (!hand._relArm) return;
+  hand._relT += dt;
+  if (hand._relT >= CFG.RELEASE_CONFIRM) release(state, hand, 'release');
 }
 
 // Nearest decoy that has not crumbled yet.
@@ -475,38 +530,22 @@ export function nearestFake(state, x, y) {
 // re-try the same spot. It crumbles for good, so the cliff teaches you as you climb it.
 function crumble(state, hand, fake) {
   fake.broken = true;
-  hand.armed = false;
-  hand._armT = 0;
+  hand._hoverId = null;                    // whatever is under it now needs its own dwell
+  hand._hoverT = 0;
+  hand._regripT = CFG.REGRIP_LOCK;
   hand.tremble = Math.max(hand.tremble, 0.7);
   push(state, { type: 'crumble', hand: hand.side, holdId: fake.id });
 }
 
-// GRIP is a toggle: release when gripping; otherwise grab the nearest hold within its radius,
-// or arm the hand so it grabs the first hold that comes within SNAP during ARM_TIME.
-function tap(state, hand) {
-  if (hand.gripping) { release(state, hand, 'release'); return; }
-  // Straight after letting go the fingers are still open and moving: a tap can only arm, so a
-  // hand cannot snatch the rock it is drifting past (or the one it just left).
-  if (canGrab(state) && hand._regripT <= 0) {
-    const near = targetHold(state, hand);
-    const fake = nearestFake(state, hand.x, hand.y);
-    // A decoy wins the grab when the fingers are on it and it is the closer rock.
-    if (fake && fake.d <= grabRadius(fake.hold) && (!near || fake.d < near.d)) { crumble(state, hand, fake.hold); return; }
-    if (near && near.d <= grabRadius(near.hold)) { grab(state, hand, near.hold); return; }
-    // A hold was close but not close enough: a real miss (the HUD shakes). A tap in empty rock,
-    // or right after letting go while still on the old hold, is a deliberate pre-arm: 'arm' only.
-    if (near && near.d <= CFG.HOVER_RANGE) push(state, { type: 'miss', hand: hand.side });
-  }
-  hand.armed = true;
-  hand._armT = CFG.ARM_TIME;
-  push(state, { type: 'arm', hand: hand.side });
-}
-
-// While another hand still grips, the hold this hand just released is skipped so that a
-// quick second tap arms the hand instead of taking the same hold again. Once the climber
-// is falling every hold counts: a panic re-grab inside the grace window saves the fall.
+// The hold this hand just came off is locked out of it — in EVERY phase, the grace window
+// included, until the hand has actually left that rock. Falling used to lift it so a hand could
+// close again on what it was still touching, and the result was that a push on both sticks from a
+// two-hand hang gave release, release, fall — and then both hands welding themselves back onto the
+// same two holds a tenth of a second later, with the sticks still buried and the release latch
+// down, so you could not let go at all. Nothing may undo a fall you asked for (B43). The grace
+// window still saves you: it just has to be a DIFFERENT hold, which is what reaching for one is.
 function skipId(state, hand) {
-  return state.phase === 'climbing' ? hand._skipId : null;
+  return hand._skipId;
 }
 
 // The hold this hand may take next: the nearest one that is neither the hold it just let go of
@@ -516,7 +555,99 @@ function targetHold(state, hand) {
   return nearestHold(state, hand.x, hand.y, skipId(state, hand), other.gripping ? other.holdId : null);
 }
 
+// What the hand is visibly OVER, for Hand.nearId / Hand.hover and the glow the world draws from
+// them. The skipped hold counts here even though it cannot be taken: a hand resting on the rock
+// it just released must light THAT rock, not point at some other one across the wall.
+function cueHold(state, hand) {
+  const other = state.hands[OTHER[hand.side]];
+  return nearestHold(state, hand.x, hand.y, other.gripping ? other.holdId : null);
+}
+
+// Where a stick sends this hand: shoulder + the stick blended with the rest offset, clamped to
+// REACH. It is the target `updateHand` springs the hand to, in one place so that the question
+// "is this stick reaching for that rock?" is answered with the hand's real destination.
+function stickTarget(state, hand, sx, sy) {
+  const sh = shoulder(state, hand.side);
+  const sm = Math.min(1, Math.hypot(sx, sy));
+  let ox = SIGN[hand.side] * CFG.REST_X * (1 - sm) + sx * CFG.REACH;
+  let oy = CFG.REST_Y * (1 - sm) + sy * CFG.REACH;
+  const om = Math.hypot(ox, oy);
+  if (om > CFG.REACH) { ox *= CFG.REACH / om; oy *= CFG.REACH / om; }
+  return { x: sh.x + ox, y: sh.y + oy };
+}
+
+// Is this stick SENDING this hand onto this rock? Not merely pointing near it: the place the
+// stick parks the hand has to be on the hold. Used only while swinging, where a hand is carried
+// past rock it never reached for — and where an angle test is not enough, because a pump is a
+// stick sweeping through the ring and it lingers in any given 45-degree arc for 0.61 s of a 1.4 s
+// cycle, five times the dwell. A pump sends the hand to arm's length; a reach sends it to a hold.
+function reachingAt(state, hand, hold, stick) {
+  const sx = (stick && +stick.x) || 0, sy = (stick && +stick.y) || 0;
+  let m = Math.hypot(sx, sy);
+  if (m < 1e-6) return false;
+  const t = stickTarget(state, hand, m > 1 ? sx / m : sx, m > 1 ? sy / m : sy);
+  return Math.hypot(t.x - hold.x, t.y - hold.y) <= grabRadius(hold);
+}
+
+// The grab, with no button (B51). A free hand that stays on a piece of rock for HOVER_GRAB_DWELL
+// closes on it. The dwell is the whole difference between reaching for a hold and sweeping past
+// one; leaving the rock before the fingers close is the 'miss' the HUD shakes on, and is the only
+// miss there is now that nothing is tapped. Decoys are taken exactly like real rock (B10).
+// MID-SWING IT TAKES A REACH AT THAT ROCK. Hanging on the line, both hands are free and ride the
+// body across the whole face, and on a wall with rock everywhere they are inside some hold's
+// radius within a few frames — which ended every swing almost as soon as it began. So while
+// `swinging` a hand only closes on rock it is being pushed INTO: its own stick past
+// RELEASE_DEADZONE and pointing within SWING_REACH_ARC of that hold, for the whole dwell. A pump
+// is a stick sweeping through the ring, so it passes through the arc and never dwells in it —
+// pumping past a hold used to grab it, cut the line and spend a fall on a 1.4 s cycle.
+function updateHoverGrab(state, hand, dt, cue, reaching, stick) {
+  // Mid-fall the regrip beat is waived: the fingers have to be allowed to close on whatever they
+  // are still touching, which is the whole of the grace window now that nothing is tapped.
+  // And the right hand does not grab rock while the line is out — a hand that is aiming, or has
+  // just shot, must not snag a hold and cancel the shot out from under you. A hand that has just
+  // slipped takes nothing at all until it has rested (SLIP_REST).
+  const eligible = canGrab(state) &&
+    (state.phase === 'falling' || hand._regripT <= 0) &&
+    (state.phase !== 'swinging' || reaching) &&
+    !hand._spent &&
+    !(hand.side === 'R' && state.web.mode !== 'idle');
+  let hold = null, fake = false;
+  if (eligible) {
+    // Hysteresis: a hold already being dwelt on is left only by HOVER_HYST more than it was
+    // entered by, so a hand resting on the rim does not chatter in and out of it.
+    const rOf = (h) => grabRadius(h) + (h.id === hand._hoverId ? CFG.HOVER_HYST : 0);
+    // the cue already found the nearest rock; only re-search when it is the one locked out
+    const skip = skipId(state, hand);
+    const near = cue && cue.hold.id === skip ? targetHold(state, hand) : cue;
+    const fk = nearestFake(state, hand.x, hand.y);
+    if (fk && fk.d <= rOf(fk.hold) && (!near || fk.d < near.d)) { hold = fk.hold; fake = true; }
+    else if (near && near.d <= rOf(near.hold)) hold = near.hold;
+    // ...and mid-swing the reach has to be AT this rock, not merely outward.
+    if (hold && state.phase === 'swinging' && !reachingAt(state, hand, hold, stick)) hold = null;
+  }
+  const id = hold ? hold.id : null;
+  if (id !== hand._hoverId) {
+    // Came off the rock (or slid onto a different one) before the fingers closed. One miss per
+    // hand per MISS_COOLDOWN: every one of them shakes the ring, plays a cue and kicks the camera.
+    if (hand._hoverId !== null && eligible && hand._missT <= 0) {
+      hand._missT = CFG.MISS_COOLDOWN;
+      push(state, { type: 'miss', hand: hand.side, holdId: hand._hoverId });
+    }
+    hand._hoverId = id;
+    hand._hoverT = 0;
+    return;
+  }
+  if (id === null) return;
+  hand._hoverT += dt;
+  if (hand._hoverT < CFG.HOVER_GRAB_DWELL) return;
+  hand._hoverId = null;
+  hand._hoverT = 0;
+  if (fake) crumble(state, hand, hold);
+  else grab(state, hand, hold);
+}
+
 function grab(state, hand, hold) {
+  hand._spent = false;
   // Catching rock mid-swing ends the swing: the line goes slack and you are climbing again.
   if (state.phase === 'swinging') {
     state.web.mode = 'idle';
@@ -526,8 +657,9 @@ function grab(state, hand, hold) {
   }
   hand.gripping = true;
   hand.holdId = hold.id;
-  hand.armed = false;
-  hand._armT = 0;
+  hand._hoverId = null;
+  hand._hoverT = 0;
+  hand._relArm = false;                // the stick that steered the hand here must not also drop it
   // Grip where the fingers actually landed: clamp the hand onto the rock's surface and keep
   // that contact point, so a wide rock can be held at its edge instead of always at its centre.
   {
@@ -566,10 +698,19 @@ function release(state, hand, type) {
   const holdId = hand.holdId;
   hand.gripping = false;
   hand.holdId = null;
-  // The arm relaxes to the rest offset (`_stick` was cleared on the grab): letting go of rock is
-  // your own move, and a hand left hovering inside the grab zone of the hold it just released
-  // would have to be steered off it before it could aim at anything.
-  if (type === 'release') { hand._skipId = holdId; hand._skipT = CFG.SKIP_TIME; hand._regripT = CFG.REGRIP_LOCK; }
+  hand._hoverId = null;
+  hand._hoverT = 0;
+  // Every way off a hold locks that hold out of this hand until the hand has left it — a slip and
+  // a sloper timing out included, because the fingers are still inside the rock's radius and an
+  // automatic grab would otherwise take it straight back and drop you again a moment later.
+  // The lock is a distance, not a timer: see updateHand.
+  hand._skipId = holdId;
+  hand._regripT = CFG.REGRIP_LOCK;
+  // A hand whose fingers FAILED takes nothing at all until it has rested (SLIP_REST). Two holds
+  // that overlap — and every route has a pair — otherwise gave a spent hand somewhere to go the
+  // instant it came off: slip off A, close on B, slip, close on A, for ever, with the climber
+  // hanging there on a hand that could never hold. A slip means shake out.
+  if (type === 'slip') hand._spent = true;
   push(state, { type, hand: hand.side, holdId });
   if (state.phase === 'climbing' && !anyGripping(state)) beginFall(state);
 }
@@ -670,7 +811,6 @@ function updateBody(state, dt, inp) {
 
 function updateHand(state, hand, stickIn, dt) {
   const sh = shoulder(state, hand.side);
-  const sgn = SIGN[hand.side];
   const hold = hand.gripping ? state._holdById.get(hand.holdId) : null;
 
   if (hold) {
@@ -713,13 +853,9 @@ function updateHand(state, hand, stickIn, dt) {
 
     // Target = shoulder + stick·REACH, blended with the rest offset as the stick nears centre:
     // a hand that has not been steered since it last held rock hangs at rest.
-    const sm = Math.min(1, Math.hypot(s.x, s.y));
-    let ox = sgn * CFG.REST_X * (1 - sm) + s.x * CFG.REACH;
-    let oy = CFG.REST_Y * (1 - sm) + s.y * CFG.REACH;
-    const om = Math.hypot(ox, oy);
-    if (om > CFG.REACH) { ox *= CFG.REACH / om; oy *= CFG.REACH / om; }
-    hand.tx = sh.x + ox;
-    hand.ty = sh.y + oy;
+    const tgt = stickTarget(state, hand, s.x, s.y);
+    hand.tx = tgt.x;
+    hand.ty = tgt.y;
 
     spring(hand, 'x', 'vx', hand.tx, CFG.HAND_OMEGA, CFG.HAND_ZETA, dt);
     spring(hand, 'y', 'vy', hand.ty, CFG.HAND_OMEGA, CFG.HAND_ZETA, dt);
@@ -735,25 +871,28 @@ function updateHand(state, hand, stickIn, dt) {
       if (vout > 0) { hand.vx -= vout * nx; hand.vy -= vout * ny; }
     }
 
-    if (hand.armed) { hand._armT -= dt; if (hand._armT <= 0) { hand.armed = false; hand._armT = 0; } }
     if (hand._regripT > 0) hand._regripT = Math.max(0, hand._regripT - dt);
+    if (hand._missT > 0) hand._missT = Math.max(0, hand._missT - dt);
+    // Shaken out enough to be trusted with rock again (see release: a slip sets `_spent`).
+    if (hand._spent && hand.stamina >= CFG.SLIP_REST) hand._spent = false;
     if (hand._skipId !== null) {
-      hand._skipT -= dt;
       const sk = state._holdById.get(hand._skipId);
-      // Clear on distance, not on a timer: an armed hand must not re-take the hold it just
-      // let go of while the fingers are still inside that rock's grab zone.
-      if (!sk || hand._skipT <= 0 || Math.hypot(sk.x - hand.x, sk.y - hand.y) > grabRadius(sk) + 0.04) hand._skipId = null;
+      // Clear on DISTANCE ONLY — there is no timer behind it. With the grab automatic, a hand
+      // parked on the hold it just let go of would otherwise be taken back by that hold with no
+      // input at all, the moment any timer lapsed. It stays locked until the hand is actually off
+      // the rock, which is always one deliberate stick push away.
+      if (!sk || Math.hypot(sk.x - hand.x, sk.y - hand.y) > grabRadius(sk) + CFG.SKIP_CLEAR) hand._skipId = null;
     }
 
-    const near = targetHold(state, hand);
-    hand.nearId = near ? near.hold.id : null;
-    hand.nearDist = near ? near.d : Infinity;
-    hand.hover = near ? clamp01(1 - near.d / CFG.HOVER_RANGE) : 0;
-    if (hand.armed && canGrab(state) && hand._regripT <= 0) {
-      const fk = nearestFake(state, hand.x, hand.y);
-      if (fk && fk.d <= armRadius(fk.hold) && (!near || fk.d < near.d)) crumble(state, hand, fk.hold);
-      else if (near && near.d <= armRadius(near.hold)) grab(state, hand, near.hold);
-    }
+    const cue = cueHold(state, hand);
+    hand.nearId = cue ? cue.hold.id : null;
+    hand.nearDist = cue ? cue.d : Infinity;
+    hand.hover = cue ? clamp01(1 - cue.d / CFG.HOVER_RANGE) : 0;
+    // "Reaching": this stick is pushed hard enough to mean this hand, now — the same deflection
+    // that lets go of rock. `active === false` says the value is a parked one nobody is touching
+    // (B45), and an Input without the flag is read the pre-B45 way, where a live vector is a steer.
+    const reaching = m > CFG.RELEASE_DEADZONE && !(stickIn && stickIn.active === false);
+    updateHoverGrab(state, hand, dt, cue, reaching, stickIn);
   }
 
   // Fingers curl onto a hold (a little anticipation when hovering); tremble grows as stamina fades.

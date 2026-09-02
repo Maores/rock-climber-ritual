@@ -26,7 +26,6 @@ function rig({ keyboard = true, look = false, hands = null, title = false } = {}
   const calls = [];
   const hud = {
     sticks: { L: ring(20, 600), R: ring(250, 600) },
-    grips: { L: ring(20, 520, 60), R: ring(250, 520, 60) },
     setStick(side, x, y) { calls.push([side, x, y]); },
   };
   if (title) hud.elements = { title: Object.assign(new FakeEl({}), { hidden: true }) };
@@ -48,9 +47,10 @@ const pt = (el, fx, fy, pointerId = 1) => {
   return { pointerId, clientX: r.left + r.width / 2 + fx * (r.width / 2), clientY: r.top + r.height / 2 + fy * (r.height / 2) };
 };
 
-test('input: idle read is all zeros with no taps, and feeds the HUD knobs', () => {
+test('input: an idle read is two zero sticks, and feeds the HUD knobs', () => {
   const { input, calls } = rig();
-  assert.deepEqual(input.read(), { L: { x: 0, y: 0, active: false }, R: { x: 0, y: 0, active: false, web: WEB0 }, tapL: false, tapR: false, look: { x: 0, y: 0, active: false, homing: false, down: 85 }, holdL: false, holdR: false, web: WEB0 });
+  // B51: no taps and no holdL — there are no grip buttons for either of them to come from.
+  assert.deepEqual(input.read(), { L: { x: 0, y: 0, active: false }, R: { x: 0, y: 0, active: false, web: WEB0 }, look: { x: 0, y: 0, active: false, homing: false, down: 85 }, holdR: false, web: WEB0 });
   assert.deepEqual(calls, [['L', 0, 0], ['R', 0, 0]]);
 });
 
@@ -93,19 +93,19 @@ test('input: one pointer per stick; other pointers and other ids are ignored', (
   assert.deepEqual(r.R, { x: 0, y: 0, active: false, web: WEB0 });
 });
 
-test('input: grip taps are edge-triggered — one tap per read no matter how many pointerdowns', () => {
-  const { hud, input } = rig();
-  hud.grips.L.fire('pointerdown', { pointerId: 1 });
-  hud.grips.L.fire('pointerdown', { pointerId: 2 });
-  let r = input.read();
-  assert.equal(r.tapL, true);
-  assert.equal(r.tapR, false);
-  r = input.read();
-  assert.equal(r.tapL, false);
-  hud.grips.R.fire('pointerdown', { pointerId: 3 });
-  r = input.read();
-  assert.equal(r.tapR, true);
-  assert.equal(input.read().tapR, false);
+test('input: nothing reports a tap any more — the sticks are the whole of it (B51)', () => {
+  const { hud, win, input } = rig();
+  const el = hud.sticks.L;
+  el.fire('pointerdown', pt(el, 0, -1));
+  win.fire('keydown', { code: 'KeyQ', key: 'q' });
+  win.fire('keydown', { code: 'Enter', key: 'Enter' });
+  win.fire('keydown', { code: 'Slash', key: '/' });
+  const r = input.read();
+  assert.equal(r.tapL, undefined);
+  assert.equal(r.tapR, undefined);
+  assert.equal(r.holdL, undefined);
+  near(r.L.y, 1, 1e-9);
+  assert.deepEqual(r.R, { x: 0, y: 0, active: false, web: WEB0 }, 'the old grip keys steer nothing and drop nothing');
 });
 
 test('input: keyboard integrates a virtual stick at 2.5 units/s and holds its value', () => {
@@ -141,7 +141,7 @@ test('input: keyboard integrates a virtual stick at 2.5 units/s and holds its va
   assert.ok(r.R.y < -0.2 && r.R.y > -0.3);
 });
 
-test('input: Q, Enter and Slash toggle grips and recenter that stick; Escape recenters both', () => {
+test('input: Escape centres both keyboard sticks, and claims nothing else (B51)', () => {
   const { win, clock, input } = rig();
   input.read();
   win.fire('keydown', { code: 'KeyW', key: 'w' });
@@ -151,32 +151,25 @@ test('input: Q, Enter and Slash toggle grips and recenter that stick; Escape rec
   win.fire('keyup', { code: 'ArrowUp', key: 'ArrowUp' });
   let r = input.read();
   near(r.L.y, 1); near(r.R.y, 1);
-  const q = win.fire('keydown', { code: 'KeyQ', key: 'q' });
-  assert.equal(q.defaultPrevented, true);
-  r = input.read();
-  assert.equal(r.tapL, true);
-  assert.deepEqual(r.L, { x: 0, y: 0, active: true });   // a recenter is a command, not a released stick
-  near(r.R.y, 1);
-  win.fire('keydown', { code: 'Enter', key: 'Enter' });
-  r = input.read();
-  assert.equal(r.tapR, true);
-  assert.deepEqual(r.R, { x: 0, y: 0, active: true, web: WEB0 });
-  win.fire('keydown', { code: 'Slash', key: '/' });
-  assert.equal(input.read().tapR, true);
-  win.fire('keydown', { code: 'Enter', key: 'Enter', repeat: true });      // held Enter does not re-tap
-  assert.equal(input.read().tapR, false);
   win.fire('keydown', { code: 'ArrowLeft', key: 'ArrowLeft' });
   win.fire('keydown', { code: 'KeyD', key: 'd' });
   clock.advance(1000);
   r = input.read();
-  near(r.L.x, 1); near(r.R.x, -1);
+  assert.ok(r.L.x > 0.9 && r.R.x < -0.9, 'the keys drive the sticks out to the rim');
+  assert.ok(Math.hypot(r.L.x, r.L.y) <= 1 + 1e-9 && Math.hypot(r.R.x, r.R.y) <= 1 + 1e-9);
   win.fire('keyup', { code: 'ArrowLeft', key: 'ArrowLeft' });
   win.fire('keyup', { code: 'KeyD', key: 'd' });
   win.fire('keydown', { code: 'Escape', key: 'Escape' });
   r = input.read();
-  assert.deepEqual(r.L, { x: 0, y: 0, active: true });
-  assert.deepEqual(r.R, { x: 0, y: 0, active: true, web: WEB0 });
-  assert.deepEqual(input.read().L, { x: 0, y: 0, active: false });   // the recenter lasts exactly one read
+  // Both virtual sticks go to centre, which is what a thumb lifting off a touch ring does — and
+  // it is how the keyboard re-arms a release. It is NOT an `active` steer: the hand stays parked,
+  // because nothing may quietly move a hand the player put somewhere (B45).
+  assert.deepEqual(r.L, { x: 0, y: 0, active: false });
+  assert.deepEqual(r.R, { x: 0, y: 0, active: false, web: WEB0 });
+  win.fire('keydown', { code: 'KeyW', key: 'w' });
+  clock.advance(200);
+  r = input.read();
+  assert.ok(r.L.y > 0.3 && r.L.active, 'and the keys pick up again from centre');
 });
 
 test('input: key names work without `code` (synthetic events), and blur drops held keys', () => {
@@ -185,8 +178,6 @@ test('input: key names work without `code` (synthetic events), and blur drops he
   win.fire('keydown', { key: 'ArrowUp' });
   clock.advance(400);
   near(input.read().R.y, 1);
-  win.fire('keydown', { key: '/' });
-  assert.equal(input.read().tapR, true);
   win.fire('keydown', { key: 'W' });
   win.fire('blur');
   clock.advance(1000);
@@ -209,10 +200,10 @@ test('input: a pointer on a stick overrides the keyboard, and releasing it leave
   assert.deepEqual(r.L, { x: 0, y: 0, active: false });
 });
 
-test('input: long-press menus are suppressed on sticks and grips; losing pointer capture ends the drag', () => {
+test('input: long-press menus are suppressed on the sticks; losing pointer capture ends the drag', () => {
   const { hud, input } = rig();
   assert.equal(hud.sticks.L.fire('contextmenu', {}).defaultPrevented, true);
-  assert.equal(hud.grips.R.fire('contextmenu', {}).defaultPrevented, true);
+  assert.equal(hud.sticks.R.fire('contextmenu', {}).defaultPrevented, true);
   const el = hud.sticks.R;
   el.fire('pointerdown', pt(el, 0, -1, 4));
   near(input.read().R.y, 1);
@@ -341,10 +332,10 @@ test('look: taking the rock eases the view home over ~0.4 s, and a fall does too
   near(r.look.x, 0);
 });
 
-test('look: on a desktop the mouse buttons stay the grips — the cursor looks with Shift', () => {
+test('look: on a desktop the cursor only looks with Shift, or on the middle button', () => {
   const { canvas, input } = rig({ look: true });
   drag(canvas, [100, 400], [197.5, 400], 1, { pointerType: 'mouse', button: 0 });
-  near(input.read().look.x, 0);                          // a plain left drag is a grip, not a look
+  near(input.read().look.x, 0);                          // a plain left drag turns nothing: B51 left it with no job
   drag(canvas, [100, 400], [197.5, 400], 2, { pointerType: 'mouse', button: 0, shiftKey: true });
   near(input.read().look.x, 45);
   canvas.fire('pointerup', { pointerId: 2 });
@@ -355,7 +346,7 @@ test('look: on a desktop the mouse buttons stay the grips — the cursor looks w
 });
 
 test('look: a mouse look never drags the hand, and the hand keeps its target when it ends', () => {
-  const hud = { sticks: { L: ring(20, 600), R: ring(250, 600) }, grips: {} };
+  const hud = { sticks: { L: ring(20, 600), R: ring(250, 600) } };
   const view = ring(0, 0, 800);
   const input = createInput({
     hud, keyboard: false, win: new FakeEl({}), now: () => 0, mouse: view,
@@ -429,9 +420,10 @@ test('input: keyboard can be disabled, hud can be missing, dispose removes every
   assert.ok(a.hud.sticks.L.count() > 0);
   a.input.dispose();
   assert.equal(a.hud.sticks.L.count(), 0);
-  assert.equal(a.hud.grips.R.count(), 0);
-  a.hud.grips.L.fire('pointerdown', { pointerId: 1 });
-  assert.equal(a.input.read().tapL, false);
+  assert.equal(a.hud.sticks.R.count(), 0);
+  const el = a.hud.sticks.L;
+  el.fire('pointerdown', pt(el, 0, -1));
+  assert.deepEqual(a.input.read().L, { x: 0, y: 0, active: false });
 
   const b = rig();
   assert.ok(b.win.count() >= 3);
@@ -439,7 +431,7 @@ test('input: keyboard can be disabled, hud can be missing, dispose removes every
   assert.equal(b.win.count(), 0);
 
   const bare = createInput({ hud: null, keyboard: true, win: null });
-  assert.deepEqual(bare.read(), { L: { x: 0, y: 0, active: false }, R: { x: 0, y: 0, active: false, web: WEB0 }, tapL: false, tapR: false, look: { x: 0, y: 0, active: false, homing: false, down: 85 }, holdL: false, holdR: false, web: WEB0 });
+  assert.deepEqual(bare.read(), { L: { x: 0, y: 0, active: false }, R: { x: 0, y: 0, active: false, web: WEB0 }, look: { x: 0, y: 0, active: false, homing: false, down: 85 }, holdR: false, web: WEB0 });
   bare.dispose();
 });
 
@@ -475,7 +467,7 @@ test('input: active tells a stick nobody is touching from a stick reading zero (
 test('input: the WEB pad is the right grip, and its drag is the aim — in its own field (B48, B50)', () => {
   const knob = { L: null, R: null };
   const hud = {
-    sticks: { L: ring(20, 600), R: ring(250, 600) }, grips: {},
+    sticks: { L: ring(20, 600), R: ring(250, 600) },
     webButton: ring(250, 400, 60),
     setStick(side, x, y) { knob[side] = { x, y }; },
   };
@@ -540,7 +532,7 @@ test('input: a quick press-and-lift on the pad is a webTap; a long hold is not (
 });
 
 test('input: the mouse is always steering the hand it drives, and a look drag takes nothing over', () => {
-  const hud = { sticks: { L: ring(20, 600), R: ring(250, 600) }, grips: {} };
+  const hud = { sticks: { L: ring(20, 600), R: ring(250, 600) } };
   const view = ring(0, 0, 800);                       // the canvas: the cursor AND the look surface
   const input = createInput({
     hud, keyboard: false, win: new FakeEl({}), now: () => 0, mouse: view,

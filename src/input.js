@@ -1,8 +1,8 @@
 // src/input.js — touch, mouse and keyboard → Input for sim.step.
 //
-// read() returns { L:{x,y,active}, R:{x,y,active}, tapL, tapR, look, holdL, holdR, web }, where
-// `web` also appears as `R.web` (the same object). Stick vectors are in the unit disc and use the
-// WORLD convention: +x right, +y UP (a thumb pushed up the screen gives y > 0).
+// read() returns { L:{x,y,active}, R:{x,y,active}, look, holdR, web }, where `web` also appears
+// as `R.web` (the same object). Stick vectors are in the unit disc and use the WORLD convention:
+// +x right, +y UP (a thumb pushed up the screen gives y > 0).
 //
 // `web` is the whole web-zip gesture (B50), from the WEB pad or the desktop right button:
 //   x, y   — where the shot would go. Its OWN vector, never `R.x/R.y`, so the aim never fights
@@ -18,25 +18,27 @@
 // hud.setStick(side, x, y) receives the same vector every read, so the HUD must negate y
 // when it converts to CSS translate.
 //
-// `active` is true while something is actually on that stick this frame — a finger, the mouse
-// driving that hand, a movement key, or a recenter command. The sim parks a free hand where the
-// last steer left it (B45), so it has to be able to tell a stick reading zero from a stick
-// nobody is touching; the vector alone cannot say that.
+// There are no grip buttons and no taps (B51): the two sticks are the whole climb. A stick push
+// past CFG.RELEASE_DEADZONE is how a hand lets go, and a hand that hovers over rock grabs it, so
+// everything this module has to deliver is where each thumb is pointing.
 //
-// Touch / mouse (pointer events on hud.sticks.L/R and hud.grips.L/R):
+// `active` is true while something is actually on that stick this frame — a finger, the mouse
+// driving that hand, or a movement key. The sim parks a free hand where the last steer left it
+// (B45), so it has to be able to tell a stick reading zero from a stick nobody is touching; the
+// vector alone cannot say that.
+//
+// Touch / mouse (pointer events on hud.sticks.L/R):
 //   stick = (pointer − ring center) / ring radius, clamped to the unit disc; position
 //   mapping, zero the moment the pointer lifts (and `active` false with it: the hand keeps
 //   the target it was steered to). One pointer per stick; the pointer is captured so dragging
-//   past the ring keeps working. GRIP taps fire on pointerdown and are edge-triggered: true
-//   for exactly one read().
+//   past the ring keeps working.
 // Looking: a drag on the play surface itself (`surface`, the canvas) accumulates into
 //   `look`, which holds DEGREES of yaw and pitch, clamped to what the hands allow. See below.
 // Keyboard: W/A/S/D drive a virtual left stick and the arrow keys the right one, each
 //   axis integrating at KEY_RATE units/s and holding its value while no key is down — which
-//   is the same parked hand the touch sticks now give.
-//   Q toggles the left grip and Enter or Slash the right one; a grip toggle also recenters
-//   that hand's virtual stick. Escape recenters both sticks. A recenter is a command, not a
-//   release, so it reads `active` for that one frame and the hand returns to its rest offset.
+//   is the same parked hand the touch sticks give. Escape zeroes both virtual sticks: a touch
+//   stick recentres itself when the thumb lifts, and this is how the keyboard does the same,
+//   which is also how you re-arm the release after a grab.
 //   Shift turns the head instead of steering a hand.
 
 const KEY_RATE = 2.5;          // virtual stick units per second per axis
@@ -44,12 +46,11 @@ const MOVE_KEYS = {
   KeyW: ['L', 0, 1], KeyS: ['L', 0, -1], KeyA: ['L', -1, 0], KeyD: ['L', 1, 0],
   ArrowUp: ['R', 0, 1], ArrowDown: ['R', 0, -1], ArrowLeft: ['R', -1, 0], ArrowRight: ['R', 1, 0],
 };
-const GRIP_KEYS = { KeyQ: 'L', Enter: 'R', NumpadEnter: 'R', Slash: 'R' };
 // Fallback from `key` to `code` for synthetic events and browsers without `code`.
 const KEY_TO_CODE = {
-  w: 'KeyW', a: 'KeyA', s: 'KeyS', d: 'KeyD', q: 'KeyQ', '/': 'Slash',
+  w: 'KeyW', a: 'KeyA', s: 'KeyS', d: 'KeyD',
   ArrowUp: 'ArrowUp', ArrowDown: 'ArrowDown', ArrowLeft: 'ArrowLeft', ArrowRight: 'ArrowRight',
-  Enter: 'Enter', Escape: 'Escape',
+  Escape: 'Escape',
 };
 
 const defaultNow = () => (typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now());
@@ -61,7 +62,7 @@ function clampDisc(v) {
 }
 
 function keyCode(e) {
-  if (e.code && (MOVE_KEYS[e.code] || GRIP_KEYS[e.code] || e.code === 'Escape')) return e.code;
+  if (e.code && (MOVE_KEYS[e.code] || e.code === 'Escape')) return e.code;
   const k = typeof e.key === 'string' ? (e.key.length === 1 ? e.key.toLowerCase() : e.key) : '';
   return KEY_TO_CODE[k] || e.code || '';
 }
@@ -75,9 +76,7 @@ export function createInput({ hud = null, keyboard = true, win, now = defaultNow
   const pointer = { L: { x: 0, y: 0 }, R: { x: 0, y: 0 } };   // position-mapped sticks
   const active = { L: null, R: null };                         // pointerId holding each stick
   const virtual = { L: { x: 0, y: 0 }, R: { x: 0, y: 0 } };   // keyboard sticks
-  const taps = { L: false, R: false };
-  const recenter = { L: false, R: false };  // Escape / a grip key: send the hand back to rest, once
-  const holds = { L: false, R: false };   // grip currently held down (the spider hand aims on a hold)
+  const holds = { R: false };   // the right mouse button: the spider hand aims while it is down
   const held = new Set();
   const cleanups = [];
   let lastT = now();
@@ -125,29 +124,12 @@ export function createInput({ hud = null, keyboard = true, win, now = defaultNow
     if (el.style) el.style.touchAction = 'none';
   }
 
-  function bindGrip(side, el) {
-    on(el, 'pointerdown', (e) => {
-      if (e.preventDefault) e.preventDefault();
-      taps[side] = true;
-    });
-    on(el, 'contextmenu', prevent);
-    if (el.style) el.style.touchAction = 'none';
-  }
-
   function onKeyDown(e) {
     const code = keyCode(e);
     if (code === 'Escape') {
+      // Both keyboard sticks back to centre. It does NOT pull the hands home: a parked hand is
+      // only moved by a steer or by taking rock (B45), and nothing here quietly overrides that.
       virtual.L.x = virtual.L.y = virtual.R.x = virtual.R.y = 0;
-      recenter.L = recenter.R = true;
-      return;
-    }
-    if (GRIP_KEYS[code]) {
-      if (e.preventDefault) e.preventDefault();
-      if (e.repeat) return;
-      const side = GRIP_KEYS[code];
-      taps[side] = true;
-      virtual[side].x = virtual[side].y = 0;
-      recenter[side] = true;
       return;
     }
     if (MOVE_KEYS[code]) {
@@ -161,7 +143,6 @@ export function createInput({ hud = null, keyboard = true, win, now = defaultNow
   if (hud) {
     for (const side of ['L', 'R']) {
       if (hud.sticks && hud.sticks[side]) bindStick(side, hud.sticks[side]);
-      if (hud.grips && hud.grips[side]) bindGrip(side, hud.grips[side]);
     }
   }
   if (keyboard && target) {
@@ -184,13 +165,14 @@ export function createInput({ hud = null, keyboard = true, win, now = defaultNow
   }
 
   // ---------------------------------------------------------------------------------------
-  // Desktop mouse: the cursor IS the free hand, and the two buttons are the two grips.
+  // Desktop mouse: the cursor IS the free hand.
   //
   // The pointer's offset from the middle of the view maps straight onto that hand's reach
-  // circle (the same position mapping the thumb sticks use), so the hand goes where you point.
-  // Left button toggles the left grip, right button the right one. Whichever hand is hanging
-  // free follows the cursor; with both hands on the rock the cursor does nothing until you
-  // let one go, which is exactly the rhythm of the climb.
+  // circle (the same position mapping the thumb sticks use), so the hand goes where you point,
+  // and holding it over a hold takes it. Whichever hand is hanging free follows the cursor; with
+  // both hands on the rock the cursor does nothing until W/A/S/D or the arrows let one go, which
+  // is exactly the rhythm of the climb. The buttons no longer grip (B51: nothing does) — the
+  // right one is only the web-zip's hold-to-aim, which is what it already was on a phone.
   const mousePos = { x: 0, y: 0, has: false };
   let mouseSide = 'R';                       // which hand the cursor drives when both are free
   let rightDownT = 0;                        // when the right button went down, to tell a click from a hold
@@ -225,29 +207,26 @@ export function createInput({ hud = null, keyboard = true, win, now = defaultNow
     });
     on(el, 'pointerdown', (e) => {
       if (e.pointerType && e.pointerType !== 'mouse') return;
-      if (e.button !== 0 && e.button !== 2) return;
-      if (e.shiftKey) return;                   // Shift is the look modifier, not a grip
+      if (e.button !== 2) return;             // right button only: hold to aim the web
+      if (e.shiftKey) return;                 // Shift is the look modifier, not an aim
       prevent(e);
-      const side = e.button === 0 ? 'L' : 'R';
-      mouseSide = side;
-      taps[side] = true;
-      holds[side] = true;
-      if (e.button === 2) rightDownT = now();
+      mouseSide = 'R';                        // with both hands free the cursor is the aim
+      holds.R = true;
+      rightDownT = now();
     });
     const up = (e) => {
       if (e.pointerType && e.pointerType !== 'mouse') return;
-      if (e.button === 0) holds.L = false;
-      else if (e.button === 2) {
+      if (e.button === 2 || e.button === undefined) {
         holds.R = false;
         // A right-button CLICK is the desktop half of the pad's tap: it is what lets go of an
         // attached line. A press held long enough to aim is a shot, not a click.
         if (now() - rightDownT <= WEB_TAP_MS) webTapped = true;
-      } else holds.L = holds.R = false;
+      }
     };
     on(el, 'pointerup', up);
-    on(el, 'pointercancel', () => { holds.L = holds.R = false; });
-    on(target || el, 'blur', () => { holds.L = holds.R = false; });
-    on(el, 'contextmenu', prevent);           // the right button is a grip, not a menu
+    on(el, 'pointercancel', () => { holds.R = false; });
+    on(target || el, 'blur', () => { holds.R = false; });
+    on(el, 'contextmenu', prevent);           // the right button aims the web, it is not a menu
   }
   if (mouse) bindMouse(mouse);
 
@@ -411,9 +390,11 @@ export function createInput({ hud = null, keyboard = true, win, now = defaultNow
   }
 
   // The web pad: a one-thumb press-and-drag. Holding it IS the held right grip the sim
-  // waits on, and the drag is the aim, so releasing fires. Without this the only way to aim on
-  // a phone would be to hold the GRIP pill and aim with the same thumb, which is the mistake
-  // the old LOOK button made once (B23).
+  // waits on, and the drag is the aim, so releasing fires.
+  //
+  // The pad's vector is a full deflection of the right stick, so pressing it also lets the right
+  // hand go (B51) — which is what has to happen anyway, since the web only charges with that hand
+  // free. Mind that it costs you the right hand even if you never fire.
   const PAD_RADIUS = 84;                   // px of drag for a full deflection of the aim
   //
   // The pad reports three things the shared grip button cannot, all on `web` (B50):
@@ -477,10 +458,9 @@ export function createInput({ hud = null, keyboard = true, win, now = defaultNow
     const dt = Math.min(0.1, Math.max(0, (t - lastT) / 1000));
     lastT = t;
     integrateKeys(dt);
-    const out = { L: { x: 0, y: 0, active: false }, R: { x: 0, y: 0, active: false }, tapL: taps.L, tapR: taps.R };
-    taps.L = taps.R = false;
-    // Edges: true for exactly one read, like the grip taps. The sim consumes them again on its
-    // own side, because one read feeds several fixed sim sub-steps.
+    const out = { L: { x: 0, y: 0, active: false }, R: { x: 0, y: 0, active: false } };
+    // Edges: true for exactly one read. The sim consumes them again on its own side, because one
+    // read feeds several fixed sim sub-steps.
     const webTap = webTapped, webCancel = webCancelled;
     webTapped = webCancelled = false;
     const onPad = webCommitted();             // the press has committed to being an aim, not a tap
@@ -513,8 +493,8 @@ export function createInput({ hud = null, keyboard = true, win, now = defaultNow
     look.homing = homing;      // the rig follows an easing value straight through, or it eases twice
     out.look = look;
     // A COMMITTED press on the pad is the held right grip; an uncommitted one is still only a
-    // possible tap, so it must not aim and its lift must not fire.
-    out.holdL = holds.L;
+    // possible tap, so it must not aim and its lift must not fire. (There is no holdL any more:
+    // nothing holds the left hand, because nothing grips it — B51.)
     out.holdR = holds.R || onPad;
     // While the view is being dragged the CURSOR is turning the head, not steering a hand, so it
     // stops driving one; the hand parks where it was (B45 `active` false) instead of following the
@@ -530,7 +510,7 @@ export function createInput({ hud = null, keyboard = true, win, now = defaultNow
         : (side === steer ? mouseVec : virtual[side]);
       out[side].x = v.x;
       out[side].y = v.y;
-      out[side].active = active[side] !== null || side === steer || keyed[side] || recenter[side];
+      out[side].active = active[side] !== null || side === steer || keyed[side];
       if (hud && typeof hud.setStick === 'function') hud.setStick(side, v.x, v.y);
     }
     // The WEB pad's drag is the AIM, and only the aim (B50). It used to be written over `out.R`
@@ -559,7 +539,6 @@ export function createInput({ hud = null, keyboard = true, win, now = defaultNow
     web.cancel = webCancel;
     out.web = web;
     out.R.web = web;
-    recenter.L = recenter.R = false;
     return out;
   }
 

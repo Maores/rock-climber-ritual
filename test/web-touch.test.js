@@ -206,6 +206,28 @@ test('touch: aiming never takes your right hand off the rock (B50)', () => {
   rg.input.dispose();
 });
 
+test('touch: pressing the pad costs you no hand (B50, B51)', () => {
+  // The pad used to write the right STICK, and under B51 a full stick deflection is what lets a
+  // hand go — so reaching for the web dropped the right hand, and with the left hand already off
+  // it would have dropped the climber. B50 gave the aim its own field; this is the guard on that.
+  const rg = phone(), s = climber();
+  frame(rg, s);
+  assert.ok(s.hands.L.gripping && s.hands.R.gripping);
+  padDown(rg);
+  padDrag(rg, 70, -40);                          // a committed aim, dragged hard
+  const r = frames(rg, s, 60);
+  assert.equal(s.web.mode, 'aiming');
+  assert.equal(s.hands.R.gripping, true, 'aiming must not let go of the right hand');
+  assert.equal(s.hands.L.gripping, true, 'nor the left');
+  assert.ok(!types(r.evs).includes('release'), `the pad released something: [${types(r.evs)}]`);
+  assert.equal(r.inp.R.x, 0);
+  assert.equal(r.inp.R.y, 0, 'the pad leaves the right stick alone, so nothing reads it as a push');
+  padUp(rg);
+  frames(rg, s, 40);
+  assert.equal(s.phase, 'swinging', 'and the shot still goes, and still bites');
+  rg.input.dispose();
+});
+
 test('touch: a brush of the pad does nothing at all (B50)', () => {
   // With the aim threshold gone, a one-frame brush fired an unaimed shot straight up. It always
   // bit, and a bite takes BOTH hands off the wall -- with no rope (B43) that is a death from a
@@ -262,15 +284,17 @@ test('touch: a quick drag-and-lift fires along the drag (B50)', () => {
 test('touch: the right stick still steers the right hand while the other thumb aims (B50)', () => {
   const rg = phone(), s = climber();
   frame(rg, s);
-  // free the right hand so the stick has something to steer
-  rg.hud.grips.R.fire('pointerdown', { pointerId: 3 });
-  frames(rg, s, 20);
-  assert.equal(s.hands.R.gripping, false);
+  // Free the right hand: with no GRIP button, pushing its own stick is what lets go (B51) — and
+  // it is the same stick this test then asks to steer with, which is the point.
+  const st = rg.hud.sticks.R;
+  const stickR = (x, y, type = 'pointerdown') => st.fire(type, { pointerId: 22, clientX: 239 + 65 + x * 65, clientY: 660 + 65 - y * 65 });
+  stickR(-0.2, -0.9);                            // down and slightly in: away from the line of holds
+  frames(rg, s, 30);
+  assert.equal(s.hands.R.gripping, false, 'a pushed stick is what takes a hand off the rock now');
   const x0 = s.hands.R.x;
 
   padDown(rg); padDrag(rg, 0, -70);              // aim straight up with one thumb...
-  const st = rg.hud.sticks.R;                    // ...and steer the hand right with the other
-  st.fire('pointerdown', { pointerId: 22, clientX: 239 + 65 + 62, clientY: 660 + 65 });
+  stickR(0.95, -0.3, 'pointermove');             // ...and steer the hand right with the other
   const r = frames(rg, s, 24);
   assert.equal(r.inp.R.active, true, 'the right stick is live while the pad is held');
   assert.ok(s.hands.R.x > x0 + 0.1, `the hand went where the stick pushed: ${x0.toFixed(2)} -> ${s.hands.R.x.toFixed(2)}`);
@@ -375,23 +399,26 @@ test('touch: a tap cannot cut the bite it happens to span (B50)', () => {
   }
 });
 
-test('touch: a GRIP-R tap mid-swing grabs for rock, it does not cut the line (B50)', () => {
-  // The cut used to accept `tapR`, so reaching for rock with the right hand severed the line --
-  // and the tap was swallowed too, so the hand did not even arm. Both halves are wrong: a GRIP
-  // tap is a grab.
+test('touch: reaching with the right stick mid-swing does not cut the line (B50, B51)', () => {
+  // The cut used to accept `tapR`, so reaching for rock with the right hand severed the line.
+  // With the GRIP buttons gone the reach IS the stick, and the rule has to hold for it just the
+  // same: only a tap on the pad lets go of the line. Nothing a stick does may drop you off it.
   const rg = phone(), s = climber();
   frame(rg, s);
   padDown(rg); padDrag(rg, 40, -66); frames(rg, s, 12); padUp(rg);
   frames(rg, s, 30);
   assert.equal(s.phase, 'swinging');
-  assert.equal(s.hands.R.armed, false);
 
-  rg.hud.grips.R.fire('pointerdown', { pointerId: 71 });
-  const r = frame(rg, s);
+  const st = rg.hud.sticks.R;
+  st.fire('pointerdown', { pointerId: 71, clientX: 239 + 65 + 62, clientY: 660 + 65 });   // reach out, hard
+  const r = frames(rg, s, 30);
   assert.ok(!types(r.evs).includes('webcut'), 'reaching for rock does not drop the line');
-  assert.equal(s.phase, 'swinging');
-  assert.ok(types(r.evs).includes('arm'), 'and the tap reaches the hand, which arms');
-  assert.equal(s.hands.R.armed, true);
+  assert.equal(s.phase, 'swinging', 'and the swing carries on');
+  assert.equal(s.hands.R.gripping, false, 'the hand on the line does not take rock while it is out');
+  // ...and the one gesture that does let go still does.
+  padDown(rg, 72); rg.tick(60); padUp(rg, 72);
+  const r2 = frames(rg, s, 3);
+  assert.ok(types(r2.evs).includes('webcut'), 'a tap on the pad is still the release');
   rg.input.dispose();
 });
 

@@ -236,13 +236,13 @@ button:focus-visible { outline: 2px solid var(--rune); outline-offset: 2px; }
    now lives inside #hud, which an overlay covers anyway, but the rule costs nothing. */
 body.overlay-up #web { display: none; }
 
-/* The WEB pad is the top of its own control stack: WEB / GRIP / stick on the right, GRIP / stick
-   on the left (B47 took the LOOK button away -- looking is a drag on the screen itself now).
-   It used to be fixed over the middle at z-index 40, which put it inside the bottom of the stick
-   ring and let it steal a thumb sliding down (B34). Stacked in the column it is the cluster's own
-   width and can never overlap it again. Only once unlocked -- and because the cluster is anchored
-   at its bottom, hiding it leaves GRIP and the stick exactly where they were, so the two columns
-   stay level. */
+/* The WEB pad is the top of its own control stack: WEB above the right stick, and just the stick
+   on the left (B47 took the LOOK button away -- looking is a drag on the screen itself now; B51
+   took the GRIP pills that used to sit under each pad). It used to be fixed over the middle at
+   z-index 40, which put it inside the bottom of the stick ring and let it steal a thumb sliding
+   down (B34). Stacked in the column it is the cluster's own width and can never overlap it again.
+   Only once unlocked -- and because the cluster is anchored at its bottom, hiding it leaves the
+   stick exactly where it was, so the two columns stay level. */
 #web {
   pointer-events: auto;
   width: var(--stick);
@@ -268,19 +268,21 @@ body.overlay-up #web { display: none; }
 #web.cool { opacity: .35; }
 #web[hidden] { display: none; }
 
-/* The web-zip, on the right grip pill. Without these the ability is invisible. */
-.grip.web-ready { box-shadow: 0 0 0 1px rgba(127, 224, 255, 0.55), 0 0 16px rgba(127, 224, 255, 0.22); }
-.grip.web-aim {
+/* The web-zip's own state, on the pad itself: ready, aiming, line out, cooling. It used to live
+   on the right GRIP pill, which went with the buttons (B51). Without these the ability is
+   invisible -- no cooldown, no aim state, no sign it exists. */
+#web.can { box-shadow: 0 0 0 1px rgba(127, 224, 255, 0.55), 0 0 16px rgba(127, 224, 255, 0.22); }
+#web.aim {
   color: #06222b;
-  background: var(--rune);
-  border-color: var(--rune);
+  background: var(--rune, #7fe0ff);
+  border-color: var(--rune, #7fe0ff);
   animation: webAim 0.7s ease-in-out infinite;
 }
 @keyframes webAim { 0%, 100% { box-shadow: 0 0 0 0 rgba(127,224,255,.55); } 50% { box-shadow: 0 0 0 7px rgba(127,224,255,0); } }
-.grip.web-out { color: #06222b; background: #cfeeff; border-color: #cfeeff; }
-/* the cooldown drains left to right across the pill */
-.grip.web-cool { position: relative; overflow: hidden; color: var(--muted); }
-.grip.web-cool::before {
+#web.out { color: #06222b; background: #cfeeff; border-color: #cfeeff; }
+/* the cooldown drains left to right across the pad */
+#web.cool { position: relative; overflow: hidden; }
+#web.cool::before {
   content: ''; position: absolute; inset: 0; transform-origin: left center;
   transform: scaleX(var(--cd, 0));
   background: rgba(127, 224, 255, 0.16);
@@ -465,7 +467,8 @@ body.overlay-up #menuBtn { display: none; }
 }
 #hud.falling #fallflash { opacity: 1; }
 
-/* control clusters: GRIP pill above a stick ring, one per thumb */
+/* control clusters: one stick ring per thumb, with its pad above it (B51: the GRIP pills are
+   gone -- a hand grabs by hovering and lets go when its stick is pushed) */
 .ctl {
   position: absolute;
   bottom: calc(var(--edge) + var(--sab));
@@ -476,88 +479,6 @@ body.overlay-up #menuBtn { display: none; }
 #ctl-l { left: calc(var(--edge) + var(--sal)); }
 #ctl-r { right: calc(var(--edge) + var(--sar)); }
 
-.grip {
-  pointer-events: auto;
-  touch-action: none;
-  position: relative;
-  width: var(--stick); height: 46px;
-  padding: 0 12px 0 24px; /* room for the state lamp on the left */
-  border-radius: 999px;
-  border: 1.5px solid rgba(241, 230, 216, 0.26);
-  background: rgba(20, 14, 11, 0.56);
-  color: var(--muted);
-  font: 700 12.5px/1 var(--sans);
-  letter-spacing: 0.3em;
-  text-transform: uppercase;
-  text-indent: 0.3em; /* optical centering with the trailing letter-space */
-  -webkit-backdrop-filter: blur(8px);
-  backdrop-filter: blur(8px);
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.38), inset 0 1px 0 rgba(255, 255, 255, 0.06);
-  transition: background 0.18s, color 0.18s, border-color 0.18s, box-shadow 0.18s, transform 0.1s;
-  -webkit-appearance: none; appearance: none;
-  cursor: pointer;
-  overflow: hidden;
-}
-.grip::before {
-  /* state lamp on the left of the label */
-  content: '';
-  position: absolute; left: 14px; top: 50%;
-  width: 7px; height: 7px; margin-top: -3.5px;
-  border-radius: 50%;
-  background: rgba(241, 230, 216, 0.22);
-  box-shadow: none;
-  transition: background 0.18s, box-shadow 0.18s;
-}
-.grip .key {
-  position: absolute; right: 12px; top: 50%;
-  transform: translateY(-50%);
-  min-width: 12px;
-  padding: 2px 5px;
-  border-radius: 5px;
-  border: 1px solid currentColor;
-  font: 700 9px/1 var(--sans);
-  letter-spacing: 0;
-  text-indent: 0;
-  opacity: 0.55;
-}
-.grip.gripping .key { opacity: 0.75; }
-.grip.gripping, .grip.slipping { font-size: 11.5px; letter-spacing: 0.2em; text-indent: 0.2em; }
-/* B39: a badge inside the pill leaves no room for a letter-spaced eight-letter word. At the
-   112 px pill the landscape block gives, every state ran under the badge. Where there is a badge
-   the label is short (HELD / SLIP, from the keyed table in hud.js), the tracking is tighter and
-   the badge is slimmer, so the padding it reserves shrinks with it. Must stay after the
-   .gripping/.slipping rule: same specificity, so order decides the tracking. */
-.grip.keyed {
-  padding-left: 22px;   /* the state lamp ends at 21 px */
-  padding-right: 34px;
-  letter-spacing: 0.1em;
-  text-indent: 0.1em;
-}
-.grip.keyed .key { right: 7px; padding: 1.5px 3px; font-size: 8px; }
-.grip:active { transform: scale(0.97); }
-.grip.hover { border-color: rgba(127, 224, 255, 0.55); color: var(--text); }
-.grip.hover::before { background: var(--rune); box-shadow: 0 0 8px var(--rune); }
-.grip.armed { border-color: var(--rune); color: var(--rune); animation: armed 1.1s ease-in-out infinite; }
-.grip.armed::before { background: var(--rune); box-shadow: 0 0 10px var(--rune); }
-.grip.gripping {
-  background: linear-gradient(180deg, #edb473 0%, #c98748 55%, #a86a35 100%);
-  color: #2a1c14;
-  border-color: rgba(255, 220, 170, 0.9);
-  box-shadow: 0 0 24px rgba(217, 154, 91, 0.55), 0 6px 20px rgba(0, 0, 0, 0.38), inset 0 1px 0 rgba(255, 255, 255, 0.35);
-}
-.grip.gripping::before { background: #2a1c14; box-shadow: 0 0 0 2px rgba(255, 235, 200, 0.5); }
-.grip.slipping {
-  background: linear-gradient(180deg, #ff8a78 0%, #d2452f 100%);
-  color: #fff4ee;
-  border-color: #ffc0b4;
-  animation: slip 0.32s linear infinite;
-}
-.grip.slipping::before { background: #fff; box-shadow: 0 0 8px #fff; }
-.grip.miss { animation: shake 0.36s ease-in-out; }
-@keyframes armed {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(127, 224, 255, 0), 0 6px 20px rgba(0, 0, 0, 0.38); }
-  50% { box-shadow: 0 0 18px 2px rgba(127, 224, 255, 0.55), 0 6px 20px rgba(0, 0, 0, 0.38); }
-}
 @keyframes slip {
   0%, 100% { filter: brightness(1); }
   50% { filter: brightness(1.35); }
@@ -640,6 +561,34 @@ body.overlay-up #menuBtn { display: none; }
   background: radial-gradient(circle, rgba(42, 28, 20, 0.55), rgba(42, 28, 20, 0.1));
 }
 .stick.active .knob { box-shadow: 0 8px 22px rgba(0, 0, 0, 0.6), 0 0 18px rgba(217, 154, 91, 0.45), inset 0 -3px 6px rgba(0, 0, 0, 0.28), inset 0 2px 3px rgba(255, 255, 255, 0.4); }
+
+/* The hand's own state, on the ring it is steered with (B51 -- there is no GRIP pill to put it
+   on any more). A lit gold knob is a hand on the rock; red and pulsing is a hand about to go;
+   the ring shakes when the fingers come off rock they were on. */
+/* The gold ring of a hand on the rock lives on its OWN layer, not in the stick's box-shadow: the
+   crit pulse animates that shadow, so a gripping hand on a spent arm simply stopped looking held.
+   Here the two stack — red pulse around a gold ring — and the shake moves both together. */
+.stick.gripping::after {
+  content: '';
+  position: absolute; inset: 0;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1.5px rgba(255, 220, 170, 0.5), inset 0 0 36px rgba(217, 154, 91, 0.22), 0 0 22px rgba(217, 154, 91, 0.34);
+  pointer-events: none;
+}
+.stick.gripping .knob {
+  background: radial-gradient(circle at 38% 32%, #fff6e6 0%, #edb473 44%, #a86a35 100%);
+  box-shadow: 0 5px 16px rgba(0, 0, 0, 0.55), 0 0 22px rgba(217, 154, 91, 0.75), inset 0 -3px 6px rgba(0, 0, 0, 0.28), inset 0 2px 3px rgba(255, 255, 255, 0.45);
+}
+.stick.slipping .knob {
+  background: radial-gradient(circle at 38% 32%, #fff4ee 0%, #ff8a78 45%, #d2452f 100%);
+  box-shadow: 0 5px 16px rgba(0, 0, 0, 0.55), 0 0 22px rgba(255, 106, 90, 0.8), inset 0 -3px 6px rgba(0, 0, 0, 0.28), inset 0 2px 3px rgba(255, 255, 255, 0.4);
+  animation: slip 0.32s linear infinite;
+}
+.stick.miss { animation: shake 0.36s ease-in-out; }
+/* `animation` is one property: the shake would otherwise replace the crit pulse for its 0.36 s
+   and the ring would go quiet exactly when the arm is in trouble. They animate different things
+   (box-shadow, transform), so they can run together — but only if they are named together. */
+.stick.crit.miss { animation: critring 0.6s ease-in-out infinite, shake 0.36s ease-in-out; }
 
 /* ---- overlays: title + end ------------------------------------------------------ */
 .overlay {
@@ -963,7 +912,6 @@ kbd {
 /* ---- landscape phones: shorter controls, tighter title -------------------------- */
 @media (orientation: landscape) and (max-height: 520px) {
   :root { --stick: 112px; --knob: 48px; --edge: 14px; }
-  .grip { height: 40px; font-size: 11.5px; }
   #height { font-size: 28px; }
   .overlay { padding-top: calc(12px + var(--sat)); padding-bottom: calc(30px + var(--sab)); }
   #title { padding-bottom: calc(18px + var(--sab)); }   /* the foot is hidden here; the route line uses it */
@@ -1013,7 +961,7 @@ kbd {
   #custom .close { margin-top: 10px; padding: 10px; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .sigil, .tap, .grip.armed, .grip.slipping, .stick .arc.crit, .stick.crit, #vig.beat, #runes .dot.pop, .card .mini-ring.push i { animation: none; }
+  .sigil, .tap, .stick.slipping .knob, .stick .arc.crit, .stick.crit, .stick.miss, .stick.crit.miss, #vig.beat, #runes .dot.pop, .card .mini-ring.push i { animation: none; }
 }
 </style>
 </head>
@@ -1044,7 +992,6 @@ kbd {
   </div>
   <div id="msg"></div>
   <div id="ctl-l" class="ctl">
-    <button id="grip-l" class="grip" type="button" aria-label="Left hand grip">Grip</button>
     <div id="stick-l" class="stick" role="slider" aria-label="Left hand">
       <svg viewBox="0 0 136 136"><circle class="track" cx="68" cy="68" r="63"/><circle class="arc" cx="68" cy="68" r="63"/></svg>
       <span class="side">L</span>
@@ -1053,7 +1000,6 @@ kbd {
   </div>
   <div id="ctl-r" class="ctl">
     <button id="web" type="button" aria-label="Aim the web" title="Hold and drag to aim, release to fire" hidden>Web</button>
-    <button id="grip-r" class="grip" type="button" aria-label="Right hand grip">Grip</button>
     <div id="stick-r" class="stick" role="slider" aria-label="Right hand">
       <svg viewBox="0 0 136 136"><circle class="track" cx="68" cy="68" r="63"/><circle class="arc" cx="68" cy="68" r="63"/></svg>
       <span class="side">R</span>
@@ -1072,7 +1018,7 @@ kbd {
 <div id="custom" hidden>
   <div class="panel">
     <h2>YOUR HANDS</h2>
-    <p class="hint">Pick what both hands wear. A glove brings the web with it: hold the right GRIP to aim, let go to fire.</p>
+    <p class="hint">Pick what both hands wear. A glove brings the web with it: hold the WEB pad to aim, let go to fire.</p>
     <div class="skins">
       <button class="skin" type="button" data-skin="classic"><span class="swatch classic"></span><b>Classic</b><span>red and blue</span></button>
       <button class="skin" type="button" data-skin="stealth"><span class="swatch stealth"></span><b>Stealth</b><span>teal webbing</span></button>

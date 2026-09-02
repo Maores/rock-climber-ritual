@@ -11,7 +11,8 @@
 //     without a double flash.
 //
 // Integration notes for main.js (everything beyond CONTRACTS.md is optional):
-//   • hud.update(state[, events]) — the event list is optional; misses are also detected from state.
+//   • hud.update(state[, events]) — the event list is optional, but a miss only arrives on it: the
+//     sim's `miss` event is the one signal for it now that nothing arms (B51).
 //   • hud.onMute(cb) wires the mute button to audio.setMuted; without it the button reaches
 //     window.__ritual.audio. hud.onRestart(cb) replaces the default location.reload() of "Climb again".
 //   • hud.onMenu(cb) is asked to put the game back on the title screen; without it Menu reloads the
@@ -20,32 +21,13 @@
 //   • hud.showEnd(stats) accepts the state object or { time, high, runesLit, runesTotal }; the HUD
 //     also shows the end screen itself 2.8 s after state.phase becomes 'summit' unless it was shown.
 //   • The keystroke that starts the climb is stopped in the capture phase on window, so input.js never
-//     sees it as a grip toggle; pointer starts never reach the sticks (the overlay is above them).
+//     sees it as a steer; pointer starts never reach the sticks (the overlay is above them).
 
 import { SPIDER_CODE, spiderUnlocked, unlockSpider, spiderSkin, setSpiderSkin } from './spiderHand.js';
 
 const MUTE_KEY = 'ritual.muted';
 const ARC_R = 63;                              // radius of the SVG stamina arc in index.html
 const ARC_C = 2 * Math.PI * ARC_R;
-
-const PILL_LABEL = {
-  free: 'Grip',
-  hover: 'Grab',
-  armed: 'Armed',
-  gripping: 'Holding',
-  slipping: 'Slipping',
-};
-
-// B39: on a pointer device the pill also carries an LMB / RMB badge, and a letter-spaced
-// eight-letter word plus a badge does not fit the pill at any size the layout produces. HELD
-// rather than HOLD because the badge is beside it: the mouse button is a toggle, not a hold.
-const PILL_LABEL_KEYED = {
-  free: 'Grip',
-  hover: 'Grab',
-  armed: 'Armed',
-  gripping: 'Held',
-  slipping: 'Slip',
-};
 
 // B42: what each of the four routes actually is, from the numbers B13 measured when it picked
 // them. Keyed by seed, because generation is deterministic and a seed IS the route; route.js
@@ -151,15 +133,6 @@ export function createHud(root) {
       ctl.className = 'ctl';
       hudEl.appendChild(ctl);
     }
-    let grip = byId('grip-' + s);
-    if (!grip) {
-      grip = doc.createElement('button');
-      grip.id = 'grip-' + s;
-      grip.type = 'button';
-      grip.className = 'grip';
-      grip.textContent = 'Grip';
-      ctl.appendChild(grip);
-    }
     let stick = byId('stick-' + s);
     if (!stick) {
       stick = doc.createElement('div');
@@ -181,12 +154,11 @@ export function createHud(root) {
     const arc = stick.querySelector('.arc');
     arc.style.strokeDasharray = ARC_C.toFixed(2);
     arc.style.strokeDashoffset = '0';
-    return { ctl, grip, stick, knob, arc };
+    return { ctl, stick, knob, arc };
   }
   const parts = { L: ensureCluster('L'), R: ensureCluster('R') };
 
   const sticks = { L: parts.L.stick, R: parts.R.stick };
-  const grips = { L: parts.L.grip, R: parts.R.grip };
 
   // ---- per-frame caches --------------------------------------------------------------------------
   const cache = {
@@ -203,8 +175,7 @@ export function createHud(root) {
     falling: false,
   };
   const armState = { L: { stamina: -1, cls: '' }, R: { stamina: -1, cls: '' } };
-  const pillState = { L: '', R: '' };
-  const armedNow = { L: false, R: false };
+  const gripState = { L: '', R: '' };
   const knobState = { L: { x: 0, y: 0, active: false }, R: { x: 0, y: 0, active: false } };
   let knobRadius = 0;
   let runeDots = [];
@@ -347,31 +318,23 @@ export function createHud(root) {
     }
   }
 
-  // ---- GRIP pills -----------------------------------------------------------------------------------
-  function pillFor(hand) {
-    if (!hand) return 'free';
-    if (hand.gripping) return hand.stamina < 0.2 ? 'slipping' : 'gripping';
-    if (hand.armed) return 'armed';
-    if ((hand.hover || 0) > 0.5) return 'hover';
-    return 'free';
+  // ---- grip state, on the stick itself ----------------------------------------------------------
+  // The GRIP pills are gone with the buttons (B51). The hand's state belongs on the ring it is
+  // steered with: the knob goes gold while that hand is holding rock, and shakes when the fingers
+  // come off rock they were on. The arc around the same ring is still its stamina.
+  function gripFor(hand) {
+    if (!hand || !hand.gripping) return '';
+    return hand.stamina < 0.2 ? 'slipping' : 'gripping';
   }
-  let keyHints = null; // { L: 'LMB', R: 'RMB' } on a pointer device: the two mouse buttons are the grips
-  function setPill(side, st) {
-    if (pillState[side] === st) return;
-    pillState[side] = st;
-    const el = grips[side];
-    const keep = el.classList.contains('miss') ? ' miss' : '';
-    el.className = 'grip ' + st + keep + (keyHints ? ' keyed' : '');
-    el.textContent = (keyHints ? PILL_LABEL_KEYED : PILL_LABEL)[st] || 'Grip';
-    if (keyHints) {
-      const k = doc.createElement('span');
-      k.className = 'key';
-      k.textContent = keyHints[side];
-      el.appendChild(k);
-    }
+  function setGrip(side, st) {
+    if (gripState[side] === st) return;
+    gripState[side] = st;
+    const el = parts[side].stick;
+    el.classList.toggle('gripping', st === 'gripping');
+    el.classList.toggle('slipping', st === 'slipping');
   }
   function shake(side) {
-    const el = grips[side];
+    const el = parts[side] && parts[side].stick;
     if (!el) return;
     el.classList.remove('miss');
     // restart the animation even if a previous shake is still running
@@ -483,16 +446,8 @@ export function createHud(root) {
     const L = hands.L, R = hands.R;
     setArc('L', L ? L.stamina : 1);
     setArc('R', R ? R.stamina : 1);
-    setPill('L', pillFor(L));
-    setPill('R', pillFor(R));
-    // A hand that just became armed tapped GRIP away from every hold: that is the "miss" the sim
-    // reports, so shake the pill even when the integrator does not pass the event list.
-    for (const side of ['L', 'R']) {
-      const hand = hands[side];
-      const armed = !!(hand && hand.armed && !hand.gripping);
-      if (armed && !armedNow[side]) shake(side);
-      armedNow[side] = armed;
-    }
+    setGrip('L', gripFor(L));
+    setGrip('R', gripFor(R));
 
     const h = Math.max(0, +state.height || 0).toFixed(1);
     if (h !== cache.height) {
@@ -550,13 +505,13 @@ export function createHud(root) {
       return (
         '<h2>How to climb</h2>' +
         '<div class="demo">' +
-        '<div class="mini"><span class="mini-pill">Grip</span>' + ring(true, 12) + '<b>Left</b></div>' +
+        '<div class="mini"><span class="mini-pill">Free</span>' + ring(true, 12) + '<b>Left</b></div>' +
         '<div class="steps">' +
         '<p><span class="n">1</span><span class="tx"><em>Push a stick</em> — that hand reaches for a hold.</span></p>' +
-        '<p><span class="n">2</span><span class="tx"><em>Tap GRIP</em> to grab it. Tap again to let go.</span></p>' +
-        '<p><span class="n">3</span><span class="tx">Climb hand over hand and <em>rest on the glowing runes</em>.</span></p>' +
+        '<p><span class="n">2</span><span class="tx"><em>Hold it over the rock</em> and the hand grabs on its own.</span></p>' +
+        '<p><span class="n">3</span><span class="tx"><em>Push that stick again to let go.</em> Climb hand over hand and rest on the glowing runes.</span></p>' +
         '</div>' +
-        '<div class="mini"><span class="mini-pill lit">Holding</span>' + ring(false, 58) + '<b>Right</b></div>' +
+        '<div class="mini"><span class="mini-pill lit">Held</span>' + ring(false, 58) + '<b>Right</b></div>' +
         '</div>' +
         '<p class="hint">Hanging drains a hand — the arc around its stick shows how much is left. <b>Nothing catches you</b>, and not every rock holds. <b>Drag to look around.</b></p>'
       );
@@ -564,11 +519,11 @@ export function createHud(root) {
     return (
       '<h2>How to climb</h2>' +
       '<div class="row">' +
-      '<div class="hand"><b>Left hand</b><div class="keys"><kbd>Left click</kbd><span class="sep">grip / let go</span></div></div>' +
-      '<div class="hand"><b>Right hand</b><div class="keys"><kbd>Right click</kbd><span class="sep">grip / let go</span></div></div>' +
-      '<p class="hint"><em>Move the mouse</em> and the hand that is hanging free follows it. Let a hand go, point where you want it, click again to take the rock. <em>Shift-drag</em> to look around — the view stays where you leave it.</p>' +
+      '<div class="hand"><b>Left hand</b><div class="keys"><kbd>W A S D</kbd><span class="sep">push to let go, and to reach</span></div></div>' +
+      '<div class="hand"><b>Right hand</b><div class="keys"><kbd>Arrows</kbd><span class="sep">push to let go, and to reach</span></div></div>' +
+      '<p class="hint"><em>Move the mouse</em> and the hand that is hanging free follows it. <em>Hold a hand over a rock</em> and it takes it by itself; push that hand\'s keys again to let go. <em>Shift-drag</em> to look around — the view stays where you leave it.</p>' +
       '</div>' +
-      '<p class="hint">Hanging drains a hand — rest on the <i>glowing runes</i>. <b>Nothing catches you</b>: one fall is the whole cliff. Not every rock holds. <kbd>M</kbd> mutes.</p>'
+      '<p class="hint">Hanging drains a hand — rest on the <i>glowing runes</i>. <b>Nothing catches you</b>: one fall is the whole cliff. Not every rock holds. <kbd>Esc</kbd> re-centres the sticks, <kbd>M</kbd> mutes.</p>'
     );
   }
   function footHtml() {
@@ -685,8 +640,8 @@ export function createHud(root) {
     if (!titleShown || !isStartKey(e)) return;
     e.preventDefault();
     // Registered in the capture phase on window: stopping here keeps the same keydown from reaching
-    // input.js (Q / Enter would otherwise release a hand on the first frame of the climb) while
-    // other capture listeners on window (the audio unlock) still run.
+    // input.js (a W or an arrow would otherwise steer, and let go of, a hand on the first frame of
+    // the climb) while other capture listeners on window (the audio unlock) still run.
     e.stopPropagation();
     begin();
   }
@@ -725,10 +680,6 @@ export function createHud(root) {
   function showTitle(opts = {}) {
     resetShell();
     const touch = opts.touch != null ? !!opts.touch : (navigator.maxTouchPoints > 0);
-    keyHints = touch ? null : { L: 'LMB', R: 'RMB' };
-    pillState.L = pillState.R = '';           // force the pills to re-render with or without key hints
-    setPill('L', 'free');
-    setPill('R', 'free');
     const card = ensure('controls-card', 'div', titleEl.querySelector('.inner') || titleEl, 'card');
     card.innerHTML = controlsHtml(touch);
     const tap = byId('tap');
@@ -943,13 +894,14 @@ export function createHud(root) {
   if (customBtn) customBtn.addEventListener('click', openCustom);
   refreshCustomBtn();
 
-  // ---- the web-zip's state, on the WEB pad and the right-hand pill ----------------------
-  // Without this the ability is invisible: no cooldown, no aim state, no sign it exists.
+  // ---- the web-zip's state, on the WEB pad ------------------------------------------------
+  // Without this the ability is invisible: no cooldown, no aim state, no sign it exists. It used
+  // to live on the right GRIP pill as well; with the pills gone (B51) the pad is the only place
+  // left, which is right — it is the control your thumb is on.
   let webCache = '';
   let webHinted = false;                       // the one-line gesture hint, once per session
   function updateWeb(state) {
     const w = state.web;
-    const el = grips.R;
     if (!w) return;
     let mark = '';
     if (w.unlocked) {
@@ -982,22 +934,19 @@ export function createHud(root) {
     const key = (w.unlocked ? 'u' : '-') + mark + '|' + Math.round(cd * 20);
     if (key === webCache) return;
     webCache = key;
-    if (el) {
-      el.classList.toggle('web-aim', mark === 'aim');
-      el.classList.toggle('web-out', mark === 'web');
-      el.classList.toggle('web-cool', mark === 'cool');
-      el.classList.toggle('web-ready', mark === 'ready');
-      el.style.setProperty('--cd', cd.toFixed(3));
-    }
 
-    // The same four marks and the same cooldown drain go on the PAD itself, not only on the
-    // right pill: the pad is the control your thumb is on, and it must be able to tell you
-    // ready / aiming / out / cooling on its own.
+    // The pad only exists once unlocked, dims while the shot is cooling, and carries the four
+    // marks and the cooldown drain that used to be split with the right pill (B50 put them here
+    // too; B51 took the pill away, so this is now the only place they live). `web-*` are B50's
+    // names, kept so nothing that learned them breaks; `can` / `cool` / `aim` / `out` are the
+    // ones the #web CSS actually paints.
     if (webBtn) {
       webBtn.classList.toggle('web-aim', mark === 'aim');
       webBtn.classList.toggle('web-out', mark === 'web');
       webBtn.classList.toggle('web-cool', mark === 'cool');
       webBtn.classList.toggle('web-ready', mark === 'ready');
+      webBtn.classList.toggle('aim', mark === 'aim');
+      webBtn.classList.toggle('out', mark === 'web');
       webBtn.style.setProperty('--cd', cd.toFixed(3));
       if (st !== webBtnState) {
         webBtnState = st;
@@ -1010,7 +959,6 @@ export function createHud(root) {
 
   const hud = {
     sticks,
-    grips,
     webButton: webBtn,
     openCustom, closeCustom, refreshCustomBtn,
     onSkinChange(cb) { if (typeof cb === 'function') skinCbs.push(cb); },
