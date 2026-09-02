@@ -14,7 +14,9 @@ change the code and change this in the same commit, or the drift starts again.
 - The simulation is 2-D in (x, y) on the wall plane. Rendering adds depth with `world.wallZ(x, y)`,
   a deterministic noise displacement, |z| ≤ 0.35. Body sits at z = wallZ(body) + 0.55; a hand touching the
   wall sits at z = wallZ(hand) + 0.02; camera at body + (0, 0.30, 0.62) before rig effects.
-- Route runs from y ≈ 1.2 (start holds) to y ≈ 40 (summit altar). Cliff is ~9 m wide (x in [-4.5, 4.5]).
+- The cliff is ~9 m wide (x in [-4.5, 4.5]). The holds are a FIELD across it (B46), not a line: they run from
+  y ≈ 1.2 (the two start holds) to y = 24 (the summit altar) and spread over x in [-3.6, 3.6] — about 1900 holds
+  per route. There is no "next hold": you pick your own way through, and the runes and the altar are the goals.
 
 ## Module ownership (one owner per file; nobody else edits these)
 | Domain | Files |
@@ -54,7 +56,9 @@ state = {
 Hand  = { side:'L'|'R', x, y, vx, vy, tx, ty, gripping, holdId|null, armed, stamina 0..1, tremble 0..1, curl 0..1, hover 0..1,
           nearId, nearDist }           // nearest hold; read-only convenience for the HUD
 Hold  = { id, x, y, size (0.10..0.24 radius), kind: 'hold'|'rune'|'summit', lit:boolean, angle }
-Fake  = a Hold with ids from 10000 up and `broken` set once it has given way. Never on the line, never the only way up.
+Fake  = a Hold with ids from 10000 up and `broken` set once it has given way. A decoy is a field hold LIFTED OUT
+        of `holds`, so it sits exactly where a hold would sit and is worth trying; never a rune or the altar, and
+        never the only way past — the field in `holds` is already the field without them.
 Web   = { mode: 'idle'|'aiming'|'flying'|'attached', ax, ay,   // anchor the line bit
           tipX, tipY, len, cd, aimX, aimY, unlocked }          // cd = cooldown left, 3 s after a shot
 Event = { type, hand?: 'L'|'R', holdId?: number, ...extras }
@@ -82,7 +86,9 @@ rest holds and checkpoints, grabbing the summit hold → `phase 'summit'`.
 ```js
 // sim-input
 export const CFG;                                    // sim.js
-export function generateRoute(seed = 7) → route      // route.js — deterministic, every hold reachable (≤ 0.9·REACH from the projected shoulder), rune every ~8 m, last hold kind 'summit'
+export function generateRoute(seed = 7) → route      // route.js — deterministic. A field of holds over x ∈ [-3.6, 3.6], ordered by height with ids equal to their index; holds[0] and holds[1] are the two start holds; every hold has at least one hold above it within 0.9·REACH of restingShoulder(hold, that hand); one rune per RUNE_EVERY (6 m) band; exactly one hold of kind 'summit', last in the array, at y = ROUTE.TOP
+export function canReach(anchor, target, side, limit = REACH_LINK) → boolean   // route.js — THE reach rule, so nothing re-derives it: can the hand `side` take `target` while the other hand hangs alone on `anchor`
+export const REACH_LINK                              // route.js — 0.9·REACH, the longest link the field ever relies on
 export function createClimber(route) → state         // sim.js — phase 'title'; both hands on the two start holds
 export function startClimb(state)                    // → phase 'climbing', event 'start'
 export function step(state, input, dt)               // mutates; dt clamped to ≤ 1/20 inside
@@ -91,6 +97,7 @@ export function shoulder(state, side) → { x, y }
 export function aimPoint(state) → { x, y } | null     // where the web shot would land; the camera rig and the HUD reticle both read it
 export function cutWeb(state)                        // drop the line from outside the sim
 export function generateRoute(seed) also returns `fakes`; SEEDS / DEFAULT_SEED / normalizeSeed(v) back the route picker
+export function intendedHand(holdId, route?) → 'L' | 'R'   // route.js — a HINT only, kept because main.js's debug autopilot calls it. On a field no hold is meant for a particular hand, so it answers which side of the wall's centre line the hold sits on. Nothing in sim.js or route.js reads it
 export function createInput({ hud, keyboard = true, win, now, mouse, getHands }) → { read(): Input, dispose() }   // input.js — touch/mouse on hud.sticks + hud.grips + hud.lookButton + hud.webButton (pointer events), keyboard WASD+Q / arrows+Enter or Slash; sticks: position mapping; keyboard: integrating virtual stick that holds its value; taps are edge-triggered. `win` and `now` are injected so the tests can drive it headless
 
 // world-light

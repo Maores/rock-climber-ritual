@@ -3,13 +3,25 @@
 // These are the numbers that turned the climb into a fight once already: targets shrank to 11%
 // of the reach circle while the hand slowed down, and the result was miserable without a single
 // unit test failing. Each assertion here is a floor on how hard the game may get.
+//
+// B46 made the wall a FIELD, and that changed what this file has to prove. Walking the holds in
+// id order used to be the climb; on a field, ids are just height order and walking them proves
+// nothing. So there are two guards now, and they are independent on purpose:
+//
+//   1. CONNECTIVITY, pure graph, no simulation. Start → every rune → the altar, under the reach
+//      rule and the alternating hands, for every seed the game offers and for seeds 1-40. This
+//      is the one that catches a generator that quietly builds a field with no way through it.
+//   2. THE BOT, which path-finds over that same graph and drives the REAL sim with steering
+//      input to climb it, with every threshold this file has always had.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { CFG, createClimber, startClimb, step, drainEvents, shoulder, grabRadius } from '../src/sim.js';
-import { generateRoute, intendedHand, ROUTE, SEEDS, DEFAULT_SEED } from '../src/route.js';
+import { generateRoute, ROUTE, SEEDS, DEFAULT_SEED } from '../src/route.js';
+import { reachGraph, inEdges, costToGoal, connectivity, stateKey, OTHER } from './climb-graph.js';
 
 const route = generateRoute(7);
 const climbing = route.holds.filter((h) => h.kind === 'hold');
+const DT = 1 / 120;
 
 test('playability: every hold is a real target, not a pixel hunt', () => {
   for (const h of route.holds) {
@@ -40,74 +52,143 @@ test('playability: you can hang long enough to think', () => {
   }
 });
 
-// The real check: a steady, human-paced bot has to get up the whole thing.
-function botClimb(state) {
-  const DT = 1 / 120;
-  const H = state.route.holds;
-  const zero = () => ({ L: { x: 0, y: 0 }, R: { x: 0, y: 0 }, tapL: false, tapR: false, holdL: false, holdR: false });
-  const steer = (side, hold) => {
+// ---------------------------------------------------------------------------------------
+// 1. Connectivity — the field itself, with no simulation in the way.
+
+test('playability: start, every rune and the altar are connected on every route offered', () => {
+  for (const { seed, name } of SEEDS) {
+    const r = generateRoute(seed);
+    const c = connectivity(r);
+    assert.ok(c.ok, `${name} (seed ${seed}): no way to reach hold ${c.failed} ` +
+      `(${c.failed === null ? '' : `${r.holds[c.failed].kind} at ${r.holds[c.failed].y.toFixed(1)} m`})`);
+  }
+});
+
+test('playability: and on every seed from 1 to 40, with the decoys taken out', () => {
+  // A decoy is a hold LIFTED OUT of the field, so `route.holds` already is the field without
+  // them: this asserts B10's promise directly — no decoy is ever the only way past.
+  const bad = [];
+  for (let seed = 1; seed <= 40; seed++) {
+    const r = generateRoute(seed);
+    assert.equal(r.fakes.length, ROUTE.DECOYS, `seed ${seed}: ${r.fakes.length} decoys`);
+    for (const f of r.fakes) assert.ok(!r.holds.some((h) => h.id === f.id), `seed ${seed}: decoy ${f.id} is still a hold`);
+    if (!connectivity(r).ok) bad.push(seed);
+  }
+  assert.deepEqual(bad, [], `seeds with no way to the top: ${bad.join(', ')}`);
+});
+
+// ---------------------------------------------------------------------------------------
+// 2. The bot.
+//
+// --- the two primitives that touch the sim ---------------------------------------------
+// Everything else in the bot is route geometry. These two are the whole of the grab mechanic,
+// so when B51 replaces GRIP with hover-to-grab and stick-to-release, these change and nothing
+// above or below them does.
+
+// Let go, and wait until the hand is actually free.
+function releaseHand(state, side, log) {
+  const hand = state.hands[side];
+  if (!hand.gripping) return;
+  for (let i = 0; i < 240 && hand.gripping; i++) drive(state, { ['tap' + side]: true }, log);
+}
+
+// Steer `side` at `hold` until it grips something; returns the hold id it closed on, or null.
+// Like a player, it keeps whatever the hand actually catches rather than insisting on the plan.
+function steerToHold(state, side, hold, log) {
+  const hand = state.hands[side];
+  const t0 = state.t;
+  while (!hand.gripping) {
+    if (state.t - t0 > 8) return null;
     const sh = shoulder(state, side);
     const v = { x: (hold.x - sh.x) / CFG.REACH, y: (hold.y - sh.y) / CFG.REACH };
     const m = Math.hypot(v.x, v.y);
     if (m > 1) { v.x /= m; v.y /= m; }
-    return v;
-  };
-  let grabs = 0, misses = 0, falls = 0;
-  for (let i = 2; i < H.length;) {
-    const side = intendedHand(i), hand = state.hands[side], hold = H[i];
-    const startHold = hand.holdId, t0 = state.t;
-    for (;;) {
-      if (hand.gripping && hand.holdId !== startHold) break;
-      if (state.t - t0 > 8) return { stuck: i, grabs, misses, falls, t: state.t };
-      const input = zero();
-      if (hand.gripping) input['tap' + side] = true;
-      else { input[side] = steer(side, hold); if (!hand.armed) input['tap' + side] = true; }
-      step(state, input, DT);
-      // With the rope gone (B43) there is no fallCount to read, and counting the event is the
-      // stronger guard anyway: it fires even for a slip the grace window recovers.
-      for (const e of drainEvents(state)) { if (e.type === 'miss') misses++; else if (e.type === 'fall') falls++; }
-    }
-    grabs++;
-    i = hand.holdId >= i ? hand.holdId + 1 : i;
+    drive(state, { [side]: v, ['tap' + side]: !hand.armed }, log);
   }
-  return { stuck: null, grabs, misses, falls, t: state.t };
+  return hand.holdId;
 }
 
-test('playability: a steady climber tops out, and it does not take all afternoon', () => {
-  const s = createClimber(generateRoute(7));
+function drive(state, over, log) {
+  step(state, { L: { x: 0, y: 0 }, R: { x: 0, y: 0 }, tapL: false, tapR: false, holdL: false, holdR: false, ...over }, DT);
+  // With the rope gone (B43) there is no fallCount to read, and counting the event is the
+  // stronger guard anyway: it fires even for a slip the grace window recovers.
+  for (const e of drainEvents(state)) {
+    if (e.type === 'miss') log.misses++;
+    else if (e.type === 'fall') log.falls++;
+    else if (e.type === 'crumble') log.crumbles++;
+  }
+}
+// --- end of the grab mechanic -----------------------------------------------------------
+
+// A steady, human-paced climber that finds its own way up the field. It holds no route: at
+// every move it looks at where its two hands actually are, and takes the neighbour with the
+// lowest cost to the next goal. That is why a hand closing on the wrong rock costs it nothing.
+function botClimb(state) {
+  const r = state.route;
+  const graph = reachGraph(r);
+  const inE = inEdges(graph);
+  const goals = r.holds.filter((h) => h.kind === 'rune' || h.kind === 'summit').sort((a, b) => a.y - b.y);
+  const log = { misses: 0, falls: 0, crumbles: 0 };
+  let grabs = 0, offPlan = 0;
+
+  for (const goal of goals) {
+    const dist = costToGoal(r, graph, inE, goal.id);
+    for (let move = 0; move < 400; move++) {
+      const { L, R } = state.hands;
+      if (L.holdId === goal.id || R.holdId === goal.id) break;
+      // Either hand may move; the anchor is the other hand's hold. Take the cheaper option.
+      let best = null;
+      for (const side of ['L', 'R']) {
+        const anchor = state.hands[OTHER[side]];
+        if (!anchor.gripping) continue;
+        for (const j of graph[anchor.holdId][side]) {
+          if (j === anchor.holdId) continue;
+          const d = dist[stateKey(j, OTHER[side])];
+          if (d === Infinity) continue;
+          if (!best || d < best.d) best = { side, j, d };
+        }
+      }
+      if (!best) return { stuck: goal.id, grabs, offPlan, ...log, t: state.t };
+      releaseHand(state, best.side, log);
+      const got = steerToHold(state, best.side, r.holds[best.j], log);
+      if (got === null) return { stuck: best.j, grabs, offPlan, ...log, t: state.t };
+      grabs++;
+      if (got !== best.j) offPlan++;
+    }
+  }
+  return { stuck: null, grabs, offPlan, ...log, t: state.t };
+}
+
+function assertClimb(seed, at) {
+  const s = createClimber(generateRoute(seed));
   startClimb(s);
   drainEvents(s);
   const out = botClimb(s);
-  assert.equal(out.stuck, null, `stuck trying to reach hold ${out.stuck}`);
-  assert.equal(s.phase, 'summit', `ended in ${s.phase}`);
-  assert.equal(out.falls, 0, 'a steady rhythm should never fall');
-  assert.ok(out.t < 420, `the climb took ${(out.t / 60).toFixed(1)} min of game time`);
-  assert.ok(out.t > 30, `the climb took only ${out.t.toFixed(0)} s: something is skipping the route`);
+  assert.equal(out.stuck, null, `${at}: stuck trying to reach hold ${out.stuck}`);
+  assert.equal(s.phase, 'summit', `${at}: ended in ${s.phase}`);
+  assert.equal(out.falls, 0, `${at}: a steady rhythm should never fall`);
+  assert.ok(out.t < 420, `${at}: the climb took ${(out.t / 60).toFixed(1)} min of game time`);
+  assert.ok(out.t > 30, `${at}: the climb took only ${out.t.toFixed(0)} s: something is skipping the route`);
   assert.ok(out.misses < out.grabs * 0.35,
-    `${out.misses} misses over ${out.grabs} grabs: aiming at a hold should usually land it`);
+    `${at}: ${out.misses} misses over ${out.grabs} grabs: aiming at a hold should usually land it`);
+  return out;
+}
+
+test('playability: a steady climber tops out, and it does not take all afternoon', () => {
+  const out = assertClimb(7, 'seed 7');
+  assert.equal(out.misses < out.grabs * 0.35, true);
 });
 
 // B13: the title screen offers more than one line. A seed that stops being climbable must fail
 // here rather than reach a player, so every seed on the roster goes through the same bot.
 test('playability: every route the title screen offers can be topped out', () => {
   for (const { seed, name } of SEEDS) {
-    const r = generateRoute(seed);
     const at = `${name} (seed ${seed})`;
-    for (const h of r.holds) {
+    for (const h of generateRoute(seed).holds) {
       assert.ok(grabRadius(h) / CFG.REACH >= 0.15,
         `${at}: hold ${h.id} is only ${(grabRadius(h) / CFG.REACH * 100).toFixed(1)}% of the reach circle`);
     }
-    const s = createClimber(generateRoute(seed));
-    startClimb(s);
-    drainEvents(s);
-    const out = botClimb(s);
-    assert.equal(out.stuck, null, `${at}: stuck trying to reach hold ${out.stuck}`);
-    assert.equal(s.phase, 'summit', `${at}: ended in ${s.phase}`);
-    assert.equal(out.falls, 0, `${at}: a steady rhythm should never fall`);
-    assert.ok(out.t < 420, `${at}: the climb took ${(out.t / 60).toFixed(1)} min of game time`);
-    assert.ok(out.t > 30, `${at}: the climb took only ${out.t.toFixed(0)} s`);
-    assert.ok(out.misses < out.grabs * 0.35,
-      `${at}: ${out.misses} misses over ${out.grabs} grabs`);
+    assertClimb(seed, at);
   }
 });
 
