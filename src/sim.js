@@ -28,10 +28,8 @@ export const CFG = Object.freeze({
 
   // --- feel ---------------------------------------------------------------------------
   SWAY: 0.05,           // one-hand hang: the body target leans this far past the loaded hold
-  REST_X: 0.14,         // free-hand rest offset from the shoulder (outward, up) when the stick is released
-  REST_Y: 0.30,
-  LINGER: 0.50,         // after the stick is released the hand keeps its place this long (lift the thumb, tap GRIP)...
-  DRIFT_TAU: 0.25,      // ...then drifts toward the rest offset with this time constant
+  REST_X: 0.14,         // where a hand hangs when it has not been steered since it last held rock
+  REST_Y: 0.30,         // (offset from the shoulder, outward and up). A steered hand parks — see updateHand.
   HAND_OMEGA: 11.5, HAND_ZETA: 1.0,         // hand spring: weighty but not sluggish (~0.2 s per move),
                                             // critically damped so it never overshoots where you aimed
   GRAB_OMEGA: 22,       // closing onto a hold takes ~0.3 s: the fingers arrive, they are not magneted in...
@@ -91,7 +89,7 @@ function makeHand(side, hold) {
     gripping: true, holdId: hold.id, armed: false,
     stamina: 1, tremble: 0, curl: 1, hover: 1,
     nearId: hold.id, nearDist: 0,             // nearest hold (extra, read-only convenience)
-    _stick: { x: 0, y: 0 }, _linger: 0, _armT: 0,   // internal
+    _stick: { x: 0, y: 0 }, _armT: 0,               // internal; _stick is also where a free hand is parked
     _skipId: null, _skipT: 0,                       // the hold just let go of, not re-grabbed at once
     _regripT: 0,                                    // brief beat after a release before rock can be taken
   };
@@ -407,7 +405,6 @@ function crumble(state, hand, fake) {
   fake.broken = true;
   hand.armed = false;
   hand._armT = 0;
-  hand._linger = 0;
   hand.tremble = Math.max(hand.tremble, 0.7);
   push(state, { type: 'crumble', hand: hand.side, holdId: fake.id });
 }
@@ -470,8 +467,9 @@ function grab(state, hand, hold) {
   }
   hand.tx = hold.x + hand.gripDX;      // the hand closes onto that point over ~0.15 s; no teleport
   hand.ty = hold.y + hand.gripDY;
-  hand._stick.x = hand._stick.y = 0;   // the next release starts from a neutral stick
-  hand._linger = 0;
+  // Taking rock clears where the hand was parked, so letting go of this hold hangs the arm at
+  // the rest offset rather than throwing it back to wherever the last reach ended.
+  hand._stick.x = hand._stick.y = 0;
   hand._skipId = null;
   hand._onT = 0;                       // how long this hand has been on this rock (slopers time out)
   push(state, { type: 'grab', hand: hand.side, holdId: hold.id });
@@ -496,7 +494,9 @@ function release(state, hand, type) {
   const holdId = hand.holdId;
   hand.gripping = false;
   hand.holdId = null;
-  hand._linger = CFG.LINGER;   // the hand hangs where it is for a moment, then drifts to rest
+  // The arm relaxes to the rest offset (`_stick` was cleared on the grab): letting go of rock is
+  // your own move, and a hand left hovering inside the grab zone of the hold it just released
+  // would have to be steered off it before it could aim at anything.
   if (type === 'release') { hand._skipId = holdId; hand._skipT = CFG.SKIP_TIME; hand._regripT = CFG.REGRIP_LOCK; }
   push(state, { type, hand: hand.side, holdId });
   if (state.phase === 'climbing' && !anyGripping(state)) beginFall(state);
@@ -616,7 +616,10 @@ function updateHand(state, hand, stickIn, dt) {
     hand.nearDist = 0;
     hand.hover = 1;
   } else {
-    // Stick: immediate while pushed; on release it lingers, then decays toward rest.
+    // The stick steers the hand while a thumb is on it, and the hand STAYS where it is left
+    // (B45: a reach is a thing you do once, not a thing you hold). `_stick` is the parked
+    // target as an offset from the shoulder in REACH units, so the hand rides along when the
+    // body moves instead of hanging in the air where you put it.
     const s = hand._stick;
     let sx = 0, sy = 0, m = 0;
     if (stickIn) {
@@ -624,11 +627,15 @@ function updateHand(state, hand, stickIn, dt) {
       m = Math.hypot(sx, sy);
       if (m > 1) { sx /= m; sy /= m; m = 1; }
     }
-    if (m > 0.02) { s.x = sx; s.y = sy; hand._linger = CFG.LINGER; }
-    else if (hand._linger > 0) hand._linger -= dt;
-    else { const k = Math.exp(-dt / CFG.DRIFT_TAU); s.x *= k; s.y *= k; }
+    // "Reads zero" is not "let go of": at the start of a climb the sticks read zero and both
+    // hands are on rock. `active` (input.js) says a thumb, the cursor or a key is on this stick
+    // right now, so a thumb resting at the middle of the ring is still steering. An Input
+    // without the flag keeps the pre-B45 meaning — only a non-zero stick steers — which is the
+    // safe fallback, because ignoring a zero stick can only ever leave the hand where it is.
+    if (m > 0.02 || (stickIn && stickIn.active === true)) { s.x = sx; s.y = sy; }
 
-    // Target = shoulder + stick·REACH, blended with the rest offset as the stick relaxes.
+    // Target = shoulder + stick·REACH, blended with the rest offset as the stick nears centre:
+    // a hand that has not been steered since it last held rock hangs at rest.
     const sm = Math.min(1, Math.hypot(s.x, s.y));
     let ox = sgn * CFG.REST_X * (1 - sm) + s.x * CFG.REACH;
     let oy = CFG.REST_Y * (1 - sm) + s.y * CFG.REACH;

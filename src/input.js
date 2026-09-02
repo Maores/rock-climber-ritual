@@ -1,19 +1,27 @@
 // src/input.js — touch, mouse and keyboard → Input for sim.step.
 //
-// read() returns { L:{x,y}, R:{x,y}, tapL, tapR }. Stick vectors are in the unit disc and
-// use the WORLD convention: +x right, +y UP (a thumb pushed up the screen gives y > 0).
+// read() returns { L:{x,y,active}, R:{x,y,active}, tapL, tapR }. Stick vectors are in the unit
+// disc and use the WORLD convention: +x right, +y UP (a thumb pushed up the screen gives y > 0).
 // hud.setStick(side, x, y) receives the same vector every read, so the HUD must negate y
 // when it converts to CSS translate.
 //
+// `active` is true while something is actually on that stick this frame — a finger, the mouse
+// driving that hand, a movement key, or a recenter command. The sim parks a free hand where the
+// last steer left it (B45), so it has to be able to tell a stick reading zero from a stick
+// nobody is touching; the vector alone cannot say that.
+//
 // Touch / mouse (pointer events on hud.sticks.L/R and hud.grips.L/R):
 //   stick = (pointer − ring center) / ring radius, clamped to the unit disc; position
-//   mapping, zero the moment the pointer lifts. One pointer per stick; the pointer is
-//   captured so dragging past the ring keeps working. GRIP taps fire on pointerdown and
-//   are edge-triggered: true for exactly one read().
+//   mapping, zero the moment the pointer lifts (and `active` false with it: the hand keeps
+//   the target it was steered to). One pointer per stick; the pointer is captured so dragging
+//   past the ring keeps working. GRIP taps fire on pointerdown and are edge-triggered: true
+//   for exactly one read().
 // Keyboard: W/A/S/D drive a virtual left stick and the arrow keys the right one, each
-//   axis integrating at KEY_RATE units/s and holding its value while no key is down.
+//   axis integrating at KEY_RATE units/s and holding its value while no key is down — which
+//   is the same parked hand the touch sticks now give.
 //   Q toggles the left grip and Enter or Slash the right one; a grip toggle also recenters
-//   that hand's virtual stick. Escape recenters both sticks.
+//   that hand's virtual stick. Escape recenters both sticks. A recenter is a command, not a
+//   release, so it reads `active` for that one frame and the hand returns to its rest offset.
 
 const KEY_RATE = 2.5;          // virtual stick units per second per axis
 const MOVE_KEYS = {
@@ -48,6 +56,7 @@ export function createInput({ hud = null, keyboard = true, win, now = defaultNow
   const active = { L: null, R: null };                         // pointerId holding each stick
   const virtual = { L: { x: 0, y: 0 }, R: { x: 0, y: 0 } };   // keyboard sticks
   const taps = { L: false, R: false };
+  const recenter = { L: false, R: false };  // Escape / a grip key: send the hand back to rest, once
   const holds = { L: false, R: false };   // grip currently held down (the spider hand aims on a hold)
   const held = new Set();
   const cleanups = [];
@@ -109,6 +118,7 @@ export function createInput({ hud = null, keyboard = true, win, now = defaultNow
     const code = keyCode(e);
     if (code === 'Escape') {
       virtual.L.x = virtual.L.y = virtual.R.x = virtual.R.y = 0;
+      recenter.L = recenter.R = true;
       return;
     }
     if (GRIP_KEYS[code]) {
@@ -117,6 +127,7 @@ export function createInput({ hud = null, keyboard = true, win, now = defaultNow
       const side = GRIP_KEYS[code];
       taps[side] = true;
       virtual[side].x = virtual[side].y = 0;
+      recenter[side] = true;
       return;
     }
     if (MOVE_KEYS[code]) {
@@ -287,8 +298,10 @@ export function createInput({ hud = null, keyboard = true, win, now = defaultNow
     const dt = Math.min(0.1, Math.max(0, (t - lastT) / 1000));
     lastT = t;
     integrateKeys(dt);
-    const out = { L: { x: 0, y: 0 }, R: { x: 0, y: 0 }, tapL: taps.L, tapR: taps.R };
+    const out = { L: { x: 0, y: 0, active: false }, R: { x: 0, y: 0, active: false }, tapL: taps.L, tapR: taps.R };
     taps.L = taps.R = false;
+    const keyed = { L: false, R: false };
+    for (const code of held) keyed[MOVE_KEYS[code][0]] = true;
     const mSide = mouse && mousePos.has ? freeSide() : null;
     // While looking, the steering input turns the head and the hand stays put.
     look.active = lookHeld;
@@ -298,19 +311,33 @@ export function createInput({ hud = null, keyboard = true, win, now = defaultNow
       look.x = src.x; look.y = src.y;
     } else { look.x = 0; look.y = 0; }
     out.look = look;
-    // while the web pad is held, it IS the right grip, and its drag is the aim
+    // while the web pad is held, it IS the right grip; its drag is the aim, applied after the loop
     out.holdL = holds.L;
     out.holdR = holds.R || webActive;
-    if (webActive) { out.R.x = webVec.x; out.R.y = webVec.y; }
     for (const side of ['L', 'R']) {
+      // Looking: nothing counts as on the stick, so the hand keeps the target it already has.
       if (lookHeld) { out[side].x = 0; out[side].y = 0; if (hud && typeof hud.setStick === 'function') hud.setStick(side, 0, 0); continue; }
       // touch stick wins, then the cursor for the hand it is driving, then the keyboard
       const v = active[side] !== null ? pointer[side]
         : (side === mSide ? mouseVec : virtual[side]);
       out[side].x = v.x;
       out[side].y = v.y;
+      out[side].active = active[side] !== null || side === mSide || keyed[side] || recenter[side];
       if (hud && typeof hud.setStick === 'function') hud.setStick(side, v.x, v.y);
     }
+    // The WEB pad's drag IS the aim, and it has to be written AFTER the loop: the loop rewrites
+    // out.R from the stick every frame, which used to swallow this and left every shot going
+    // wherever the right stick last pointed — straight up, on a phone, where that stick is not
+    // being touched at all. It beats the stick and LOOK for the frames the pad is held, because
+    // a thumb on the pad is aiming. The HUD knob is deliberately not fed the aim: it shows the
+    // physical stick, which nobody is touching.
+    //
+    // Aiming also points the free right hand, because the sim reads inp.R for the aim AND for
+    // that hand's steering. That is already how the desktop cursor works (it is the hand and the
+    // aim at once), and it is marked `active`, so under B45 the arm parks along the line it just
+    // shot instead of dropping back to rest: the spider hand stays pointing at its anchor.
+    if (webActive) { out.R.x = webVec.x; out.R.y = webVec.y; out.R.active = true; }
+    recenter.L = recenter.R = false;
     return out;
   }
 
