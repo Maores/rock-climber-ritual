@@ -220,6 +220,17 @@ button:focus-visible { outline: 2px solid var(--rune); outline-offset: 2px; }
   color: var(--text);
 }
 #seeds .seed.custom { cursor: default; font-variant-numeric: tabular-nums; }
+/* B42: one shared line under the row saying what the chosen route actually is. Its own line so
+   the four pills still fit one row on a 360 px phone; a fixed minimum height so swapping a long
+   line for a short one does not shuffle the tap line below it. */
+#seeds .note {
+  flex-basis: 100%;
+  margin-top: 7px;
+  min-height: 15px;
+  font: 400 11px/1.35 var(--sans);
+  letter-spacing: 0.01em;
+  color: var(--muted);
+}
 
 /* Nothing that only makes sense mid-climb belongs on top of a full-screen overlay. Both pads
    now live inside #hud, which an overlay covers anyway, but the rule costs nothing. */
@@ -386,6 +397,54 @@ body.overlay-up #look, body.overlay-up #web { display: none; }
   -webkit-appearance: none; appearance: none; font-size: 17px; line-height: 1;
 }
 #customBtn[hidden] { display: none; }
+
+/* B40: the way back to the title, third in the top-right cluster and only ever up mid-climb —
+   on the title it would point at itself, and the end screen has its own Menu button. */
+#menuBtn {
+  position: fixed; top: calc(8px + var(--sat)); right: calc(108px + var(--sar));
+  z-index: 40; width: 40px; height: 40px; border-radius: 50%;
+  border: 1px solid rgba(241, 230, 216, 0.22); background: rgba(20, 14, 11, 0.5);
+  color: var(--muted); display: grid; place-items: center; padding: 0; cursor: pointer;
+  touch-action: manipulation;
+  -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
+  -webkit-appearance: none; appearance: none;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+  transition: color 0.2s, border-color 0.2s, transform 0.1s;
+}
+#menuBtn:active { transform: scale(0.94); }
+#menuBtn svg { width: 17px; height: 17px; }
+#menuBtn[hidden] { display: none; }
+body.overlay-up #menuBtn { display: none; }
+
+/* Leaving mid-climb throws the climb away, so it asks once. Above #custom, which can be open. */
+#confirm {
+  position: fixed; inset: 0; z-index: 70;
+  display: grid; place-items: center;
+  padding: calc(20px + var(--sat)) calc(18px + var(--sar)) calc(20px + var(--sab)) calc(18px + var(--sal));
+  background: rgba(10, 7, 6, 0.82);
+  -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px);
+}
+#confirm[hidden] { display: none; }
+#confirm .panel {
+  width: min(340px, 100%);
+  background: rgba(31, 24, 19, 0.96);
+  border: 1px solid var(--line, #3a2c22);
+  border-radius: 18px;
+  padding: 20px 20px 16px;
+  text-align: center;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.55);
+}
+#confirm h2 { margin: 0 0 4px; font-family: var(--serif); font-size: 19px; letter-spacing: 0.05em; color: var(--gold); }
+#confirm p { margin: 0 0 16px; font-size: 13px; color: var(--muted); }
+#confirm .pair { display: flex; gap: 10px; }
+#confirm button {
+  flex: 1; padding: 12px 8px; border-radius: 11px; cursor: pointer;
+  font: 700 11.5px/1 var(--sans); letter-spacing: 0.16em; text-transform: uppercase;
+  -webkit-appearance: none; appearance: none;
+}
+#confirm .stay { border: 0; background: var(--rune, #7fe0ff); color: #06222b; }
+#confirm .leave { border: 1px solid rgba(241, 230, 216, 0.3); background: rgba(255, 255, 255, 0.04); color: var(--text); }
+
 #mute svg { width: 18px; height: 18px; }
 #mute .wave { transition: opacity 0.2s; }
 #mute .slash { opacity: 0; transition: opacity 0.2s; }
@@ -489,8 +548,19 @@ body.overlay-up #look, body.overlay-up #web { display: none; }
   opacity: 0.55;
 }
 .grip.gripping .key { opacity: 0.75; }
-.grip.keyed { padding-right: 40px; }
 .grip.gripping, .grip.slipping { font-size: 11.5px; letter-spacing: 0.2em; text-indent: 0.2em; }
+/* B39: a badge inside the pill leaves no room for a letter-spaced eight-letter word. At the
+   112 px pill the landscape block gives, every state ran under the badge. Where there is a badge
+   the label is short (HELD / SLIP, from the keyed table in hud.js), the tracking is tighter and
+   the badge is slimmer, so the padding it reserves shrinks with it. Must stay after the
+   .gripping/.slipping rule: same specificity, so order decides the tracking. */
+.grip.keyed {
+  padding-left: 22px;   /* the state lamp ends at 21 px */
+  padding-right: 34px;
+  letter-spacing: 0.1em;
+  text-indent: 0.1em;
+}
+.grip.keyed .key { right: 7px; padding: 1.5px 3px; font-size: 8px; }
 .grip:active { transform: scale(0.97); }
 .grip.hover { border-color: rgba(127, 224, 255, 0.55); color: var(--text); }
 .grip.hover::before { background: var(--rune); box-shadow: 0 0 8px var(--rune); }
@@ -674,6 +744,9 @@ body.overlay-up #look, body.overlay-up #web { display: none; }
   text-align: center;
 }
 .card .row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+/* The mouse card's closing hint is a grid item too, so it was landing in one column and standing
+   six lines tall. Full width — which is also where B42's route line got the height it needed. */
+.card .row .hint { grid-column: 1 / -1; }
 .card .hand { font: 400 13px/1.45 var(--sans); color: var(--muted); }
 .card .hand b {
   display: block;
@@ -876,6 +949,14 @@ kbd {
   transition: transform 0.1s, background 0.2s;
 }
 .btn:active { transform: scale(0.97); }
+/* B40: Climb again and Menu, side by side, wrapping if a narrow phone runs out of width. */
+.btns { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: center; }
+.btn.ghost {
+  padding-left: 22px; padding-right: 22px;
+  border-color: rgba(241, 230, 216, 0.28);
+  background: rgba(20, 14, 11, 0.5);
+  color: var(--muted);
+}
 
 /* ---- boot: shown until the title appears, so a slow LAN load is never a black screen ---- */
 #boot {
@@ -912,22 +993,26 @@ kbd {
   .grip { height: 40px; font-size: 11.5px; }
   #height { font-size: 28px; }
   .overlay { padding-top: calc(12px + var(--sat)); padding-bottom: calc(30px + var(--sab)); }
+  #title { padding-bottom: calc(18px + var(--sab)); }   /* the foot is hidden here; the route line uses it */
   .overlay h1 { font-size: clamp(34px, 9vh, 64px); }
-  .sigil { width: 50px; margin: 5px 0 6px; }   /* the route row needs the height */
-  .card { padding: 10px 14px 9px; }
+  .card .row { gap: 10px; }
+  /* B42 added a line of route description under the pills; these give it its 18 px back. */
+  .sigil { width: 50px; margin: 2px 0 4px; }   /* the route row needs the height */
+  .card { padding: 8px 14px 8px; }
   .card h2 { margin-bottom: 6px; }
-  .card .hint { margin-top: 6px; padding-top: 6px; }
+  .card .hint { margin-top: 5px; padding-top: 5px; }
   .card .demo { grid-template-columns: 52px 1fr 52px; }
   .card .mini-ring { width: 44px; height: 44px; }
   .card .mini-ring i { width: 18px; height: 18px; margin: -9px 0 0 -9px; }
   .card .steps { font-size: 12px; }
-  .card .steps p { margin-bottom: 4px; }
-  .tap { margin-top: 12px; }
+  .card .steps p { margin-bottom: 3px; }
+  .tap { margin-top: 8px; }
   .foot { display: none; }
   .overlay .inner { max-width: 560px; }
-  #seeds { margin-top: 8px; gap: 6px; }
+  #seeds { margin-top: 6px; gap: 6px; }
   #seeds .lbl { flex-basis: auto; margin: 0 3px 0 0; }
   #seeds .seed { padding: 7px 12px; font-size: 11px; }
+  #seeds .note { margin-top: 4px; min-height: 12px; font-size: 10px; }   /* the row is short of height here */
 
   /* The end screen was built for a tall phone: 625 px of content in a 390 px window, clipped
      top and bottom, with "Climb again" 56 px below the edge and no way to reach it. Trim it to
@@ -1005,6 +1090,12 @@ kbd {
   </div>
 </div>
 
+<!-- B40: back to the title. hud.js shows it with the HUD and hides it under every overlay. -->
+<button id="menuBtn" type="button" aria-label="Menu" title="Menu" hidden>
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round">
+    <path d="M4 7h16M4 12h16M4 17h16"/>
+  </svg>
+</button>
 <button id="customBtn" type="button" aria-label="Customise your hands" title="Customise" hidden>✦</button>
 <div id="custom" hidden>
   <div class="panel">
@@ -1016,6 +1107,17 @@ kbd {
       <button class="skin" type="button" data-skin="bare"><span class="swatch bare"></span><b>Bare</b><span>your own hands</span></button>
     </div>
     <button class="close" type="button" id="customClose">Climb</button>
+  </div>
+</div>
+<!-- the one question the Menu button asks mid-climb; hud.js wires it -->
+<div id="confirm" hidden role="dialog" aria-modal="true" aria-labelledby="confirm-title">
+  <div class="panel">
+    <h2 id="confirm-title">Leave the climb?</h2>
+    <p>This climb ends here. The route stays as it is.</p>
+    <div class="pair">
+      <button class="stay" type="button" id="confirmStay">Stay</button>
+      <button class="leave" type="button" id="confirmLeave">Leave</button>
+    </div>
   </div>
 </div>
 <button id="mute" type="button" aria-label="Toggle sound" title="Sound (M)">
@@ -1064,7 +1166,10 @@ kbd {
     </svg>
     <div class="stats" id="end-stats"></div>
     <div class="credits" id="end-credits"></div>
-    <button class="btn" id="end-restart" type="button">Climb again</button>
+    <div class="btns" id="end-btns">
+      <button class="btn" id="end-restart" type="button">Climb again</button>
+      <button class="btn ghost" id="end-menu" type="button">Menu</button>
+    </div>
   </div>
 </div>
 

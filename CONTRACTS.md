@@ -117,13 +117,15 @@ hud.lookButton, hud.webButton                         // input.js binds pointer 
 hud.update(state, events)                             // stamina arcs, knob positions come from input via hud.setStick(side, x, y), grip pill state, height meter, rune progress, fall count, the web-zip's own state on the right pill
 hud.setStick(side, x, y)                              // called by input.js each frame with the stick vector
 hud.message(text, ms = 2200); hud.showTitle({ touch, seeds, seed }); hud.hideTitle(); hud.onStart(cb); hud.onSeed(cb); hud.showEnd(stats); hud.onRestart(cb)
+hud.onMenu(cb)                                        // the Menu button asks for the title screen back: mid-climb behind one confirmation, straight from the end screen. Unwired it reloads the page. `showTitle` resets its own shell (end screen, dead veil, pending end timer), so the integrator only has to rebuild the game state
+hud.onPause(cb)                                       // cb(true/false) around the mid-climb confirmation, so the sim can be frozen while the question is on screen
 hud.openCustom() / closeCustom() / refreshCustomBtn() / onSkinChange(cb)                 // the hand panel behind the ✦ button
 export function createAudio() → audio                                                   // audio.js — WebAudio; call audio.unlock() on first user gesture
 audio.handle(events, state, dt)                       // wind bed follows height/night, cues per event, heartbeat when any stamina < 0.25
 audio.setMusic(url); audio.setMuted(b); audio.muted
 ```
 Required DOM ids in `index.html`: `#gl` (canvas), `#hud`, `#title`, `#end`, `#stick-l`, `#stick-r`, `#grip-l`, `#grip-r`,
-`#ctl-l`, `#ctl-r`, `#look`, `#web`, `#height`, `#runes`, `#msg`, `#falls`, `#mute`, `#vig`, `#seeds`, `#custom`, `#customBtn`, `#boot`.
+`#ctl-l`, `#ctl-r`, `#look`, `#web`, `#height`, `#runes`, `#msg`, `#falls`, `#mute`, `#vig`, `#seeds`, `#custom`, `#customBtn`, `#menuBtn`, `#confirm`, `#boot`.
 
 **Control layout invariant (B34).** `#look` and `#web` are children of `#ctl-l` and `#ctl-r`, the first item in each
 column: pad, then GRIP pill, then stick. They must stay in the flow — do not give them `position: fixed` and a
