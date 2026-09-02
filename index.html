@@ -177,6 +177,37 @@ button:focus-visible { outline: 2px solid var(--rune); outline-offset: 2px; }
   -webkit-appearance: none; appearance: none;
 }
 #mute:active { transform: scale(0.94); }
+
+/* LOOK: hold it and the free hand's stick turns your head instead of moving the hand. */
+#look {
+  position: fixed;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: calc(18px + var(--sab));
+  z-index: 40;
+  padding: 9px 20px;
+  border-radius: 999px;
+  border: 1px solid rgba(241, 230, 216, 0.24);
+  background: rgba(20, 14, 11, 0.52);
+  color: var(--muted);
+  font: 600 11px/1 'Inter', system-ui, sans-serif;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  cursor: pointer;
+  touch-action: none;
+  -webkit-user-select: none; user-select: none;
+  -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
+  -webkit-appearance: none; appearance: none;
+  transition: color 0.18s, border-color 0.18s, background 0.18s, opacity 0.25s;
+  opacity: 0.45;
+}
+#look.can { opacity: 1; }
+#look.on, #look:active {
+  color: #0b1a1f;
+  background: var(--rune);
+  border-color: var(--rune);
+}
+#look[hidden] { display: none; }
 #mute svg { width: 18px; height: 18px; }
 #mute .wave { transition: opacity 0.2s; }
 #mute .slash { opacity: 0; transition: opacity 0.2s; }
@@ -767,6 +798,7 @@ kbd {
   </div>
 </div>
 
+<button id="look" type="button" aria-label="Look around" title="Hold to look around (Shift)">Look</button>
 <button id="mute" type="button" aria-label="Toggle sound" title="Sound (M)">
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
     <path d="M4 9.5v5a1 1 0 0 0 1 1h2.6l4.2 3.4a.6.6 0 0 0 1-.47V5.57a.6.6 0 0 0-1-.47L7.6 8.5H5a1 1 0 0 0-1 1z"/>

@@ -354,9 +354,10 @@ function frame(now) {
 
   // Input: read once per frame (the HUD knobs follow), merge the autopilot on top.
   let inp = input.read();
+  const lookIn = inp.look;
   if (auto.on && !debug.pause) {
     const ai = autoInput(state);
-    inp = { L: ai.L, R: ai.R, tapL: inp.tapL || ai.tapL, tapR: inp.tapR || ai.tapR };
+    inp = { L: ai.L, R: ai.R, tapL: inp.tapL || ai.tapL, tapR: inp.tapR || ai.tapR, look: lookIn };
     hud.setStick('L', ai.L.x, ai.L.y);
     hud.setStick('R', ai.R.x, ai.R.y);
   }
@@ -392,7 +393,7 @@ function frame(now) {
   renderer.info.reset();
   world.update(dt, state, camera);
   arms.update(dt, state, world.wallZ, camera);
-  rig.update(dt, state, world.wallZ, events);
+  rig.update(dt, state, world.wallZ, events, lookIn);
   hud.update(state, events);
   audio.handle(events, state, dt);
   post.setNight(state.night);

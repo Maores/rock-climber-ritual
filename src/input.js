@@ -198,6 +198,24 @@ export function createInput({ hud = null, keyboard = true, win, now = defaultNow
   }
   if (mouse) bindMouse(mouse);
 
+  // ---------------------------------------------------------------------------------------
+  // Looking around: hold Shift on a desktop, or the LOOK button on a phone. While held, the
+  // cursor (or the free hand's stick) turns the head instead of moving the hand. The camera
+  // decides what is reachable — it only allows it with one hand free.
+  const look = { x: 0, y: 0, active: false };
+  let lookHeld = false;
+  if (target && keyboard) {
+    on(target, 'keydown', (e) => { if (e.key === 'Shift') lookHeld = true; });
+    on(target, 'keyup', (e) => { if (e.key === 'Shift') lookHeld = false; });
+    on(target, 'blur', () => { lookHeld = false; });
+  }
+  if (hud && hud.lookButton) {
+    const b = hud.lookButton;
+    on(b, 'pointerdown', (e) => { prevent(e); lookHeld = true; if (b.setPointerCapture) b.setPointerCapture(e.pointerId); });
+    on(b, 'pointerup', () => { lookHeld = false; });
+    on(b, 'pointercancel', () => { lookHeld = false; });
+  }
+
   function read() {
     const t = now();
     const dt = Math.min(0.1, Math.max(0, (t - lastT) / 1000));
@@ -206,7 +224,15 @@ export function createInput({ hud = null, keyboard = true, win, now = defaultNow
     const out = { L: { x: 0, y: 0 }, R: { x: 0, y: 0 }, tapL: taps.L, tapR: taps.R };
     taps.L = taps.R = false;
     const mSide = mouse && mousePos.has ? freeSide() : null;
+    // While looking, the steering input turns the head and the hand stays put.
+    look.active = lookHeld;
+    if (lookHeld) {
+      const src = mSide ? mouseVec : (active.L !== null ? pointer.L : active.R !== null ? pointer.R : virtual.L);
+      look.x = src.x; look.y = src.y;
+    } else { look.x = 0; look.y = 0; }
+    out.look = look;
     for (const side of ['L', 'R']) {
+      if (lookHeld) { out[side].x = 0; out[side].y = 0; if (hud && typeof hud.setStick === 'function') hud.setStick(side, 0, 0); continue; }
       // touch stick wins, then the cursor for the hand it is driving, then the keyboard
       const v = active[side] !== null ? pointer[side]
         : (side === mSide ? mouseVec : virtual[side]);

@@ -42,7 +42,7 @@ const pt = (el, fx, fy, pointerId = 1) => {
 
 test('input: idle read is all zeros with no taps, and feeds the HUD knobs', () => {
   const { input, calls } = rig();
-  assert.deepEqual(input.read(), { L: { x: 0, y: 0 }, R: { x: 0, y: 0 }, tapL: false, tapR: false });
+  assert.deepEqual(input.read(), { L: { x: 0, y: 0 }, R: { x: 0, y: 0 }, tapL: false, tapR: false, look: { x: 0, y: 0, active: false } });
   assert.deepEqual(calls, [['L', 0, 0], ['R', 0, 0]]);
 });
 
@@ -229,6 +229,6 @@ test('input: keyboard can be disabled, hud can be missing, dispose removes every
   assert.equal(b.win.count(), 0);
 
   const bare = createInput({ hud: null, keyboard: true, win: null });
-  assert.deepEqual(bare.read(), { L: { x: 0, y: 0 }, R: { x: 0, y: 0 }, tapL: false, tapR: false });
+  assert.deepEqual(bare.read(), { L: { x: 0, y: 0 }, R: { x: 0, y: 0 }, tapL: false, tapR: false, look: { x: 0, y: 0, active: false } });
   bare.dispose();
 });

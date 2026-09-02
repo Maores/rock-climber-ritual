@@ -59,8 +59,25 @@ function noise(t, seed) {
   return 0.55 * Math.sin(t * 13.1 + seed) + 0.3 * Math.sin(t * 21.7 + seed * 1.9) + 0.15 * Math.sin(t * 34.3 + seed * 3.1);
 }
 
+// --- looking around ---------------------------------------------------------------------
+// With one hand on the rock and one hand free you can turn your head. The arc you can reach
+// depends on which hand is free: hanging off your right arm you can crane left, and the other
+// way round. Straight down is allowed on purpose — the drop is the point.
+const LOOK = {
+  yawInward: THREE.MathUtils.degToRad(35),    // toward the gripping arm
+  yawOutward: THREE.MathUtils.degToRad(145),  // toward the free arm: 180 deg of arc together
+  pitchUp: THREE.MathUtils.degToRad(62),
+  pitchDown: THREE.MathUtils.degToRad(85),    // nearly straight down into the pit
+  rate: 8,                                    // how fast the head follows the input
+  recenter: 3.2,                              // how fast it returns when you let go
+  vertigoFov: 9,                              // the lens creeps wider the longer you stare down
+  vertigoRate: 0.5,
+};
+
 export function createCameraRig(camera) {
   let portrait = null;                      // null until setPortrait is called → inferred from aspect
+  let lookYaw = 0, lookPitch = 0, vertigo = 0;
+  const clamp1 = (v) => (v > 1 ? 1 : v < -1 ? -1 : (+v || 0));
   camera.near = 0.05;
   camera.far = Math.max(camera.far || 0, 900);
   camera.fov = FOV_PORTRAIT;
@@ -126,7 +143,7 @@ export function createCameraRig(camera) {
     return out;
   }
 
-  function update(dt, state, wallZ, events) {
+  function update(dt, state, wallZ, events, lookIn) {
     if (!state || !state.body) return;
     dt = Math.min(Math.max(dt || 0, 0), 1 / 20);
     t += dt;
@@ -256,11 +273,42 @@ export function createCameraRig(camera) {
       camera.position.y += s * noise(t, 5.0);
       camera.position.z += s * 0.5 * noise(t, 8.0);
     }
+    // --- look around ------------------------------------------------------------------------
+    // Only while exactly one hand holds the rock: the other arm is what lets you turn.
+    const freeSide = (L && !L.gripping && R && R.gripping) ? 'L' : (R && !R.gripping && L && L.gripping) ? 'R' : null;
+    const canLook = !!freeSide && (state.phase === 'climbing' || state.phase === 'caught');
+    const wantX = canLook && lookIn && lookIn.active ? clamp1(lookIn.x) : 0;
+    const wantY = canLook && lookIn && lookIn.active ? clamp1(lookIn.y) : 0;
+    const outSign = freeSide === 'L' ? -1 : 1;                 // free left arm turns you left
+    const yawWant = wantX >= 0
+      ? wantX * (outSign > 0 ? LOOK.yawOutward : LOOK.yawInward)
+      : wantX * (outSign > 0 ? LOOK.yawInward : LOOK.yawOutward);
+    const pitchWant = wantY >= 0 ? wantY * LOOK.pitchUp : wantY * LOOK.pitchDown;
+    const k = (wantX || wantY) ? LOOK.rate : LOOK.recenter;
+    lookYaw = approach(lookYaw, canLook ? yawWant : 0, k, dt);
+    lookPitch = approach(lookPitch, canLook ? pitchWant : 0, k, dt);
+    // staring down widens the lens a little, so the drop opens up under you
+    const down = Math.max(0, -lookPitch / LOOK.pitchDown);
+    vertigo = approach(vertigo, down * down, LOOK.vertigoRate, dt);
+
+    if (Math.abs(lookYaw) > 1e-4 || Math.abs(lookPitch) > 1e-4) {
+      const d = look.clone().sub(camera.position);
+      const len = Math.max(0.35, d.length());
+      const az = Math.atan2(d.x, d.z) + lookYaw;               // rotate about the world up axis
+      const el = Math.asin(THREE.MathUtils.clamp(d.y / len, -1, 1)) + lookPitch;
+      const ce = Math.cos(THREE.MathUtils.clamp(el, -1.5, 1.5));
+      look.set(
+        camera.position.x + len * ce * Math.sin(az),
+        camera.position.y + len * Math.sin(THREE.MathUtils.clamp(el, -1.5, 1.5)),
+        camera.position.z + len * ce * Math.cos(az),
+      );
+    }
+
     const rollNow = roll.x + THREE.MathUtils.degToRad(2.5) * shake * noise(t, 11.0) + breath * 0.004;
     camera.up.set(Math.sin(rollNow), Math.cos(rollNow), 0);
     camera.lookAt(look);
 
-    let fov = fov0 + fovKick.x + 6 * fallBlend;
+    let fov = fov0 + fovKick.x + 6 * fallBlend + LOOK.vertigoFov * vertigo;
     if (summitT >= 0) fov -= 8 * (1 - Math.exp(-summitT / SUMMIT_TAU));
     fov = THREE.MathUtils.clamp(fov, 40, 110);
     if (Math.abs(fov - lastFov) > 1e-3) {

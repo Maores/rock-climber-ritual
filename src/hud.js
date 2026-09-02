@@ -385,6 +385,7 @@ export function createHud(root) {
   // ---- update -----------------------------------------------------------------------------------------------
   function update(state, events) {
     if (!state) return;
+    updateLookBtn(state);
     if (state.phase !== 'title' && !cache.hudOn && !endShown) showHud();
 
     const hands = state.hands || {};
@@ -670,9 +671,21 @@ export function createHud(root) {
     clearTimeout(endTimer);
   }
 
+  // LOOK: input.js binds hold-to-look to this button; it only lights up when a hand is free.
+  const lookBtn = doc.getElementById('look');
+  let canLookNow = null;
+  function updateLookBtn(state) {
+    if (!lookBtn) return;
+    const L = state.hands && state.hands.L, R = state.hands && state.hands.R;
+    const can = !!L && !!R && (L.gripping !== R.gripping)
+      && (state.phase === 'climbing' || state.phase === 'caught');
+    if (can !== canLookNow) { canLookNow = can; lookBtn.classList.toggle('can', can); }
+  }
+
   const hud = {
     sticks,
     grips,
+    lookButton: lookBtn,
     root: hudEl,
     elements: { hud: hudEl, title: titleEl, end: endEl, msg: msgEl, height: heightEl, runes: runesEl, falls: fallsEl, mute: muteBtn, vignette: vigEl },
     update,
