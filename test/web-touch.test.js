@@ -431,3 +431,36 @@ test('touch: the gesture reaches the sim by either name main.js might forward (B
   assert.ok(drainEvents(s).map((e) => e.type).includes('webcut'), 'top-level `web` alone reaches the sim');
   rg.input.dispose();
 });
+
+test('touch: aiming and looking are two thumbs that do not fight (B47 + B50)', () => {
+  // B47 turned a drag on the play surface into the head, and B50 put the web aim in its own
+  // field. The two must not reach across: a look drag never writes the aim, and the pad never
+  // writes the view. On a phone they are simply two thumbs.
+  const rg = phone(), s = climber();
+  const surface = new FakeEl({ left: 0, top: 0, width: 393, height: 852 });
+  let t = 0;
+  const input = createInput({ hud: rg.hud, keyboard: false, win: new FakeEl({}), now: () => t, surface, getHands: () => s.hands });
+  const tick = (ms) => { t += ms; };
+
+  // one thumb drags the view
+  surface.fire('pointerdown', { pointerType: 'touch', pointerId: 40, clientX: 200, clientY: 400 });
+  surface.fire('pointermove', { pointerType: 'touch', pointerId: 40, clientX: 320, clientY: 400 });
+  tick(16);
+  let r = input.read();
+  assert.ok(r.look.x !== 0, 'the drag turned the head');
+  assert.equal(r.web.active, false, 'and it did not touch the web aim');
+  assert.deepEqual({ x: r.web.x, y: r.web.y }, { x: 0, y: 1 }, 'the aim is untouched by a look');
+
+  // the other thumb drags the pad, while the look drag is still down
+  rg.hud.webButton.fire('pointerdown', { pointerId: 41, clientX: PAD_C.x, clientY: PAD_C.y });
+  rg.hud.webButton.fire('pointermove', { pointerId: 41, clientX: PAD_C.x - 70, clientY: PAD_C.y - 40 });
+  tick(16);
+  const lookX = r.look.x;
+  r = input.read();
+  assert.equal(r.web.active, true, 'the pad committed on the drag');
+  assert.ok(r.web.x < -0.2, `and carries its own aim, got ${r.web.x.toFixed(2)}`);
+  assert.equal(r.holdR, true, 'the pad is the held right grip');
+  assert.equal(r.look.x, lookX, 'while the head has not moved a degree because of it');
+  assert.equal(r.R.active, false, 'and neither gesture steered the right stick');
+  input.dispose();
+});
