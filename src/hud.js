@@ -822,7 +822,10 @@ export function createHud(root) {
       else if (!state.hands.R.gripping) mark = 'ready';
     }
     const cd = w.unlocked && w.cd > 0 ? Math.min(1, w.cd / 3) : 0;
-    const key = mark + '|' + Math.round(cd * 20);
+    // `unlocked` belongs in the key: it flips false -> true when the climb starts, and with both
+    // hands still on the rock nothing else changes, so without it the pad stayed hidden until the
+    // first time the right hand came off.
+    const key = (w.unlocked ? 'u' : '-') + mark + '|' + Math.round(cd * 20);
     if (key === webCache) return;
     webCache = key;
     el.classList.toggle('web-aim', mark === 'aim');

@@ -575,6 +575,27 @@ export async function createWorld({ renderer, scene, route, tier }) {
     routeRef = r;
     holdById.clear();
     for (const h of (r && r.holds) || []) holdById.set(h.id, h);
+    syncFakes(r);
+  }
+
+  // "Climb again" builds a fresh route from the same seed, so the sim's decoys are whole again --
+  // but the meshes were bound to the boot-time objects and stayed broken and 60 m below, leaving a
+  // rock you could grab that was not there (B35). Re-point every part at the new object with its id
+  // and put the group back where it started. Same seed means same decoys in the same places, which
+  // is why the geometry, baked at boot, is still right; a different seed reloads the page instead.
+  function syncFakes(r) {
+    const next = (r && r.fakes) || [];
+    fakeById.clear();
+    for (const f of next) fakeById.set(f.id, f);
+    for (const fp of fakeParts) {
+      const f = fakeById.get(fp.fake.id);
+      if (f) fp.fake = f;
+      fp.fall = 0;
+      fp.vy = 0;
+      fp.group.position.set(0, 0, 0);
+      fp.group.rotation.z = 0;
+      fp.group.visible = !fp.fake.broken;
+    }
   }
 
   function update(dt, state, camera, events) {

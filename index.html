@@ -221,18 +221,19 @@ button:focus-visible { outline: 2px solid var(--rune); outline-offset: 2px; }
 }
 #seeds .seed.custom { cursor: default; font-variant-numeric: tabular-nums; }
 
-/* Nothing that only makes sense mid-climb belongs on top of a full-screen overlay: the two
-   pads used to float over the title's tap line and over the end screen's credits. */
+/* Nothing that only makes sense mid-climb belongs on top of a full-screen overlay. Both pads
+   now live inside #hud, which an overlay covers anyway, but the rule costs nothing. */
 body.overlay-up #look, body.overlay-up #web { display: none; }
 
-/* LOOK: hold it and the free hand's stick turns your head instead of moving the hand. */
+/* The two pads are the top of their own control stacks: LOOK / GRIP / stick on the left,
+   WEB / GRIP / stick on the right. They used to be fixed over the middle at z-index 40, which
+   put them inside the bottom of the stick rings and let them steal a thumb sliding down (B34).
+   Stacked in the column they are the cluster's own width and can never overlap it again. */
 #look {
-  position: fixed;
-  left: 50%;
-  transform: translateX(-50%);
-  bottom: calc(18px + var(--sab));
-  z-index: 40;
-  padding: 9px 20px;
+  pointer-events: auto;
+  width: var(--stick);
+  padding: 9px 0;
+  text-align: center;
   border-radius: 999px;
   border: 1px solid rgba(241, 230, 216, 0.24);
   background: rgba(20, 14, 11, 0.52);
@@ -256,14 +257,14 @@ body.overlay-up #look, body.overlay-up #web { display: none; }
 }
 #look[hidden] { display: none; }
 
-/* The web pad: same one-thumb drag as LOOK, sitting beside it. Only once unlocked. */
+/* The web pad: same one-thumb drag as LOOK, on the right hand, whose ability it is. Only once
+   unlocked -- and because the cluster is anchored at its bottom, hiding it leaves GRIP and the
+   stick exactly where they were, so the two columns stay level. */
 #web {
-  position: fixed;
-  left: 50%;
-  transform: translateX(calc(-50% + 82px));
-  bottom: calc(18px + var(--sab));
-  z-index: 40;
-  padding: 9px 18px;
+  pointer-events: auto;
+  width: var(--stick);
+  padding: 9px 0;
+  text-align: center;
   border-radius: 999px;
   border: 1px solid rgba(127, 224, 255, 0.45);
   background: rgba(20, 14, 11, 0.52);
@@ -283,8 +284,6 @@ body.overlay-up #look, body.overlay-up #web { display: none; }
 #web.on { color: #06222b; background: var(--rune, #7fe0ff); }
 #web.cool { opacity: .35; }
 #web[hidden] { display: none; }
-/* LOOK shifts left so the two pads sit either side of centre */
-#look { transform: translateX(calc(-50% - 82px)); }
 
 /* The web-zip, on the right grip pill. Without these the ability is invisible. */
 .grip.web-ready { box-shadow: 0 0 0 1px rgba(127, 224, 255, 0.55), 0 0 16px rgba(127, 224, 255, 0.22); }
@@ -988,6 +987,7 @@ kbd {
   </div>
   <div id="msg"></div>
   <div id="ctl-l" class="ctl">
+    <button id="look" type="button" aria-label="Look around" title="Hold to look around (Shift)">Look</button>
     <button id="grip-l" class="grip" type="button" aria-label="Left hand grip">Grip</button>
     <div id="stick-l" class="stick" role="slider" aria-label="Left hand">
       <svg viewBox="0 0 136 136"><circle class="track" cx="68" cy="68" r="63"/><circle class="arc" cx="68" cy="68" r="63"/></svg>
@@ -996,6 +996,7 @@ kbd {
     </div>
   </div>
   <div id="ctl-r" class="ctl">
+    <button id="web" type="button" aria-label="Aim the web" title="Hold and drag to aim, release to fire" hidden>Web</button>
     <button id="grip-r" class="grip" type="button" aria-label="Right hand grip">Grip</button>
     <div id="stick-r" class="stick" role="slider" aria-label="Right hand">
       <svg viewBox="0 0 136 136"><circle class="track" cx="68" cy="68" r="63"/><circle class="arc" cx="68" cy="68" r="63"/></svg>
@@ -1018,8 +1019,6 @@ kbd {
     <button class="close" type="button" id="customClose">Climb</button>
   </div>
 </div>
-<button id="web" type="button" aria-label="Aim the web" title="Hold and drag to aim, release to fire" hidden>Web</button>
-<button id="look" type="button" aria-label="Look around" title="Hold to look around (Shift)">Look</button>
 <button id="mute" type="button" aria-label="Toggle sound" title="Sound (M)">
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
     <path d="M4 9.5v5a1 1 0 0 0 1 1h2.6l4.2 3.4a.6.6 0 0 0 1-.47V5.57a.6.6 0 0 0-1-.47L7.6 8.5H5a1 1 0 0 0-1 1z"/>

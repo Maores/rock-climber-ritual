@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>B34 — where the LOOK and WEB pads should live</title>
+<link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root { --bg:#14100d; --panel:#1f1813; --line:#3a2c22; --text:#f1e6d8; --muted:#b9a58f;
+          --teal:#7fe0ff; --gold:#d99a5b; --ok:#8ddc9b; --bad:#ff6a5a; --faint:#8b7963; }
+  * { box-sizing:border-box; }
+  body { margin:0; padding-bottom:30px; background:radial-gradient(1000px 600px at 50% -8%, #3a2333 0%, var(--bg) 60%);
+         color:var(--text); font-family:Inter, system-ui, sans-serif; line-height:1.5; }
+  body.wide { min-width:830px; }
+  main { max-width:830px; margin:0 auto; padding:18px 16px 0; }
+  h1 { font-family:Cinzel, serif; letter-spacing:.04em; color:var(--gold); font-size:24px; margin:0 0 5px; text-align:center; }
+  .sub { text-align:center; color:var(--muted); margin:0 auto 3px; font-size:13.5px; max-width:760px; }
+  .sub b { color:var(--text); font-weight:600; }
+  .meas { text-align:center; color:var(--faint); font-size:11.5px; margin:0 auto 16px; max-width:760px; }
+
+  .opt { display:flex; flex-wrap:wrap; gap:16px; align-items:flex-start; margin-bottom:16px;
+         background:rgba(31,24,19,.5); border:1px solid var(--line); border-radius:16px; padding:12px; }
+  .opt.rec { border-color:rgba(127,224,255,.5); box-shadow:0 0 0 2px rgba(127,224,255,.13); }
+  .opt.bad { border-color:rgba(255,106,90,.42); }
+
+  /* a 390-wide window onto the bottom 330 px of the phone — where every control lives */
+  .frame { position:relative; flex:0 1 390px; width:390px; max-width:100%; height:330px; border-radius:12px; overflow:hidden;
+           border:1px solid rgba(0,0,0,.6); }
+  .scale { position:absolute; left:0; bottom:0; width:390px; height:844px; }
+  .scale img.bg { position:absolute; inset:0; width:390px; height:844px; object-fit:cover; display:block; }
+  .scale::after { content:''; position:absolute; left:0; right:0; top:0; height:514px;
+                  background:linear-gradient(180deg, rgba(10,12,24,.55), rgba(10,12,24,0) 120px); }
+
+  /* ---- the game's own control chrome, at its real sizes -------------------------- */
+  .ctl { position:absolute; bottom:18px; z-index:2; display:flex; flex-direction:column; align-items:center; gap:14px; }
+  .ctl.l { left:18px; } .ctl.r { right:18px; }
+  .grip { width:136px; height:46px; border-radius:999px; border:1.5px solid rgba(241,230,216,.26);
+          background:rgba(20,14,11,.56); color:var(--muted); font:700 12.5px/44px Inter, sans-serif;
+          letter-spacing:.3em; text-indent:.3em; text-transform:uppercase; text-align:center; position:relative; }
+  .grip::before { content:''; position:absolute; left:12px; top:50%; width:9px; height:9px; margin-top:-4.5px;
+                  border-radius:50%; background:rgba(241,230,216,.3); }
+  .grip.on { background:linear-gradient(180deg,#edb473,#c98748 55%,#a86a35); color:#2a1c14;
+             border-color:rgba(255,220,170,.9); }
+  .grip.on::before { background:#2a1c14; }
+  .stick { position:relative; width:136px; height:136px; border-radius:50%;
+           background:radial-gradient(circle at 50% 42%, rgba(42,28,20,.72), rgba(10,12,24,.6) 72%);
+           box-shadow:inset 0 0 0 1px rgba(241,230,216,.1), inset 0 0 40px rgba(0,0,0,.35), 0 10px 32px rgba(0,0,0,.4); }
+  .stick::before { content:''; position:absolute; inset:4px; border-radius:50%;
+                   border:4px solid rgba(217,154,91,.85); filter:drop-shadow(0 0 4px rgba(217,154,91,.6)); }
+  .knob { position:absolute; left:50%; top:50%; width:56px; height:56px; margin:-28px 0 0 -28px; border-radius:50%;
+          background:radial-gradient(circle at 38% 32%, #f7ecdc 0%, #d99a5b 48%, #8a5a34 100%);
+          box-shadow:0 5px 16px rgba(0,0,0,.55); }
+  .knob::after { content:''; position:absolute; inset:30%; border-radius:50%;
+                 background:radial-gradient(circle, rgba(42,28,20,.55), rgba(42,28,20,.1)); }
+
+  /* the two pads, at their real 80x31 */
+  .pad { position:absolute; z-index:3; height:31px; width:80px; border-radius:999px; text-align:center;
+         font:600 11px/29px Inter, sans-serif; letter-spacing:.16em; text-transform:uppercase;
+         border:1px solid rgba(241,230,216,.3); background:rgba(20,14,11,.8); color:var(--text);
+         white-space:nowrap; }
+  .pad.web { border-color:rgba(127,224,255,.55); color:var(--teal); }
+  .pad.wide { width:136px; position:static; }
+  .clash { position:absolute; z-index:3; background:repeating-linear-gradient(45deg, rgba(255,106,90,.5) 0 6px, rgba(255,106,90,.14) 6px 12px);
+           border:1.5px dashed var(--bad); border-radius:999px; }
+  .tick { position:absolute; z-index:9; left:12px; top:12px; font:600 11px/1 Inter, sans-serif;
+          letter-spacing:.1em; text-transform:uppercase; padding:5px 9px; border-radius:999px; }
+  .tick.no { background:rgba(255,106,90,.2); color:#ffb4aa; border:1px solid rgba(255,106,90,.6); }
+  .tick.ok { background:rgba(141,220,155,.16); color:#b6efc2; border:1px solid rgba(141,220,155,.5); }
+
+  .cap { flex:1 1 auto; padding-top:2px; }
+  .cap h3 { margin:0 0 6px; font-size:17px; display:flex; align-items:center; gap:9px; flex-wrap:wrap; }
+  .cap p { margin:0 0 7px; font-size:13px; color:var(--muted); }
+  .cap p:last-child { margin-bottom:0; }
+  .cap b { color:var(--text); font-weight:600; }
+  .tag { font:600 9.5px/1 Inter, sans-serif; letter-spacing:.09em; text-transform:uppercase; padding:4px 8px; border-radius:999px; }
+  .tag.rec { background:rgba(127,224,255,.15); color:var(--teal); border:1px solid rgba(127,224,255,.45); }
+  .tag.now { background:rgba(255,106,90,.15); color:var(--bad); border:1px solid rgba(255,106,90,.45); }
+  .ok { color:var(--ok); font-weight:600; }
+  .no { color:var(--bad); font-weight:600; }
+  .foot { max-width:830px; margin:8px auto 0; padding:12px 16px 0; font-size:12.5px; color:var(--faint);
+          border-top:1px solid var(--line); text-align:center; }
+</style>
+</head>
+<body>
+<main>
+  <h1>B34 — the LOOK and WEB pads sit on the sticks</h1>
+  <p class="sub">Real frame from the game, real control sizes, bottom 330 px of a 390×844 phone.
+  The red hatch is where a thumb is handed to the pad instead of the stick.</p>
+  <p class="meas">Sticks 136 px · grips 136×46 · pads 80×31 at z-index 40 against the HUD's 10 ·
+  clusters 18 px from each edge, which leaves an 82 px gap down the middle.</p>
+
+  <!-- ------------------------------------------------------------------ TODAY -->
+  <div class="opt bad">
+    <div class="frame"><div class="scale">
+      <img class="bg" src="./b34-backdrop.jpg" alt="">
+      <div class="ctl l"><div class="grip on">Holding</div><div class="stick"><div class="knob"></div></div></div>
+      <div class="ctl r"><div class="grip">Grip</div><div class="stick"><div class="knob"></div></div></div>
+      <div class="clash" style="left:65px; bottom:10px; width:96px; height:47px;"></div>
+      <div class="clash" style="left:229px; bottom:10px; width:96px; height:47px;"></div>
+      <div class="pad" style="left:73px; bottom:18px;">Look</div>
+      <div class="pad web" style="left:237px; bottom:18px;">Web</div>
+    </div><div class="tick no">the bug</div></div>
+    <div class="cap">
+      <h3>Today <span class="tag now">broken</span></h3>
+      <p>Both pads sit <b>inside</b> the stick rings. Slide a thumb down the bottom of a stick and the hand
+      stops moving — LOOK swallows the touch.</p>
+      <p>You feel it most where you least want to: reaching a hand <b>downward</b>, which is the one direction
+      that drags the thumb to the bottom of the ring.</p>
+    </div>
+  </div>
+
+  <!-- ------------------------------------------------------------------ A -->
+  <div class="opt rec">
+    <div class="frame"><div class="scale">
+      <img class="bg" src="./b34-backdrop.jpg" alt="">
+      <div class="ctl l">
+        <div class="pad wide">Look</div>
+        <div class="grip on">Holding</div><div class="stick"><div class="knob"></div></div>
+      </div>
+      <div class="ctl r">
+        <div class="pad wide web">Web</div>
+        <div class="grip">Grip</div><div class="stick"><div class="knob"></div></div>
+      </div>
+    </div><div class="tick ok">clear</div></div>
+    <div class="cap">
+      <h3>A · In the column <span class="tag rec">my pick</span></h3>
+      <p>Each pad becomes the top of its own control stack: <b>LOOK / GRIP / stick</b> on the left,
+      <b>WEB / GRIP / stick</b> on the right.</p>
+      <p><span class="ok">Can never overlap again</span> — it is stacked in the flow, not floated over the HUD.
+      Target grows from 80 to <b>136 px</b> wide. WEB lands on the right hand, whose ability it actually is.
+      Landscape gets fixed by the same stroke.</p>
+      <p><span class="no">Costs:</span> the clusters get 45 px taller, and LOOK is no longer near the middle —
+      it is a left-thumb button now.</p>
+    </div>
+  </div>
+
+  <!-- ------------------------------------------------------------------ B -->
+  <div class="opt">
+    <div class="frame"><div class="scale">
+      <img class="bg" src="./b34-backdrop.jpg" alt="">
+      <div class="ctl l"><div class="grip on">Holding</div><div class="stick"><div class="knob"></div></div></div>
+      <div class="ctl r"><div class="grip">Grip</div><div class="stick"><div class="knob"></div></div></div>
+      <div class="pad" style="left:158px; bottom:18px; width:74px;">Look</div>
+      <div class="pad web" style="left:158px; bottom:61px; width:74px;">Web</div>
+    </div><div class="tick ok">clear</div></div>
+    <div class="cap">
+      <h3>B · Down the middle</h3>
+      <p>Both pads stacked in the 82 px gap between the clusters, at the same height they are now.</p>
+      <p><span class="ok">Equal reach</span> from either thumb, and nothing else on the screen moves.</p>
+      <p><span class="no">Costs:</span> 4 px of clearance either side on a 390 px phone — one wider phone
+      or one bigger stick and it is back. Narrower targets, and the lower pad sits on the home-indicator strip.</p>
+    </div>
+  </div>
+
+  <!-- ------------------------------------------------------------------ C -->
+  <div class="opt">
+    <div class="frame"><div class="scale">
+      <img class="bg" src="./b34-backdrop.jpg" alt="">
+      <div class="ctl l"><div class="grip on">Holding</div><div class="stick"><div class="knob"></div></div></div>
+      <div class="ctl r"><div class="grip">Grip</div><div class="stick"><div class="knob"></div></div></div>
+      <div class="pad" style="left:108px; bottom:236px;">Look</div>
+      <div class="pad web" style="left:202px; bottom:236px;">Web</div>
+    </div><div class="tick ok">clear</div></div>
+    <div class="cap">
+      <h3>C · Lifted above the grips</h3>
+      <p>The pads stay a centred pair and simply rise clear of everything, 236 px off the bottom.</p>
+      <p><span class="ok">Smallest change</span> in the code: one <code>bottom</code> value, nothing re-parented.</p>
+      <p><span class="no">Costs:</span> that is a real stretch for a thumb mid-climb, and the pads end up
+      floating over the wall belonging to nothing.</p>
+    </div>
+  </div>
+</main>
+<p class="foot">Pick one and I will build it. Nothing is committed yet.</p>
+<script>
+if (new URLSearchParams(location.search).has('wide')) document.body.classList.add('wide');
+</script>
+</body>
+</html>
