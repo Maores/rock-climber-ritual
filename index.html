@@ -290,20 +290,30 @@ body.overlay-up #web { display: none; }
   pointer-events: none;
 }
 
-/* The ground. A red bloom over the whole screen that fades to a dark hold. */
-@keyframes deadFlash {
-  0%   { opacity: 0; }
-  6%   { opacity: 0.92; }
-  100% { opacity: 0.42; }
-}
-#hud.dead::after, body.dead-veil::after {
+/* B53 — the ground. It used to be a maroon wash over the picture: a tint, which reads as a filter
+   on a climb that is still going, not as dying. Now the screen CUTS TO BLACK -- 80 ms, opaque,
+   everything gone -- and stays black under the end screen, so "You fell" is never delivered over a
+   view of the wall you fell off.
+   It is `body.dead-veil` and not `#hud.dead::after` because #hud fades away under showEnd and takes
+   its own pseudo-element with it; z-index 15 puts the black over the canvas (auto) and the HUD (10)
+   and under the overlays (20), which is what lets the end screen come up ON the black.
+   `#hud.dead` is still the state flag hud.js sets and clears, and it hides the HUD outright: a
+   blackout with live buttons behind it is a screen you can still press by accident. */
+@keyframes deadCut { from { opacity: 0; } to { opacity: 1; } }
+#hud.dead { visibility: hidden; }
+body.dead-veil::after {
   content: '';
-  position: fixed; inset: 0; z-index: 45; pointer-events: none;
-  background:
-    radial-gradient(120% 80% at 50% 60%, rgba(120, 12, 10, 0) 30%, rgba(96, 8, 8, 0.85) 100%),
-    rgba(60, 4, 4, 0.35);
-  animation: deadFlash 1.5s ease-out forwards;
+  position: fixed; inset: 0; z-index: 15; pointer-events: none;
+  background: #000;
+  opacity: 1;
+  animation: deadCut 80ms linear forwards;
 }
+/* The mute, hand-panel and menu buttons are not in #hud -- they float at z-index 40 -- so the black
+   goes under them and three lit circles would sit on an otherwise empty screen. They belong to the
+   end screen, which raises `overlay-up`, so they come back with it and not before. */
+body.dead-veil:not(.overlay-up) #mute,
+body.dead-veil:not(.overlay-up) #customBtn,
+body.dead-veil:not(.overlay-up) #menuBtn { opacity: 0; pointer-events: none; transition: opacity 80ms linear; }
 #end.dead h1 { color: #e8695f; }
 #end.dead .sigil { filter: grayscale(1) brightness(0.5); }
 

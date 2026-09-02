@@ -15,6 +15,14 @@ change the code and change this in the same commit, or the drift starts again.
   a deterministic noise displacement, |z| ≤ 0.35. Body sits at z = wallZ(body) + 0.55; a hand touching the
   wall sits at z = wallZ(hand) + 0.02; camera at body + (0, 0.30, 0.62) before rig effects.
 - Route runs from y ≈ 1.2 (start holds) to y ≈ 40 (summit altar). Cliff is ~9 m wide (x in [-4.5, 4.5]).
+- **The ground is at y = -0.55** (B53), a 30 × 30 m terrace: x in [-15, 15], z in [-6, 24], with relief
+  of about ±0.25 m, scree banked up to +0.12 m against the foot of the rock, and the outer ring
+  rolling away into the cloud sea. `CFG.FLOOR` (0.75) is the SHOULDER of someone standing on it, so
+  the ground sits a body's shoulder height below FLOOR and the standing eye (body.y + 0.30 = 1.05) is
+  1.40 m above the dirt at the wall and 1.60 m out on the open terrace. `wallZ` is untouched and
+  nothing is skirted: the wall plane already runs down to y = -8, so it passes through the ground and
+  the join is a real intersection. The sim knows nothing about any of this — it still stops a fall at
+  `CFG.FLOOR`, and the camera does the rest.
 
 ## Module ownership (one owner per file; nobody else edits these)
 | Domain | Files |
@@ -202,6 +210,15 @@ export async function createWorld({ renderer, scene, route, tier }) → world   
 world.wallZ(x, y) → number; world.holdZ(hold) → number
 world.update(dt, state, camera, events)               // holds glow when hovered/lit, decoys fall, particles, time-of-day from state.night. `events` fires the decoy dust on 'crumble', so it lands the frame the hand comes off
 world.setTier(tier)
+world.groundY → number; world.groundAt(x, z) → number; world.ground; world.boulders   // B53 — the floor at the base of
+                                                      // the cliff. `groundY` is the nominal plane (-0.55); `groundAt` is the surface, relief and
+                                                      // talus included, for putting anything down on it. `ground` is the one plane, `boulders` one
+                                                      // InstancedMesh of 12. Cost at tier phone: +3 draw calls and +30,432 triangles standing at
+                                                      // the base, +1 and +18,432 from 12 m up (the boulders leave the shadow pass and then the
+                                                      // frustum), nothing at all above ~20 m
+wallZ.groundY = world.groundY                         // the SAME number, hung on the wallZ function, because `rig.update(dt, state, wallZ, ...)`
+                                                      // is the whole arms-camera interface and main.js belongs to the integrator. camera.js reads
+                                                      // it to know how far a head has left to fall; it keeps a fallback constant beside it
 world.holds → THREE.Group of InstancedMesh; world.holdMeshes → that list        // B52: plain holds are instances of 12 unit-scale prototype blobs, not one deformed mesh each, so the cost of the rock does not grow with the number of holds. `world.holds` used to be the single merged Mesh; nothing outside world.js reads it. Runes, the summit and the decoys keep a mesh of their own; `world.chalk` and the contact skirts are still one merged mesh each
 
 export function createPost({ renderer, scene, camera, tier }) → post                      // post.js — EffectComposer: RenderPass → UnrealBloom → vignette/grain ShaderPass → OutputPass
@@ -216,6 +233,9 @@ rig.update(dt, state, wallZ, events, lookIn, aim)     // lookIn = Input.look, ai
                                                       // lookIn arrives in DEGREES, already clamped to the arc the hands allow (the table is in input.js), so the rig only decides how fast the
                                                       // head follows: LOOK.rate 8 under a finger, settle 5 when nothing is dragging, hurry 25 while lookIn.homing (the value is already eased,
                                                       // and easing it twice took the view 0.82 s home instead of 0.47). Looking is never gated: with both hands on the rock it is the neck
+                                                      // on the `impact` event the eye takes the last drop to the ground (B53): the sim parks the
+                                                      // BODY at CFG.FLOOR, which is a standing shoulder, so the eye keeps going to 0.35 m above
+                                                      // `wallZ.groundY` over 120 ms, ease-out, under the roll jolt that was already there
 rig.setPortrait(isPortrait); rig.kick(...)
 export function createWebLine({ variant, segments }) → line                              // webLine.js — the line as real geometry, lashing as it flies
 export function applySpiderSkin(root, { variant }) ; spiderUnlocked() / unlockSpider() / spiderSkin() / setSpiderSkin(v)   // spiderHand.js — the egg, remembered per device
@@ -229,6 +249,18 @@ hud.setStick(side, x, y)                              // called by input.js each
 hud.message(text, ms = 2200); hud.showTitle({ touch, seeds, seed }); hud.hideTitle(); hud.onStart(cb); hud.onSeed(cb); hud.showEnd(stats); hud.onRestart(cb)
 hud.onMenu(cb)                                        // the Menu button asks for the title screen back: mid-climb behind one confirmation, straight from the end screen. Unwired it reloads the page. `showTitle` resets its own shell (end screen, dead veil, pending end timer), so the integrator only has to rebuild the game state
 hud.onPause(cb)                                       // cb(true/false) around the mid-climb confirmation, so the sim can be frozen while the question is on screen
+// THE DEATH SEQUENCE (B53), driven by the `impact` event and not by phase 'fallen' — the two arrive in the same frame,
+// but the cut belongs to the ground arriving. `grounded` fires no `impact` and never reaches 'fallen', so letting go with
+// your feet down is untouched by all of it. Timings, from the frame `impact` lands:
+//   0 ms      camera.js starts the eye's last drop, to 0.35 m above the ground over 120 ms, with the existing roll jolt;
+//             audio.js's `impact` cue fires (it always did — it is keyed on the event's own name)
+//   0–80 ms   the screen CUTS TO BLACK: `body.dead-veil::after`, opaque #000, z-index 15 — over the canvas and the HUD,
+//             under the overlays — animated 0 → 1 by `deadCut 80ms linear`. `#hud.dead` goes on at the same moment and
+//             hides the HUD outright, and `#mute` / `#customBtn` / `#menuBtn` (z-index 40, not in #hud) go with it
+//   1200 ms   showEnd: "You fell" fades in OVER the black, which stays. The mute and hand buttons come back with it
+// The black is on <body> and not on #hud because showEnd fades #hud out and the wall must not come back for the death
+// screen. `hudEl.dead` is still the state flag; hud.js moves both together and every reset path (resetShell → showTitle,
+// hideEnd → Climb again) clears both. The old maroon `#hud.dead::after` veil and its `deadFlash` keyframes are gone.
 hud.openCustom() / closeCustom() / refreshCustomBtn() / onSkinChange(cb)                 // the hand panel behind the ✦ button
 export function createAudio() → audio                                                   // audio.js — WebAudio; call audio.unlock() on first user gesture
 audio.handle(events, state, dt)                       // wind bed follows height/night, cues per event, heartbeat when any stamina < 0.25

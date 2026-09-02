@@ -415,6 +415,29 @@ export function createHud(root) {
   // ---- phase-driven moments --------------------------------------------------------------------------------
   let endShown = false;
   let endTimer = 0;
+
+  // ---- B53: the ground, and the blackout ---------------------------------------------------------------------
+  // The screen cuts to black on `impact` -- the frame the body actually reaches the ground -- holds
+  // there for DEATH_HOLD with the impact cue under it, and then the end screen fades in OVER the
+  // black. The black itself is a class on <body>: #hud fades out under showEnd and would take its
+  // own pseudo-element with it, and the wall must not come back for the death screen. `hudEl.dead`
+  // stays the state flag every reset path already clears, and the two only ever move together.
+  // `grounded` -- letting go with your feet still on the ground -- pushes no `impact` and never
+  // reaches phase 'fallen', so none of this can happen to someone who was standing.
+  const DEATH_HOLD = 1200;
+  let died = false;
+  function setDead(on) {
+    died = !!on;
+    if (hudEl && hudEl.classList) hudEl.classList.toggle('dead', died);
+    if (doc.body && doc.body.classList) doc.body.classList.toggle('dead-veil', died);
+  }
+  function die(state) {
+    if (died) return;
+    setDead(true);
+    clearTimeout(endTimer);
+    endTimer = setTimeout(() => { if (!endShown) showEnd(state); }, DEATH_HOLD);
+  }
+
   function onPhase(prev, next, state) {
     if (next === 'falling') {
       hudEl.classList.add('falling');
@@ -428,17 +451,23 @@ export function createHud(root) {
       clearTimeout(endTimer);
       endTimer = setTimeout(() => { if (!endShown) showEnd(state); }, 2800);
     } else if (next === 'fallen') {
-      // The ground. Let the impact land before anything is asked of the player.
-      if (hudEl && hudEl.classList) hudEl.classList.add('dead');
-      message('The cliff keeps you', 3200, 'warn');
-      clearTimeout(endTimer);
-      endTimer = setTimeout(() => { if (!endShown) showEnd(state); }, 2400);
+      // The ground. The `impact` event in update() is what normally cuts to black, one frame
+      // earlier and for the right reason; this is the same call, for a frame handed no events.
+      // No message any more: it was drawn on a screen that is black by then.
+      die(state);
     }
   }
 
   // ---- update -----------------------------------------------------------------------------------------------
   function update(state, events) {
     if (!state) return;
+    // B53: read the drop first. `impact` and `fallen` arrive together, but the cut belongs to the
+    // ground arriving and not to the phase settling, and this is the order that says so.
+    if (events && events.length) {
+      for (let i = 0; i < events.length; i++) {
+        if (events[i] && events[i].type === 'impact') die(state);
+      }
+    }
     updateWeb(state);
     if (state.phase !== 'title' && !cache.hudOn && !endShown) showHud();
 
@@ -662,7 +691,8 @@ export function createHud(root) {
       setTimeout(() => { if (!endShown) endEl.hidden = true; }, 950);
     }
     endEl.classList.remove('dead');
-    hudEl.classList.remove('dead', 'falling');
+    setDead(false);                        // B53: and the blackout, on <body>, goes with it
+    hudEl.classList.remove('falling');
     cache.phase = null;                    // so the next climb announces itself again
     closeConfirm();
     hideHud();
@@ -784,7 +814,7 @@ export function createHud(root) {
     hideHud();
   }
   function hideEnd() {
-    if (hudEl && hudEl.classList) hudEl.classList.remove('dead');   // a fresh climb clears the veil
+    setDead(false);                        // a fresh climb clears the blackout, HUD flag and all
     if (endEl && endEl.classList) endEl.classList.remove('dead');
     endShown = false;
     syncOverlayFlag();
@@ -857,6 +887,7 @@ export function createHud(root) {
     muteBtn.removeEventListener('pointerdown', onMutePointer);
     clearTimeout(msgTimer);
     clearTimeout(endTimer);
+    setDead(false);          // B53: the blackout lives on <body> and would outlive this HUD
   }
 
   // B47: there is no LOOK button. Looking is a drag on the screen itself, which input.js binds to

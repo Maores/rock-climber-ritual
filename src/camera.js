@@ -41,6 +41,17 @@ const SUMMIT_TAU = 3.2;
 // through the lens (the harness point sits just in front of the eye when the rope is taut).
 const ROPE_LEAN = 0.14;
 const ROPE_PULL = 0.16;
+// B53 — the last foot of a fall. The sim stops the BODY at CFG.FLOOR (0.75), which is the shoulder
+// of someone standing; a body that has just hit the ground at 26 m/s does not stand. So on the
+// `impact` event the eye keeps going, down to a head lying on the dirt, and the existing roll jolt
+// slams with it. It is over in IMPACT_DROP because the screen is black by then — you feel it more
+// than you watch it, and only the first ~80 ms of it is on screen at all.
+const IMPACT_DROP = 0.12;      // seconds for the eye to travel the rest of the way down
+const EYE_ON_GROUND = 0.35;    // where it stops, above the ground surface: a head in the dirt
+// world.js publishes the ground's height on the wallZ function it hands the integrator, because
+// `rig.update(dt, state, wallZ, ...)` is the whole interface and main.js belongs to nobody here.
+// This is the value to fall back on if it ever arrives without one; keep the two in step.
+const GROUND_Y = -0.55;
 
 const _v = new THREE.Vector3();
 const _look = new THREE.Vector3();
@@ -112,6 +123,8 @@ export function createCameraRig(camera) {
   let doom = 0;                             // 0..1 how far into the plunge we are
   let tumble = 0;                           // spin accumulated while plunging
   let impact = 0;                           // jolt envelope when the ground arrives
+  let dropK = 0;                            // 0..1 through the last drop onto the ground (B53)
+  let dropSpan = 0;                         // ...and how far down it goes, in metres
   let yank = 0;                             // jolt envelope when the web goes taut
   let aimPull = 0;                          // 0..1 how far the view has drawn back to aim
   let titleBias = 1;                        // look higher on the title screen
@@ -141,7 +154,7 @@ export function createCameraRig(camera) {
   }
 
   function detectEvents(state, events) {
-    const out = { grab: false, release: false, fall: false, catch: false, summit: false, miss: false };
+    const out = { grab: false, release: false, fall: false, catch: false, summit: false, miss: false, impact: false };
     if (Array.isArray(events) && events.length) {
       for (const e of events) if (e && e.type in out) out[e.type] = true;
     }
@@ -173,6 +186,19 @@ export function createCameraRig(camera) {
     const L = hands.L, R = hands.R;
     const ev = detectEvents(state, events);
     const fov0 = baseFov();
+
+    // --- B53: the last drop onto the ground -------------------------------------------------
+    // The sim parks the BODY at CFG.FLOOR, which is a standing shoulder; a climber who has just
+    // arrived at 26 m/s is not standing, so the eye keeps going down to the dirt. Armed the frame
+    // `impact` lands — and equally by the phase, so a frame passed without an event list still
+    // gets it. The 'grounded' phase never reaches 'fallen' and never fires `impact`, so letting go
+    // with your feet on the ground is untouched by any of this.
+    if (state.phase !== 'fallen') { dropK = 0; dropSpan = 0; }
+    else if (dropSpan === 0) {          // the first 'fallen' frame, which is the frame `impact` lands
+      const g = typeof wz.groundY === 'number' && isFinite(wz.groundY) ? wz.groundY : GROUND_Y;
+      dropSpan = Math.max(0, (body.y + EYE_UP) - (g + EYE_ON_GROUND));
+    }
+    if (dropSpan > 0) dropK = Math.min(1, dropK + dt / IMPACT_DROP);
     const aspect = camera.aspect > 0 ? camera.aspect : 1;
 
     // --- gaze: weighted toward the hand being steered --------------------------------------
@@ -328,6 +354,10 @@ export function createCameraRig(camera) {
       camera.position.y += s * noise(t, 5.0);
       camera.position.z += s * 0.5 * noise(t, 8.0);
     }
+    // B53: and then the head goes down. Ease-out, because it arrives already travelling and what
+    // it does is stop. This is before the gaze is built, so the last frames look UP at the rock
+    // from the dirt rather than carrying on straight ahead.
+    if (dropSpan > 0) camera.position.y -= dropSpan * (1 - (1 - dropK) * (1 - dropK));
     // --- look around ------------------------------------------------------------------------
     // The drag lives in input.js and arrives already clamped to what the hands allow, in degrees;
     // all this does is follow it. While the input is easing itself home the rig hurries, because
@@ -368,7 +398,7 @@ export function createCameraRig(camera) {
       );
     }
 
-    if (state.phase === 'fallen' && impact < 0.001 && doom > 0.2) impact = 1;
+    if (ev.impact || (state.phase === 'fallen' && impact < 0.001 && doom > 0.2)) impact = 1;
     // the web biting: a short sharp jolt, distinct from the ground's
     for (const e of (events || [])) if (e && e.type === 'webhit') { yank = 1; }
     yank = approach(yank, 0, 5.5, dt);
