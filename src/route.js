@@ -252,5 +252,28 @@ export function generateRoute(seed = 7) {
   }
 
   const summit = holds[holds.length - 1];
-  return { holds, top: summit.y, seed };
+
+  // --- decoys ------------------------------------------------------------------------------
+  // Rock that looks exactly like a hold and crumbles the moment you weigh it. They sit beside
+  // the line, never on it: a decoy is only ever an alternative to a real hold, never the only
+  // way up, and never so close to one that a fair grab lands on it by accident.
+  const fakes = [];
+  const FAKE = { startY: 3.2, every: 2.15, jitter: 0.55, minGapToReal: 0.46, minGapToFake: 1.1, xSpread: 1.15 };
+  for (let y = FAKE.startY; y < summit.y - 1.8; y += FAKE.every) {
+    const fy = y + (rnd() - 0.5) * 2 * FAKE.jitter;
+    // sit to one side of the line's local centre, out where a wandering hand might try it
+    const near = holds.filter((h) => Math.abs(h.y - fy) < 1.2);
+    if (!near.length) continue;
+    const cx = near.reduce((a, h) => a + h.x, 0) / near.length;
+    const side = rnd() < 0.5 ? -1 : 1;
+    const fx = cx + side * (0.55 + rnd() * FAKE.xSpread);
+    if (Math.abs(fx) > R.X_LIMIT + 0.8) continue;
+    let clash = false;
+    for (const h of holds) if (Math.hypot(h.x - fx, h.y - fy) < h.size + FAKE.minGapToReal) { clash = true; break; }
+    if (!clash) for (const f of fakes) if (Math.hypot(f.x - fx, f.y - fy) < FAKE.minGapToFake) { clash = true; break; }
+    if (clash) continue;
+    fakes.push({ id: 10000 + fakes.length, x: r4(fx), y: r4(fy), size: r4(0.11 + rnd() * 0.05), kind: 'fake', lit: false, angle: r4(rnd() * Math.PI * 2) });
+  }
+
+  return { holds, fakes, top: summit.y, seed };
 }

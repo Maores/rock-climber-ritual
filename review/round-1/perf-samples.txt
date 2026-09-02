@@ -1,0 +1,25 @@
+Frame-rate samples — phone tier, 390x844 CSS px @2x (drawing buffer 780x1688), http://localhost:8787/?tier=phone&fps=1
+Measured from window.__ritual.perf.sample(10) (counts rendered frames over 10 s of wall time) with post effects on
+(RenderPass -> UnrealBloom half-res -> vignette/grain -> OutputPass, MSAA x2, shadow map 1024).
+The tab was the only game tab rendering; the desktop tab was navigated to about:blank first.
+Hardware: the chrome-devtools Chrome on this Mac (120 Hz display) — not an iPhone. The iOS Simulator was not
+available on this machine (xcrun simctl missing), so no device-class measurement exists in this round.
+Autopilot climbing during every sample (hands moving, hover rings, rope, shadows).
+
+  segment            fps      frames  seconds  worstFrameMs  pixelRatio  tier    body y at end  night
+  start  (0.8->6 m)  120.02   1201    10.01    10.4          2           phone   6.00           0.15
+  mid    (20->24 m)  120.03   1201    10.01    10.4          2           phone   24.35          0.61
+  upper  (33->37 m)  120.02   1201    10.01    10.5          2           phone   37.29          0.93
+
+perf.history (2-second windows, sim t -> fps): first window 82 fps (shader warm-up after the title), every later
+window 119.5-120.1 fps across both the title session and the climb; minFpsWindow 119.5; pixel ratio never
+stepped down (watchdog threshold 24 fps).
+Renderer counters at the end: 72 draw calls, 472,953 triangles per frame.
+Autopilot during the series: 79 grabs, 0 timeouts, 0 falls. Console errors: 0.
+
+Audio bed at each height (window.__ritual.audio.debug()):
+  start   wind.level 0.109  bandpass 392 Hz   music playing, gain 0.332, master rms 0.019
+  6 m     wind.level 0.169  bandpass 466 Hz   music gain 0.35, rms 0.031
+  24 m    wind.level 0.380  bandpass 741 Hz   music gain 0.35, rms 0.050
+  37 m    wind.level 0.529  bandpass 935 Hz   music gain 0.35, rms 0.154
+AudioContext state "running" after the trusted Space key press that started the climb; unlocked true; muted false.

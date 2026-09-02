@@ -263,7 +263,7 @@ export function createHud(root) {
     if ((hand.hover || 0) > 0.5) return 'hover';
     return 'free';
   }
-  let keyHints = null; // { L: 'Q', R: '⏎' } when a keyboard is in use
+  let keyHints = null; // { L: 'LMB', R: 'RMB' } on a pointer device: the two mouse buttons are the grips
   function setPill(side, st) {
     if (pillState[side] === st) return;
     pillState[side] = st;
@@ -374,6 +374,11 @@ export function createHud(root) {
       message('The ritual is complete', 3400, 'rune');
       clearTimeout(endTimer);
       endTimer = setTimeout(() => { if (!endShown) showEnd(state); }, 2800);
+    } else if (next === 'fallen') {
+      // The rope only saves you once; the second fall ends the climb.
+      message('The rope is spent · the cliff keeps you', 3400, 'warn');
+      clearTimeout(endTimer);
+      endTimer = setTimeout(() => { if (!endShown) showEnd(state); }, 2600);
     }
   }
 
@@ -461,16 +466,17 @@ export function createHud(root) {
         '</div>' +
         '<div class="mini"><span class="mini-pill lit">Holding</span>' + ring(false, 58) + '<b>Right</b></div>' +
         '</div>' +
-        '<p class="hint">Hanging drains a hand — the arc around its stick shows how much is left. The rope catches every fall.</p>'
+        '<p class="hint">Hanging drains a hand — the arc around its stick shows how much is left. The rope saves you <b>once</b>, and not every rock holds.</p>'
       );
     }
     return (
       '<h2>How to climb</h2>' +
       '<div class="row">' +
-      '<div class="hand"><b>Left hand</b><div class="keys"><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd><span class="sep">reach</span></div><div class="keys"><kbd>Q</kbd><span class="sep">grip</span></div></div>' +
-      '<div class="hand"><b>Right hand</b><div class="keys"><kbd>↑</kbd><kbd>←</kbd><kbd>↓</kbd><kbd>→</kbd><span class="sep">reach</span></div><div class="keys"><kbd>Enter</kbd><span class="sep">or</span><kbd>/</kbd><span class="sep">grip</span></div></div>' +
+      '<div class="hand"><b>Left hand</b><div class="keys"><kbd>Left click</kbd><span class="sep">grip / let go</span></div></div>' +
+      '<div class="hand"><b>Right hand</b><div class="keys"><kbd>Right click</kbd><span class="sep">grip / let go</span></div></div>' +
+      '<p class="hint"><em>Move the mouse</em> and the hand that is hanging free follows it. Let a hand go, point where you want it, click again to take the rock.</p>' +
       '</div>' +
-      '<p class="hint">Or drag the sticks and click <em>GRIP</em> with the mouse. Hanging drains a hand — rest on the <i>glowing runes</i>. The rope catches every fall. <kbd>M</kbd> mutes.</p>'
+      '<p class="hint">Hanging drains a hand — rest on the <i>glowing runes</i>. The rope saves you <b>once</b>. Not every rock holds. <kbd>M</kbd> mutes.</p>'
     );
   }
   function footHtml() {
@@ -509,7 +515,7 @@ export function createHud(root) {
 
   function showTitle(opts = {}) {
     const touch = opts.touch != null ? !!opts.touch : (navigator.maxTouchPoints > 0);
-    keyHints = touch ? null : { L: 'Q', R: '⏎' };
+    keyHints = touch ? null : { L: 'LMB', R: 'RMB' };
     pillState.L = pillState.R = '';           // force the pills to re-render with or without key hints
     setPill('L', 'free');
     setPill('R', 'free');

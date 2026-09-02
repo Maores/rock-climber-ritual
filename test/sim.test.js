@@ -131,19 +131,23 @@ test('grab: a tap grabs the nearest hold within SNAP, closes the hand onto it (n
   step(s, inp({ tapL: true, L: { x: 0, y: 1 } }), DT);
   assert.equal(s.hands.L.gripping, true);
   assert.equal(s.hands.L.holdId, 2);
-  assert.deepEqual([s.hands.L.tx, s.hands.L.ty], [hold.x, hold.y], 'the target is the hold at once');
+  // The hand grips where the fingers landed: the target is a point ON the rock, not its centre.
+  const off = Math.hypot(s.hands.L.tx - hold.x, s.hands.L.ty - hold.y);
+  assert.ok(off <= hold.size, `the target is on the rock (off by ${off.toFixed(3)} of ${hold.size})`);
+  assert.deepEqual([s.hands.L.tx, s.hands.L.ty], [hold.x + s.hands.L.gripDX, hold.y + s.hands.L.gripDY], 'the target is the contact point at once');
+  const gripPt = { x: hold.x + s.hands.L.gripDX, y: hold.y + s.hands.L.gripDY };
   assert.ok(dist(s.hands.L, before) < 0.02, 'the hand is still where it was on the grab frame');
   assert.deepEqual(drainEvents(s), [{ type: 'grab', hand: 'L', holdId: 2 }]);
   // It closes onto the hold without overshoot and sits exactly on it within 0.2 s.
   let d = dist(s.hands.L, hold);
   for (let t = 0; t < 0.2; t += DT) {
     step(s, inp(), DT);
-    const nd = dist(s.hands.L, hold);
+    const nd = dist(s.hands.L, gripPt);
     assert.ok(nd <= d + 1e-9, `closing in (${nd} after ${d})`);
     d = nd;
   }
-  assert.equal(s.hands.L.x, hold.x);
-  assert.equal(s.hands.L.y, hold.y);
+  assert.equal(s.hands.L.x, gripPt.x, 'settles exactly on the contact point');
+  assert.equal(s.hands.L.y, gripPt.y);
   run(s, 0.4, inp());
   assert.ok(s.hands.L.curl > 0.95, 'fingers curl onto the hold');
   assert.equal(s.hands.L.hover, 1);
@@ -156,14 +160,15 @@ test('grab: the settle is stable at the largest step (1/20 s) and ends locked on
   step(s, inp({ tapL: true, L: { x: 0, y: 1 } }), 1 / 20);
   assert.equal(s.hands.L.holdId, 2);
   const hold = s.route.holds[2];
-  let d = dist(s.hands.L, hold);
+  const grip = { x: hold.x + s.hands.L.gripDX, y: hold.y + s.hands.L.gripDY };
+  let d = dist(s.hands.L, grip);
   for (let i = 0; i < 10; i++) {
     step(s, inp(), 1 / 20);
-    const nd = dist(s.hands.L, hold);
+    const nd = dist(s.hands.L, grip);
     assert.ok(Number.isFinite(nd) && nd <= d + 1e-9, `diverged: ${nd} after ${d}`);
     d = nd;
   }
-  assert.equal(s.hands.L.x, hold.x);
+  assert.equal(s.hands.L.x, hold.x + s.hands.L.gripDX, 'locked exactly on the contact point');
   assert.equal(s.hands.L.vx, 0);
 });
 

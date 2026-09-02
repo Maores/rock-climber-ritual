@@ -1,0 +1,21 @@
+Five-minute soak (a) — phone tier, 390x844 @2x, http://localhost:8787/?tier=phone&fps=1, only game tab rendering
+Driver: review/harness.js startSoak(5, {fallEvery: 40}) with window.__ritual.debug.autopilot — a stamina-aware
+autopilot (a hand below 0.35 stamina does not tap GRIP until it has refilled) that climbs continuously and never
+rests on the rune holds. Every 40 s the harness releases both hands on purpose (fall -> rope catch -> re-grab).
+Post effects on. AudioContext running (trusted key press), music playing.
+
+Summary (window.__harness.soak.summary):
+  wallSeconds 300, finalPhase climbing, finalHeight 6.62 m, highest point 12.0 m, summits 0
+  grabs 287, autopilotTimeouts 0, longestGapBetweenGrabsMs 4002
+  fallEvents 32 (6 induced by the harness, 26 from stamina slips), catchEvents 32 (every fall caught), slipEvents 53,
+  runeEvents 1, summitEvents 0
+  fps mean 120.0, min 119.9, max 120.1 over 150 two-second samples; minFpsWindow 119.9; pixel ratio stayed 2
+  console errors: 0
+
+Every 10 s (wall s, fps, phase, body y, falls so far, runes lit):
+  2 120 c 1.6 0 0 | 12 120 c 6.1 0 0 | 22 120 c 5.9 1 0 | 32 120.1 c 7.5 1 1 | 42 119.9 c 9.5 2 1 | 52 120.1 c 11.8 2 1
+  62 120 c 9.5 4 1 | 72 120 c 9.9 5 1 | 82 120 c 9.0 6 1 | 92 120 c 9.5 7 1 | 102 120 c 10.0 8 1 | 112 119.9 c 9.0 9 1
+  122 120 c 7.1 11 1 | 132 120 c 9.2 12 1 | 142 120 c 9.2 13 1 | 152 120 c 8.3 14 1 | 162 120 c 6.4 16 1 | 172 120 c 8.2 17 1
+  182 120.1 c 11.5 17 1 | 192 120 c 10.6 18 1 | 202 120 c 8.4 20 1 | 212 120 c 9.0 21 1 | 222 120 c 11.1 22 1 | 232 120 c 10.6 23 1
+  242 120 c 8.3 25 1 | 252 120 c 8.3 26 1 | 262 120 c 11.6 26 1 | 272 120 f 10.5 27 1 | 282 120 c 9.2 29 1 | 292 120 c 7.0 31 1
+  (c = climbing, f = falling)

@@ -1,0 +1,47 @@
+Audio trace — phone tier, 390x844 @2x, http://localhost:8787/?tier=phone&fps=1
+AudioContext unlocked by a trusted Space key press on the title screen (state "running", unlocked true).
+Sampler: review/harness.js rmsTrace(6) — window.__ritual.audio.debug() polled every ~33 ms for 6 s while the
+stamina-aware autopilot climbed from about 6 m to 9 m. rms = RMS of the master bus (post-compressor) over the
+last ~46 ms; wind = wind-bed level; heartbeats = cumulative heartbeat count.
+
+Summary: 177 samples, rms min 0.029 / mean 0.059 / max 0.161; wind level 0.187 -> 0.206 over the 6 s (rising with
+height; it was 0.109 at the start holds and 0.529 at 37 m in perf-samples.txt); heartbeats 16 -> 17 (one beat while a
+hand's stamina was under 0.25); music "Ritual" playing, gain 0.35, currentTime 41.9 s of 264.1 s; muted false.
+
+Sim events inside the window and the master RMS 150 ms before vs 200 ms after each (t = sim seconds):
+  t=37.08 grab    R hold 37   rms 0.049 -> 0.073
+  t=37.41 release L hold 36   rms 0.033 -> 0.059
+  t=37.52 grab    L hold 38   rms 0.041 -> 0.068
+  t=37.84 release R hold 37   rms 0.045 -> 0.050
+  t=38.14 grab    R hold 39   rms 0.045 -> 0.084
+  t=38.47 release L hold 38   rms 0.044 -> 0.068
+  t=38.57 grab    L hold 40   rms 0.047 -> 0.077
+  t=38.88 release R hold 39   rms 0.063 -> 0.059
+  t=39.19 grab    R hold 41   rms 0.065 -> 0.085
+  t=39.51 release L hold 40   rms 0.066 -> 0.089
+  t=39.61 grab    L hold 42   rms 0.065 -> 0.083
+  t=39.93 release R hold 41   rms 0.056 -> 0.061
+  t=40.22 grab    R hold 43   rms 0.057 -> 0.090
+  t=40.53 release L hold 42   rms 0.055 -> 0.088
+  t=40.63 grab    L hold 44   rms 0.055 -> 0.085
+  t=40.96 release R hold 43   rms 0.037 -> 0.042
+  t=41.26 grab    R hold 45   rms 0.052 -> 0.072
+  t=41.57 release L hold 44   rms 0.040 -> 0.067
+  t=41.67 grab    L hold 46   rms 0.044 -> 0.067
+Event counts in the window: grab 10, release 9, arm 5, miss 5.
+
+Every third sample (ms, rms, wind, heartbeats):
+  0 0.126 0.187 16 | 103 0.041 0.187 16 | 206 0.035 0.187 16 | 307 0.034 0.187 16 | 410 0.030 0.187 16 | 513 0.031 0.187 16
+  617 0.069 0.187 17 | 721 0.040 0.187 17 | 823 0.046 0.187 17 | 924 0.044 0.187 17 | 1028 0.051 0.187 17 | 1130 0.049 0.187 17
+  1231 0.139 0.187 17 | 1334 0.037 0.187 17 | 1438 0.029 0.188 17 | 1540 0.041 0.188 17 | 1641 0.034 0.188 17 | 1744 0.036 0.189 17
+  1847 0.043 0.190 17 | 1947 0.050 0.190 17 | 2048 0.054 0.191 17 | 2148 0.046 0.191 17 | 2249 0.049 0.191 17 | 2351 0.057 0.191 17
+  2457 0.048 0.191 17 | 2558 0.045 0.192 17 | 2660 0.050 0.193 17 | 2764 0.076 0.193 17 | 2864 0.061 0.193 17 | 2965 0.068 0.194 17
+  3067 0.057 0.195 17 | 3171 0.059 0.195 17 | 3273 0.063 0.195 17 | 3374 0.107 0.195 17 | 3477 0.066 0.195 17 | 3581 0.064 0.196 17
+  3683 0.066 0.197 17 | 3786 0.136 0.197 17 | 3890 0.054 0.197 17 | 3990 0.060 0.198 17 | 4091 0.065 0.199 17 | 4194 0.057 0.199 17
+  4298 0.052 0.199 17 | 4398 0.139 0.199 17 | 4500 0.066 0.200 17 | 4604 0.049 0.200 17 | 4707 0.073 0.201 17 | 4811 0.161 0.201 17
+  4914 0.039 0.202 17 | 5016 0.033 0.202 17 | 5120 0.040 0.203 17 | 5223 0.048 0.203 17 | 5323 0.054 0.203 17 | 5423 0.149 0.204 17
+  5523 0.038 0.204 17 | 5625 0.039 0.205 17 | 5729 0.059 0.205 17 | 5830 0.144 0.205 17 | 5931 0.045 0.206 17
+
+Earlier in the same session (perf-samples.txt): during a fall the wind level jumped to 0.706 (from 0.11 at that
+height) and the heartbeat count reached 121 after a long stretch of low stamina; after the summit the count was
+unchanged while both hands rested at full stamina.

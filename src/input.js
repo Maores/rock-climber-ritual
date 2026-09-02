@@ -42,7 +42,7 @@ function keyCode(e) {
   return KEY_TO_CODE[k] || e.code || '';
 }
 
-export function createInput({ hud = null, keyboard = true, win, now = defaultNow } = {}) {
+export function createInput({ hud = null, keyboard = true, win, now = defaultNow, mouse = null, getHands = null } = {}) {
   const target = win !== undefined ? win : (typeof window !== 'undefined' ? window : null);
   const pointer = { L: { x: 0, y: 0 }, R: { x: 0, y: 0 } };   // position-mapped sticks
   const active = { L: null, R: null };                         // pointerId holding each stick
@@ -151,6 +151,53 @@ export function createInput({ hud = null, keyboard = true, win, now = defaultNow
     }
   }
 
+  // ---------------------------------------------------------------------------------------
+  // Desktop mouse: the cursor IS the free hand, and the two buttons are the two grips.
+  //
+  // The pointer's offset from the middle of the view maps straight onto that hand's reach
+  // circle (the same position mapping the thumb sticks use), so the hand goes where you point.
+  // Left button toggles the left grip, right button the right one. Whichever hand is hanging
+  // free follows the cursor; with both hands on the rock the cursor does nothing until you
+  // let one go, which is exactly the rhythm of the climb.
+  const mousePos = { x: 0, y: 0, has: false };
+  let mouseSide = 'R';                       // which hand the cursor drives when both are free
+  const mouseVec = { x: 0, y: 0 };
+
+  function freeSide() {
+    const h = typeof getHands === 'function' ? getHands() : null;
+    if (!h || !h.L || !h.R) return mouseSide;
+    const lFree = !h.L.gripping, rFree = !h.R.gripping;
+    if (lFree && !rFree) return 'L';
+    if (rFree && !lFree) return 'R';
+    if (lFree && rFree) return mouseSide;
+    return null;                             // both hands on the rock: the cursor rests
+  }
+
+  function bindMouse(el) {
+    const measure = () => {
+      const b = el.getBoundingClientRect ? el.getBoundingClientRect() : { left: 0, top: 0, width: 1, height: 1 };
+      return { cx: b.left + b.width / 2, cy: b.top + b.height / 2, r: Math.max(1, Math.min(b.width, b.height) * 0.36) };
+    };
+    on(el, 'pointermove', (e) => {
+      if (e.pointerType && e.pointerType !== 'mouse') return;
+      mousePos.x = e.clientX; mousePos.y = e.clientY; mousePos.has = true;
+      const { cx, cy, r } = measure();
+      mouseVec.x = (e.clientX - cx) / r;
+      mouseVec.y = -(e.clientY - cy) / r;     // screen y grows downward; the sim wants up
+      clampDisc(mouseVec);
+    });
+    on(el, 'pointerdown', (e) => {
+      if (e.pointerType && e.pointerType !== 'mouse') return;
+      if (e.button !== 0 && e.button !== 2) return;
+      prevent(e);
+      const side = e.button === 0 ? 'L' : 'R';
+      mouseSide = side;
+      taps[side] = true;
+    });
+    on(el, 'contextmenu', prevent);           // the right button is a grip, not a menu
+  }
+  if (mouse) bindMouse(mouse);
+
   function read() {
     const t = now();
     const dt = Math.min(0.1, Math.max(0, (t - lastT) / 1000));
@@ -158,8 +205,11 @@ export function createInput({ hud = null, keyboard = true, win, now = defaultNow
     integrateKeys(dt);
     const out = { L: { x: 0, y: 0 }, R: { x: 0, y: 0 }, tapL: taps.L, tapR: taps.R };
     taps.L = taps.R = false;
+    const mSide = mouse && mousePos.has ? freeSide() : null;
     for (const side of ['L', 'R']) {
-      const v = active[side] !== null ? pointer[side] : virtual[side];
+      // touch stick wins, then the cursor for the hand it is driving, then the keyboard
+      const v = active[side] !== null ? pointer[side]
+        : (side === mSide ? mouseVec : virtual[side]);
       out[side].x = v.x;
       out[side].y = v.y;
       if (hud && typeof hud.setStick === 'function') hud.setStick(side, v.x, v.y);

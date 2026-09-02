@@ -1,0 +1,17 @@
+Keyboard input run — desktop page 1440x900 @2x, http://localhost:8787/?fps=1
+Driver: review/harness.js keyboardBot(6) — synthetic KeyboardEvents dispatched on window
+(WASD held to steer the left hand, Q to grip; arrows held to steer the right hand, Enter to grip).
+Fresh climb (debug.restart), phase at start: climbing.
+
+Result: holdsGrabbed 6 of 6 requested, every grab landed on the intended hold, 0 console errors.
+
+Per-hold log (t = sim seconds, ms = wall time from release to grab):
+  t=0.77  hand L  wanted hold 2  grabbed 2   432 ms
+  t=1.60  hand R  wanted hold 3  grabbed 3   830 ms
+  t=2.41  hand L  wanted hold 4  grabbed 4   807 ms
+  t=3.22  hand R  wanted hold 5  grabbed 5   805 ms
+  t=4.02  hand L  wanted hold 6  grabbed 6   806 ms
+  t=4.83  hand R  wanted hold 7  grabbed 7   809 ms
+
+End state: phase climbing, body (x -0.319, y 1.681), L on hold 6 (stamina 0.803), R on hold 7 (stamina 0.846),
+falls 0, runesLit [], fps 34.7 (two game tabs rendering concurrently on one GPU during this run), errors 0.

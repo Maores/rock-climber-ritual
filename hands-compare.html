@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hand candidates — Rock Climber: The Ritual</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root { --bg:#14100d; --panel:#1f1813; --line:#3a2c22; --text:#f1e6d8; --muted:#b9a58f; --teal:#7fe0ff; --gold:#d99a5b; --ok:#8ddc9b; --warn:#ffb454; }
+  * { box-sizing:border-box; }
+  body { margin:0; background: radial-gradient(1200px 600px at 50% -10%, #3a2333 0%, var(--bg) 60%); color:var(--text); font-family: Inter, system-ui, sans-serif; }
+  header { padding: 34px 28px 10px; text-align:center; }
+  header h1 { font-family: Cinzel, serif; font-weight:700; letter-spacing:.06em; margin:0; font-size: clamp(22px, 3.4vw, 40px); color: var(--gold); text-shadow: 0 0 24px rgba(217,154,91,.25); }
+  header p { color: var(--muted); margin: 8px auto 0; max-width: 760px; line-height:1.55; }
+  .grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 18px; padding: 22px 28px 60px; max-width: 1500px; margin: 0 auto; }
+  .card { background: var(--panel); border:1px solid var(--line); border-radius: 16px; overflow:hidden; display:flex; flex-direction:column; box-shadow: 0 10px 30px rgba(0,0,0,.35); }
+  .card.pick { border-color: var(--teal); box-shadow: 0 0 0 1px var(--teal), 0 10px 40px rgba(127,224,255,.12); }
+  .view { position:relative; aspect-ratio: 4/3; background: linear-gradient(180deg, #2a1e2e 0%, #17110f 100%); }
+  .view canvas, .view img { position:absolute; inset:0; width:100%; height:100%; display:block; }
+  .view img { object-fit: cover; }
+  .view .tag { position:absolute; left:10px; top:10px; font-size:11px; letter-spacing:.08em; text-transform:uppercase; padding:4px 8px; border-radius:999px; background: rgba(0,0,0,.55); color: var(--muted); backdrop-filter: blur(6px); }
+  .view .tag.live { color: var(--teal); }
+  .view .hint { position:absolute; right:10px; bottom:10px; font-size:11px; color: rgba(255,255,255,.55); }
+  .body { padding: 14px 16px 16px; display:flex; flex-direction:column; gap:8px; }
+  .title { display:flex; align-items:baseline; justify-content:space-between; gap:10px; }
+  .title h2 { margin:0; font-size: 17px; font-weight:600; }
+  .lic { font-size: 11px; padding: 3px 8px; border-radius: 999px; border:1px solid var(--line); color: var(--muted); white-space:nowrap; }
+  .lic.cc0 { color: var(--ok); border-color: rgba(141,220,155,.4); }
+  .lic.ccby { color: var(--warn); border-color: rgba(255,180,84,.4); }
+  .lic.mit { color: var(--ok); border-color: rgba(141,220,155,.4); }
+  .facts { display:flex; flex-wrap:wrap; gap:6px; }
+  .facts span { font-size: 12px; color: var(--muted); background: rgba(255,255,255,.04); border:1px solid var(--line); padding: 3px 8px; border-radius: 8px; }
+  .verdict { font-size: 13.5px; line-height:1.5; color: var(--text); }
+  .verdict b { color: var(--teal); }
+  .src { font-size: 12px; color: var(--muted); }
+  .src a { color: var(--gold); text-decoration:none; }
+  .err { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; color: var(--warn); font-size: 13px; padding: 20px; text-align:center; }
+  .card { cursor:pointer; transition: transform .15s, box-shadow .15s; }
+  .card:hover { transform: translateY(-2px); }
+  .card.selected { outline: 2px solid var(--teal); outline-offset: -2px; box-shadow: 0 0 0 4px rgba(127,224,255,.18), 0 14px 40px rgba(127,224,255,.12); }
+  .card .check { position:absolute; right:10px; top:10px; width:26px; height:26px; border-radius:50%; background: var(--teal); color:#062a33; display:none; align-items:center; justify-content:center; font-weight:700; font-size:15px; }
+  .card.selected .check { display:flex; }
+  #sendbar { position: fixed; left:0; right:0; bottom:0; transform: translateY(110%); transition: transform .25s ease; background: rgba(20,14,11,.92); backdrop-filter: blur(10px); border-top: 1px solid var(--line); padding: 12px 18px calc(12px + env(safe-area-inset-bottom)); display:flex; gap:10px; align-items:center; flex-wrap: wrap; z-index: 20; }
+  #sendbar.show { transform: none; }
+  #sendbar .pick { flex: 1 1 220px; font-size: 14px; }
+  #sendbar .pick b { color: var(--teal); }
+  #sendbar input { flex: 2 1 260px; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--line); background: rgba(255,255,255,.05); color: var(--text); font: inherit; }
+  #sendbar button { appearance:none; border:0; border-radius: 10px; padding: 11px 18px; font: inherit; font-weight: 600; cursor: pointer; background: var(--teal); color: #062a33; }
+  #sendbar button[disabled] { opacity: .5; cursor: default; }
+  #sendbar .status { font-size: 13px; color: var(--ok); flex-basis: 100%; }
+  body { padding-bottom: 110px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>WHICH HANDS?</h1>
+  <p>Every free rigged hand that can be downloaded without an account, shown live in 3D under the game's dusk sky (drag to rotate, they spin on their own), plus source images for the ones locked in other formats, and my procedural fallback. Untextured models are shown with the skin material I would give them.</p>
+</header>
+<div class="grid" id="grid"></div>
+
+<div id="sendbar">
+  <div class="pick">Your pick: <b id="pickName">none yet</b></div>
+  <input id="note" placeholder="Optional note for Claude (why, or what to tweak)…">
+  <button id="sendBtn" disabled>Send to Claude →</button>
+  <div class="status" id="sendStatus"></div>
+</div>
+<script type="importmap">{ "imports": { "three": "./vendor/three/three.module.js", "three/addons/": "./vendor/three/addons/" } }</script>
+<script type="module">
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
+import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
+
+const CANDS = [
+  { id:'pp_real', name:'Realistic Hand', by:'J-Toastie, Poly Pizza', lic:'CC-BY 3.0', licClass:'ccby', glb:'assets/models/candidates/polypizza_realistic_hand.glb', img:'assets/models/candidates/img/polypizza_realistic.jpg', url:'https://poly.pizza/m/2lEkhDqfQf',
+    facts:['3,036 tris','25 joints, full finger chains','2 textures','"Grab" animation','4.5 MB'], pick:true,
+    verdict:'<b>My pick.</b> Textured, fully rigged, and it already carries a grab animation, so finger curl on a hold is real motion instead of my approximation. Hand only: I add a forearm with a fabric sleeve whose cuff hides the wrist seam. Needs a credit line to J-Toastie.' },
+  { id:'pp_rig', name:'Rigged Hand', by:'J-Toastie, Poly Pizza', lic:'CC-BY 3.0', licClass:'ccby', glb:'assets/models/candidates/polypizza_rigged_hand.glb', img:'assets/models/candidates/img/polypizza_rigged.jpg', url:'https://poly.pizza/m/BEy8jbxm6A', skin:true,
+    facts:['1,518 tris','20 joints','no textures','1 animation','91 KB'],
+    verdict:'Lighter and simpler. Shown here with my skin material because it ships untextured. Reads as a hand, but the shape is stylized and the knuckles are soft.' },
+  { id:'pp_glove', name:'Gloved Hand', by:'J-Toastie, Poly Pizza', lic:'CC-BY 3.0', licClass:'ccby', glb:'assets/models/candidates/polypizza_gloved_hand.glb', img:'assets/models/candidates/img/polypizza_gloved.jpg', url:'https://poly.pizza/m/MTB4egc4Vh',
+    facts:['3,848 tris','22 joints','textured glove','621 KB'],
+    verdict:'The "gloves hide the skin" trick, ready-made. Realistic at a fraction of the effort, but it changes the fiction: a ritual climber with gloves.' },
+  { id:'xr', name:'Generic VR Hand', by:'Meta, WebXR input profiles', lic:'MIT', licClass:'mit', glb:'assets/models/candidates/webxr_generic_hand_right.glb', url:'https://github.com/immersive-web/webxr-input-profiles/tree/main/packages/assets/profiles/generic-hand', skin:true,
+    facts:['2,314 tris','25 joints','untextured (skin material applied)','94 KB'],
+    verdict:'Clean proportions, exactly the joint layout hand tracking uses, so posing per finger is easy. No texture, so all realism would come from my material work. Solid fallback.' },
+  { id:'oga', name:'FPS Arms (rigged)', by:'para, OpenGameArt', lic:'CC0', licClass:'cc0', img:'assets/models/candidates/img/oga_fps_arms.jpg', url:'https://opengameart.org/content/fps-arms-rigged-only',
+    facts:['~8,000 tris','finger bones (Rigify)','1024px texture','FBX only, 1.4 MB'],
+    verdict:'Full first-person arms from a MakeHuman mesh, which is the most complete option on paper. FBX only: it needs a conversion to glTF that may lose the skinning. Worth a try only if the Poly Pizza hand disappoints.' },
+  { id:'wrad', name:'WRAD ARMS', by:'wriks, itch.io', lic:'CC0', licClass:'cc0', img:'assets/models/candidates/img/wrad_arms.gif', url:'https://wriks.itch.io/wrad-arms',
+    facts:['1,200 tris','"fully rigged IK armature"','512px texture','GLB/FBX/OBJ, 1.9 MB'],
+    verdict:'Deliberately Half-Life-1 retro. Charming, but it fails the "real looking" bar you set.' },
+  { id:'psx', name:'PSX First Person Arms', by:'Drillimpact, itch.io', lic:'CC0', licClass:'cc0', img:'assets/models/candidates/img/psx_arms.png', url:'https://drillimpact.itch.io/psx-first-person-arms-free',
+    facts:['PlayStation-1 style','17 animations','512px texture','FBX/GLB, 3.8 MB'],
+    verdict:'Same story: retro by design. Listed so you can see what "free rigged arms" usually means.' },
+  { id:'proc', name:'Procedural fallback', by:'built in code, no asset', lic:'ours', licClass:'', proc:true,
+    facts:['~1,900 tris','curl per joint in code','chalk + finger tape','0 KB download'],
+    verdict:'What I would build if no model convinces you: capsule fingers, rounded palm, skin sheen, chalked fingertips and tape. Honest limit: it will read as stylized, not photographic.' },
+];
+
+
+// ---- selection + Send to Claude (POST /api/event on the dev server) ----
+let selected = null;
+function wireSelect(el, c) {
+  let downX = 0, downY = 0, moved = false;
+  el.addEventListener('pointerdown', e => { downX = e.clientX; downY = e.clientY; moved = false; });
+  el.addEventListener('pointermove', e => { if (Math.hypot(e.clientX - downX, e.clientY - downY) > 6) moved = true; });
+  el.addEventListener('click', e => {
+    if (moved || e.target.closest('a')) return;
+    document.querySelectorAll('.card.selected').forEach(x => x.classList.remove('selected'));
+    el.classList.add('selected'); selected = { id: c.id, name: c.name, lic: c.lic, by: c.by };
+    document.getElementById('pickName').textContent = c.name;
+    document.getElementById('sendBtn').disabled = false; document.getElementById('sendStatus').textContent = '';
+    document.getElementById('sendbar').classList.add('show');
+  });
+}
+document.getElementById('sendBtn').addEventListener('click', async () => {
+  if (!selected) return;
+  const btn = document.getElementById('sendBtn'), st = document.getElementById('sendStatus');
+  btn.disabled = true; st.textContent = 'Sending…';
+  try {
+    const r = await fetch('/api/event', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: 'submit', topic: 'hands', choice: selected.id, name: selected.name, license: selected.lic, by: selected.by, note: document.getElementById('note').value.trim(), ua: navigator.userAgent }) });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    st.textContent = 'Sent ✓  Claude has your pick' + (document.getElementById('note').value.trim() ? ' and your note.' : '.') + ' You can change it and send again.';
+  } catch (e) { st.textContent = 'Could not send (' + e.message + '). Is the dev server running?'; }
+  btn.disabled = false;
+});
+
+const grid = document.getElementById('grid');
+const cards = [];
+for (const c of CANDS) {
+  const el = document.createElement('div'); el.className = 'card' + (c.pick ? ' pick' : '');
+  const live = !!(c.glb || c.proc);
+  el.innerHTML = `
+    <div class="view">${live ? '<canvas></canvas>' : `<img src="${c.img}" alt="${c.name}">`}<span class="tag ${live ? 'live' : ''}">${live ? 'live 3D' : 'source image'}</span>${live ? '<span class="hint">drag to rotate</span>' : ''}</div>
+    <div class="body">
+      <div class="title"><h2>${c.name}${c.pick ? ' <span style="color:var(--teal);font-size:12px;font-weight:600;letter-spacing:.06em">MY PICK</span>' : ''}</h2><span class="lic ${c.licClass}">${c.lic}</span></div>
+      <div class="src">${c.by}${c.url ? ` · <a href="${c.url}" target="_blank" rel="noopener">source</a>` : ''}</div>
+      <div class="facts">${c.facts.map(f => `<span>${f}</span>`).join('')}</div>
+      <div class="verdict">${c.verdict}</div>
+    </div>`;
+  el.dataset.id = c.id; el.dataset.name = c.name; el.querySelector('.view').insertAdjacentHTML('beforeend', '<span class="check">✓</span>');
+  wireSelect(el, c);
+  grid.appendChild(el);
+  if (live) cards.push({ c, el, canvas: el.querySelector('canvas'), view: el.querySelector('.view') });
+}
+
+// ---- shared HDR environment ----
+const pmremCache = new WeakMap();
+const hdr = await new RGBELoader().loadAsync('assets/hdri/kloppenheim_06_puresky_1k.hdr');
+hdr.mapping = THREE.EquirectangularReflectionMapping;
+
+const skinMat = () => new THREE.MeshPhysicalMaterial({ color: 0xd9a27c, roughness: 0.55, metalness: 0, sheen: 0.45, sheenColor: new THREE.Color(0xff9b8a), sheenRoughness: 0.7, clearcoat: 0.04, clearcoatRoughness: 0.6 });
+
+function buildProceduralHand() {
+  const g = new THREE.Group();
+  const skin = skinMat();
+  const chalk = skinMat(); chalk.color.set(0xe8cdb8); chalk.roughness = 0.85; chalk.sheen = 0.2;
+  const tape = new THREE.MeshStandardMaterial({ color: 0xf3efe6, roughness: 0.9 });
+  const palm = new THREE.Mesh(new RoundedBoxGeometry(0.086, 0.098, 0.030, 4, 0.013), skin);
+  g.add(palm);
+  const fingerDefs = [ // x offset, base length, radius, splay
+    { x: -0.031, len: 0.072, r: 0.0085, splay: -0.08 },
+    { x: -0.010, len: 0.082, r: 0.0090, splay: -0.02 },
+    { x:  0.011, len: 0.076, r: 0.0088, splay:  0.03 },
+    { x:  0.031, len: 0.060, r: 0.0078, splay:  0.09 } ];
+  fingerDefs.forEach((f, fi) => {
+    let parent = new THREE.Group(); parent.position.set(f.x, 0.049, 0); parent.rotation.z = f.splay; g.add(parent);
+    const segs = [0.42, 0.32, 0.26];
+    segs.forEach((s, si) => {
+      const L = f.len * s, rad = f.r * (1 - si * 0.12);
+      const mat = si === 2 ? chalk : skin;
+      const seg = new THREE.Mesh(new THREE.CapsuleGeometry(rad, L - rad * 1.2, 4, 10), mat);
+      seg.position.y = L / 2; parent.add(seg);
+      if (si === 1 && (fi === 1 || fi === 2)) { const t = new THREE.Mesh(new THREE.CylinderGeometry(rad * 1.12, rad * 1.12, L * 0.55, 12, 1, true), tape); t.position.y = L / 2; parent.add(t); }
+      const next = new THREE.Group(); next.position.y = L; next.rotation.x = -0.32 - si * 0.12; parent.add(next); parent = next;
+    });
+  });
+  // thumb
+  let p = new THREE.Group(); p.position.set(-0.048, -0.004, 0.006); p.rotation.set(0.35, 0.25, 0.95); g.add(p);
+  [0.038, 0.032].forEach((L, si) => { const rad = 0.0105 - si * 0.001; const seg = new THREE.Mesh(new THREE.CapsuleGeometry(rad, L - rad, 4, 10), si ? chalk : skin); seg.position.y = L / 2; p.add(seg); const n = new THREE.Group(); n.position.y = L; n.rotation.x = -0.3; p.add(n); p = n; });
+  // wrist + sleeve cuff
+  const wrist = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.033, 0.05, 20), skin); wrist.position.y = -0.07; g.add(wrist);
+  const cuff = new THREE.Mesh(new THREE.CylinderGeometry(0.037, 0.04, 0.05, 20), new THREE.MeshStandardMaterial({ color: 0x3b4a3a, roughness: 0.95 })); cuff.position.y = -0.11; g.add(cuff);
+  return g;
+}
+
+function fit(root, size = 1.5) {
+  root.updateMatrixWorld(true);
+  root.traverse(o => { if (o.isSkinnedMesh) { o.computeBoundingBox(); o.computeBoundingSphere(); } });
+  const box = new THREE.Box3().setFromObject(root, true);
+  const c = box.getCenter(new THREE.Vector3()); const s = box.getSize(new THREE.Vector3());
+  const m = Math.max(s.x, s.y, s.z) || 1; const k = size / m;
+  const holder = new THREE.Group(); holder.add(root); root.position.sub(c); root.scale.setScalar(1); holder.scale.setScalar(k);
+  return holder;
+}
+
+const loader = new GLTFLoader();
+for (const card of cards) {
+  try {
+    const renderer = new THREE.WebGLRenderer({ canvas: card.canvas, antialias: true, alpha: true });
+    renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+    renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = 1.05;
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    const scene = new THREE.Scene();
+    const pm = new THREE.PMREMGenerator(renderer); scene.environment = pm.fromEquirectangular(hdr).texture; scene.environmentIntensity = 0.9;
+    const key = new THREE.DirectionalLight(0xffc48a, 2.2); key.position.set(-1.5, 2.2, 2.5); scene.add(key);
+    const fill = new THREE.DirectionalLight(0x7fb0ff, 0.6); fill.position.set(2, 0.5, -1); scene.add(fill);
+    const camera = new THREE.PerspectiveCamera(32, 4 / 3, 0.05, 50); camera.position.set(0, 0.15, 3.1); camera.lookAt(0, 0, 0);
+    let mixer = null, root;
+    if (card.c.proc) root = buildProceduralHand();
+    else {
+      const gltf = await loader.loadAsync(card.c.glb);
+      root = gltf.scene;
+      if (card.c.skin) root.traverse(o => { if (o.isMesh) o.material = skinMat(); });
+      root.traverse(o => { if (o.isMesh) { o.frustumCulled = false; } });
+      if (gltf.animations && gltf.animations.length) { mixer = new THREE.AnimationMixer(root); const a = mixer.clipAction(gltf.animations[0]); a.play(); }
+    }
+    const holder = fit(root, card.c.proc ? 1.45 : 1.5); scene.add(holder);
+    // drag to rotate
+    let dragging = false, lx = 0, ly = 0, ry = 0, rx = 0; const view = card.view;
+    view.addEventListener('pointerdown', e => { dragging = true; lx = e.clientX; ly = e.clientY; view.setPointerCapture(e.pointerId); });
+    view.addEventListener('pointermove', e => { if (!dragging) return; ry += (e.clientX - lx) * 0.01; rx += (e.clientY - ly) * 0.01; rx = Math.max(-1.2, Math.min(1.2, rx)); lx = e.clientX; ly = e.clientY; });
+    view.addEventListener('pointerup', () => dragging = false); view.addEventListener('pointercancel', () => dragging = false);
+    const resize = () => { const w = card.view.clientWidth, h = card.view.clientHeight; if (w && h) { renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix(); } };
+    new ResizeObserver(resize).observe(card.view); resize();
+    const clock = new THREE.Clock();
+    renderer.setAnimationLoop(() => { const dt = clock.getDelta(); if (!dragging) ry += dt * 0.6; holder.rotation.set(rx, ry, 0); if (mixer) mixer.update(dt); renderer.render(scene, camera); });
+  } catch (e) {
+    console.error(card.c.id, e);
+    const d = document.createElement('div'); d.className = 'err'; d.textContent = 'Could not load this model: ' + (e && e.message ? e.message : e); card.view.appendChild(d);
+  }
+}
+</script>
+</body>
+</html>

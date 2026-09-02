@@ -212,6 +212,14 @@ export function createAudio() {
       noise(t, 1.6, 0.16, { type: 'lowpass', f0: 110, f1: 900, a: 0.6, q: 0.5 });
       chime(330, 0.12, master, t + 0.2);
     },
+    // a decoy giving way: dry crack, then grit falling away from under the fingers
+    crumble(e) {
+      const t = now(), d = pan(e.hand);
+      tone('square', 190, 60, t, 0.05, 0.16, 0.001, d);
+      noise(t, 0.10, 0.34, { type: 'bandpass', f0: 1500, f1: 380, q: 0.8, a: 0.001, dest: d });
+      noise(t + 0.05, 0.55, 0.20, { type: 'highpass', f0: 900, f1: 240, a: 0.02, dest: d });
+      tone('sine', 70, 44, t + 0.02, 0.28, 0.20, 0.004, d);
+    },
     grab(e) {
       const t = now(), d = pan(e.hand);
       tone('sine', 82, 40, t, 0.17, 0.55, 0.003, d);            // thud

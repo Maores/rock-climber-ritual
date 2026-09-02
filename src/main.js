@@ -80,7 +80,14 @@ const hud = createHud(document.body);
 const audio = createAudio();
 hud.onMute((m) => audio.setMuted(m));
 if (audio.muted !== hud.muted) audio.setMuted(hud.muted);   // both persist under the same key; keep them in step
-const input = createInput({ hud, keyboard: true });
+// On a pointer device the cursor drives whichever hand is free and the two mouse buttons are
+// the two grips; the thumb sticks and the keyboard keep working alongside it.
+const input = createInput({
+  hud,
+  keyboard: true,
+  mouse: canvas,
+  getHands: () => state.hands,
+});
 
 let rig = createCameraRig(camera);
 let post = null;     // created once the renderer has its size (below)

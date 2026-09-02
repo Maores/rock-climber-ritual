@@ -1,0 +1,13 @@
+Rapid-input stress — desktop page 1440x900 @2x, http://localhost:8787/?fps=1
+Driver: review/harness.js rapidInput(10) — every rendered frame for 10 s: both sticks moved to a random point
+of the unit disc (PointerEvents on #stick-l / #stick-r), 25% chance per stick per frame of a GRIP tap
+(#grip-l / #grip-r), 15% chance of a stick release, 30% chance of a random WASD/arrow key down/up on window,
+15% chance of a Q / Enter press. Fresh climb (debug.restart) before the run.
+
+Before:   t=0.32  phase climbing, both hands on the start holds, stamina 0.984 / 0.984, falls 0
+During:   framesDriven 350, framesRendered 350 (no dropped frames), stickMoves 700, gripTaps 164, keyEvents 305
+          worstFrameMs 37.2, phases seen: climbing 130 frames, falling 2, caught 218
+After:    t=10.34 phase climbing, L gripping hold 0, R free, falls 40 (each double release near the ground is caught
+          by the floor at 0.75 m and counted), stateFinite true, newErrors 0
++1.5 s:   t=11.82 phase climbing, L on hold 0 (stamina 0.685), R free and hovering; GRIP pills "gripping" / "free";
+          both stick knobs back at translate(0px, 0px); console errors 0

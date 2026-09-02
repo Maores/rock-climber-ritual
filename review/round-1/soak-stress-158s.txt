@@ -1,0 +1,23 @@
+Stress soak — phone tier, 390x844 @2x, http://localhost:8787/?tier=phone&fps=1, only game tab rendering
+Driver: review/harness.js startSoak(5, {fallEvery: 40}) with the round-1 autopilot build that taps GRIP every
+frame regardless of hand stamina (window.__ritual.debug.autopilot). Stopped by hand after 158 s to switch to the
+stamina-aware autopilot build for the full 5-minute run (see soak-5min.txt).
+
+Wall time 158 s, 79 two-second samples.
+fps mean 120.0, min 119.5, max 120.1 (display is 120 Hz); pixel ratio stayed at 2 (watchdog never stepped down);
+minimum 2-second window since the climb started: 119.5 fps.
+Console errors: 0. Final phase: climbing (never a stuck state; every fall ended in a rope/floor catch and a re-grab).
+
+What happened in the run:
+  falls counted by the sim: 23 (3 of them induced by the harness every 40 s, the rest from stamina slips);
+  the autopilot re-grabbed a hold in the very step after a stamina slip, so the spent hand slipped again at once —
+  a slip/grab storm at up to ~100 events per second (event log, capped at 4000 entries: grab 1920, slip 1852,
+  release 68, arm 75, miss 72, fall 7, catch 5, rune 1). The storms ended in falls, the rope caught every one,
+  and the climb resumed each time; highest point reached 9.5 m, one rune lit.
+  Frame rate stayed at 120 fps throughout the storms.
+
+Every 10 s (wall s, fps, phase, body y, falls):
+  2 s  120 climbing 1.6 m 0 falls | 12 s 120 climbing 6.2 m 0 | 22 s 120 climbing 9.5 m 0 | 32 s 120 falling 8.6 m 2
+  42 s 120 climbing 7.6 m 4 | 52 s 120 climbing 7.6 m 4 | 62 s 120 climbing 7.0 m 5 | 72 s 120 climbing 8.0 m 5
+  82 s 120 climbing 8.0 m 6 | 92 s 120 climbing 8.3 m 7 | 102 s 120 climbing 7.0 m 9 | 112 s 120 climbing 7.1 m 10
+  122 s 120 climbing 6.6 m 12 | 132 s 120 climbing 5.9 m 15 | 142 s 120 climbing 5.3 m 18 | 152 s 120 climbing 3.2 m 21

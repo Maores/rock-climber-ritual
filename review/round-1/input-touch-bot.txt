@@ -1,0 +1,19 @@
+Touch input run — desktop page 1440x900 @2x, http://localhost:8787/?fps=1
+Driver: review/harness.js touchBot(6) — synthetic PointerEvents (pointerType touch) on the on-screen
+sticks #stick-l / #stick-r (pointerdown + pointermove at ring-center + vector x radius, pointerup to
+release) and on the GRIP buttons #grip-l / #grip-r (pointerdown + pointerup = one tap).
+Fresh climb (debug.restart), phase at start: climbing.
+
+Result: holdsGrabbed 6 of 6 requested, every grab landed on the intended hold, 0 console errors.
+Stick knob returned to translate(0px, 0px) after the last pointerup.
+
+Per-hold log (t = sim seconds, ms = wall time from release to grab):
+  t=0.47  hand L  wanted hold 2  grabbed 2   131 ms
+  t=0.64  hand R  wanted hold 3  grabbed 3   176 ms
+  t=0.86  hand L  wanted hold 4  grabbed 4   201 ms
+  t=1.06  hand R  wanted hold 5  grabbed 5   213 ms
+  t=1.27  hand L  wanted hold 6  grabbed 6   205 ms
+  t=1.49  hand R  wanted hold 7  grabbed 7   215 ms
+
+End state: phase climbing, body (x -0.141, y 1.583), L on hold 6 (stamina 0.952), R on hold 7 (stamina 0.976),
+falls 0, runesLit [], fps 35.9 (two game tabs rendering concurrently on one GPU during this run), errors 0.

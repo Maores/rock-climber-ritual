@@ -29,6 +29,9 @@ const HOLD_TINT = [0.58, 0.43, 0.31];
 export async function createWorld({ renderer, scene, route, tier }) {
   const seed = (route && route.seed) || 7;
   const holds = (route && route.holds) || [];
+  const fakes = (route && route.fakes) || [];
+  // The hover ring is off for this build: the rock should be read, not labelled.
+  const HOVER_CUE = false;
   const rnd = mulberry32(seed * 7919 + 13);
   const noise = new SimplexNoise({ random: mulberry32(seed) });
   const summit = holds.find((h) => h.kind === 'summit') || null;
@@ -245,7 +248,7 @@ export async function createWorld({ renderer, scene, route, tier }) {
       blob.castShadow = true; blob.receiveShadow = true;
       root.add(blob);
       // sigil carved around the hold
-      const sz = Math.max(0.7, hold.size * 4.4);
+      const sz = Math.max(0.46, hold.size * 2.6);   // ~0.55 m: reads as a carving, not a portal
       const sigilMat = new THREE.MeshBasicMaterial({
         map: makeSigilTexture(rnd, 512, { rings: 2, ticks: 16, strokes: 7 }), color: RUNE.clone(),
         transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, fog: false,
@@ -263,6 +266,17 @@ export async function createWorld({ renderer, scene, route, tier }) {
     const fp = footprint.get(hold.id) || { sx: 1.3, sy: 0.75, rot: 0 };
     skirtGeos.push(conformedPatch(hold.x, hold.y - hold.size * 0.12, hold.size * 2.4 * fp.sy, 4, fp.rot, 0.008, fp.sx / fp.sy));
   }
+  // --- decoys: the same rock, but each one is its own mesh so it can fall away when it gives ---
+  const fakeParts = [];
+  for (const f of fakes) {
+    const g = new THREE.Group();
+    const blob = new THREE.Mesh(holdBlob(f), holdMat);
+    blob.castShadow = true; blob.receiveShadow = true;
+    g.add(blob);
+    root.add(g);
+    fakeParts.push({ fake: f, group: g, blob, fall: 0, vy: 0, spin: (rnd() - 0.5) * 4 });
+  }
+
   let holdsMesh = null;
   if (plainGeos.length) {
     holdsMesh = new THREE.Mesh(mergeGeometries(plainGeos, false), holdMat);
@@ -546,7 +560,8 @@ export async function createWorld({ renderer, scene, route, tier }) {
       // fade the additive sigil with distance ourselves (fog would add colour to it instead)
       const dz = camera ? Math.hypot(live.x - camera.position.x, live.y - camera.position.y) : 5;
       const att = Math.exp(-Math.pow(dz * 0.02, 2));
-      r.sigilMat.color.copy(RUNE).multiplyScalar((0.3 + 1.6 * I) * att);
+      // additive: keep the lit sigil under 1.0 so it stays teal instead of clipping to white
+      r.sigilMat.color.copy(RUNE).multiplyScalar(Math.min(0.92, (0.20 + 0.60 * I) * att));
       r.mat.emissiveIntensity = 0.15 + 1.5 * I;
       runeByDist.push(r);
     }
@@ -556,7 +571,7 @@ export async function createWorld({ renderer, scene, route, tier }) {
       const r = runeByDist[i];
       if (!r) { l.intensity = 0; continue; }
       l.position.set(r.pos.x, r.pos.y + 0.05, r.pos.z + 0.45);
-      l.intensity = 0.1 + 0.8 * r.I;
+      l.intensity = 0.08 + 0.42 * r.I;
     }
 
     // --- waymarks --------------------------------------------------------------------------
@@ -580,6 +595,18 @@ export async function createWorld({ renderer, scene, route, tier }) {
       altar.circleMat.color.copy(RUNE).multiplyScalar(Math.min(1.15, (0.25 + 0.8 * I) * att));
       altar.discMat.color.copy(RUNE).multiplyScalar(Math.min(1.05, (0.22 + 0.7 * I) * att));
       altar.beacon.intensity = 0.12 + 0.42 * I;
+    }
+
+    // --- decoys: a rock that gave way tips out of the face and drops into the fog -----------
+    for (const fp of fakeParts) {
+      if (!fp.fake.broken) continue;
+      if (fp.fall === 0) fp.vy = -0.4;
+      fp.fall += dt;
+      fp.vy -= 9.81 * dt * 0.55;
+      fp.group.position.y += fp.vy * dt;
+      fp.group.position.z += 0.35 * dt;
+      fp.group.rotation.z += fp.spin * dt;
+      if (fp.fall > 4 || fp.group.position.y < -60) fp.group.visible = false;
     }
 
     // --- embers ----------------------------------------------------------------------------
@@ -653,7 +680,7 @@ export async function createWorld({ renderer, scene, route, tier }) {
         const hand = state.hands[side];
         const ring = hoverRings[side];
         let target = 0, best = null, bestD = 0.34;
-        if (hand && !hand.gripping) {
+        if (HOVER_CUE && hand && !hand.gripping) {
           for (const h of holdById.size ? holdById.values() : holds) {
             const d = Math.hypot(h.x - hand.x, h.y - hand.y);
             if (d < bestD) { bestD = d; best = h; }

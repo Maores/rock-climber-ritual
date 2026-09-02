@@ -1,0 +1,14 @@
+Mute toggle and persistence — phone tier, 390x844 @2x, http://localhost:8787/?tier=phone&fps=1
+Checked through the HUD's public API (hud.setMuted, wired to audio.setMuted by main.js) and through the M key
+(KeyboardEvent 'm' on window), reading localStorage['ritual.muted'], audio.muted, hud.muted, the master-bus RMS,
+the music element state and the #mute button's class / aria-pressed. The sim kept running throughout.
+
+  step                 localStorage  audio.muted  hud.muted  master rms  music playing  #mute class  aria-pressed
+  before               "0"           false        false      0.0679      true           ""           -
+  hud.setMuted(true)   "1"           true         true       0.0000      false (paused) "muted"      "true"
+  hud.setMuted(false)  "0"           false        -          0.0727      true           -            -
+  M key                "1"           true         true       0.0000      -              -            -
+  M key again          "0"           false        -          0.0323      true           -            -
+
+The same key is read by both hud.js and audio.js at boot, so a muted state survives a reload (verified by the
+"before" row of this table: the value read back was the one written earlier in the session).

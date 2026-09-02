@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Reference game — Rock Climber: The Ritual</title>
+<link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root { --bg:#14100d; --panel:#1f1813; --line:#3a2c22; --text:#f1e6d8; --muted:#b9a58f; --teal:#7fe0ff; --gold:#d99a5b; --ok:#8ddc9b; --warn:#ffb454; }
+  * { box-sizing:border-box; }
+  body { margin:0; padding-bottom:120px; background: radial-gradient(1200px 600px at 50% -10%, #3a2333 0%, var(--bg) 60%); color:var(--text); font-family: Inter, system-ui, sans-serif; }
+  header { padding: 34px 28px 10px; text-align:center; }
+  header h1 { font-family: Cinzel, serif; font-weight:700; letter-spacing:.06em; margin:0; font-size: clamp(22px, 3.4vw, 40px); color: var(--gold); }
+  header p { color: var(--muted); margin: 8px auto 0; max-width: 780px; line-height:1.55; }
+  .grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 18px; padding: 22px 28px 40px; max-width: 1500px; margin: 0 auto; }
+  .card { position:relative; background: var(--panel); border:1px solid var(--line); border-radius: 16px; overflow:hidden; cursor:pointer; transition: transform .15s, box-shadow .15s; box-shadow: 0 10px 30px rgba(0,0,0,.35); }
+  .card:hover { transform: translateY(-2px); }
+  .card.rec { border-color: rgba(127,224,255,.45); }
+  .card.selected { outline: 2px solid var(--teal); outline-offset:-2px; box-shadow: 0 0 0 4px rgba(127,224,255,.18), 0 14px 40px rgba(127,224,255,.12); }
+  .shots { display:grid; grid-template-columns: 2fr 1fr; grid-template-rows: 1fr 1fr; gap: 3px; aspect-ratio: 16/9; background:#0d0908; }
+  .shots img { width:100%; height:100%; object-fit: cover; display:block; }
+  .shots img:first-child { grid-row: 1 / 3; }
+  .shots .missing { display:flex; align-items:center; justify-content:center; color: var(--muted); font-size:12px; padding:10px; text-align:center; grid-column: 1 / 3; grid-row: 1 / 3; }
+  .check { position:absolute; right:12px; top:12px; width:28px; height:28px; border-radius:50%; background: var(--teal); color:#062a33; display:none; align-items:center; justify-content:center; font-weight:700; }
+  .card.selected .check { display:flex; }
+  .body { padding: 14px 16px 16px; }
+  .title { display:flex; justify-content:space-between; align-items:baseline; gap:10px; }
+  .title h2 { margin:0; font-size:18px; }
+  .meta { font-size: 12px; color: var(--muted); margin-top:2px; }
+  .pill { font-size: 11px; letter-spacing:.06em; text-transform: uppercase; padding: 3px 8px; border-radius: 999px; border: 1px solid rgba(127,224,255,.45); color: var(--teal); white-space: nowrap; }
+  .facts { display:flex; flex-wrap:wrap; gap:6px; margin: 10px 0; }
+  .facts span { font-size: 12px; color: var(--muted); background: rgba(255,255,255,.04); border:1px solid var(--line); padding: 3px 8px; border-radius: 8px; }
+  .why { font-size: 13.5px; line-height: 1.5; }
+  .why b { color: var(--teal); }
+  .other input { width:100%; margin-top:10px; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--line); background: rgba(255,255,255,.05); color: var(--text); font: inherit; }
+  #sendbar { position: fixed; left:0; right:0; bottom:0; transform: translateY(110%); transition: transform .25s ease; background: rgba(20,14,11,.92); backdrop-filter: blur(10px); border-top: 1px solid var(--line); padding: 12px 18px calc(12px + env(safe-area-inset-bottom)); display:flex; gap:10px; align-items:center; flex-wrap: wrap; z-index: 20; }
+  #sendbar.show { transform: none; }
+  #sendbar .pick { flex: 1 1 220px; font-size: 14px; }
+  #sendbar .pick b { color: var(--teal); }
+  #sendbar input { flex: 2 1 260px; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--line); background: rgba(255,255,255,.05); color: var(--text); font: inherit; }
+  #sendbar button { appearance:none; border:0; border-radius: 10px; padding: 11px 18px; font: inherit; font-weight: 600; cursor: pointer; background: var(--teal); color: #062a33; }
+  #sendbar button[disabled] { opacity: .5; cursor: default; }
+  #sendbar .status { font-size: 13px; color: var(--ok); flex-basis: 100%; }
+  .credit { text-align:center; color: var(--muted); font-size: 12px; padding: 0 20px 20px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>WHICH REAL GAME DO WE MEASURE AGAINST?</h1>
+  <p>The orchestrated build needs one external anchor. Three fresh critics will judge every round <em>blind</em>: our screenshots next to this game's official stills, scoring the frozen rubric. Pick the one whose look and feel you want us to be compared to. Images are the developers' own store stills.</p>
+</header>
+<div class="grid" id="grid"></div>
+<p class="credit">Stills © their developers, used here only as private reference material for judging. Nothing from them ships in the game.</p>
+
+<div id="sendbar">
+  <div class="pick">Your pick: <b id="pickName">none yet</b></div>
+  <input id="note" placeholder="Optional note for Claude (e.g. 'match its lighting, not its camera')…">
+  <button id="sendBtn" disabled>Send to Claude →</button>
+  <div class="status" id="sendStatus"></div>
+</div>
+
+<script>
+const CANDS = [
+  { id:'jusant', name:'Jusant', meta:"DON'T NOD · 2023 · PC, PS5, Xbox", rec:true, shots:['reference/candidates/jusant/ss1.jpg','reference/candidates/jusant/ss2.jpg','reference/candidates/jusant/ss3.jpg'],
+    facts:['two triggers = two hands','rope + stamina','mystical tower climb','stylized-realistic'],
+    why:'<b>My recommendation.</b> Closest to what we are building: each hand on its own trigger, a rope that catches you, stamina, rest holds, and a climb toward something sacred. Its painterly-realistic look is exactly the "beautiful on a budget" register a browser game can reach, so critics compare us to a fair bar instead of a AAA impossibility.' },
+  { id:'cairn', name:'Cairn', meta:'The Game Bakers · 2026 · PC, PS5', shots:['reference/candidates/cairn/ss1.jpg','reference/candidates/cairn/ss2.jpg','reference/candidates/cairn/ss3.jpg'],
+    facts:['free-solo realism','hand-by-hand placement','stamina + body position','photoreal rock'],
+    why:'The most realistic climbing simulation on the market: you place every hand and foot. Photoreal alpine rock and light. Choosing it sets the visual bar very high, which pushes materials and lighting hard but makes "blind pick: ours" nearly unwinnable.' },
+  { id:'climb2', name:'The Climb 2', meta:'Crytek · 2021 · Meta Quest (VR)', shots:['reference/candidates/the-climb-2/ss1.jpg','reference/candidates/the-climb-2/ss2.jpg','reference/candidates/the-climb-2/ss3.jpg'],
+    facts:['first person, hands only','one grip button per hand','chalk + stamina','photoreal Crytek scenery'],
+    why:'The only major first-person hands-on-rock game, so its camera matches ours exactly: two floating hands, grip per hand, stamina, chalk. Being VR, its screenshots are wide and very high fidelity. Best mechanical twin, hardest visual bar.' },
+  { id:'other', name:'Another game', meta:'type the title', other:true, shots:[],
+    facts:['your call'],
+    why:'Name any real game and I will gather its official stills as the reference before the rubric page.' },
+];
+const grid = document.getElementById('grid');
+let selected = null;
+for (const c of CANDS) {
+  const el = document.createElement('div'); el.className = 'card' + (c.rec ? ' rec' : '');
+  const shots = c.shots.length ? c.shots.map(s => `<img src="${s}" alt="${c.name} still" onerror="this.remove()">`).join('') : '<div class="missing">No image, this is the free-text option.</div>';
+  el.innerHTML = `<div class="shots" data-n="${c.shots.length}">${shots}</div><span class="check">✓</span>
+    <div class="body"><div class="title"><h2>${c.name}</h2>${c.rec ? '<span class="pill">recommended</span>' : ''}</div><div class="meta">${c.meta}</div>
+    <div class="facts">${c.facts.map(f => `<span>${f}</span>`).join('')}</div><div class="why">${c.why}</div>
+    ${c.other ? '<div class="other"><input id="otherTitle" placeholder="Game title (and platform if it matters)"></div>' : ''}</div>`;
+  grid.appendChild(el);
+  el.addEventListener('click', e => {
+    if (e.target.closest('input')) return;
+    document.querySelectorAll('.card.selected').forEach(x => x.classList.remove('selected'));
+    el.classList.add('selected'); selected = c;
+    updateBar();
+  });
+  // if all images failed, show a note
+  setTimeout(() => { const sh = el.querySelector('.shots'); if (c.shots.length && !sh.querySelector('img')) sh.innerHTML = '<div class="missing">Official stills could not be fetched automatically for this one; I will capture them from the store page if you pick it.</div>'; }, 2500);
+}
+function updateBar() {
+  const name = selected.other ? (document.getElementById('otherTitle').value.trim() || 'Another game (type the title first)') : selected.name;
+  document.getElementById('pickName').textContent = name;
+  document.getElementById('sendBtn').disabled = selected.other && !document.getElementById('otherTitle').value.trim();
+  document.getElementById('sendStatus').textContent = '';
+  document.getElementById('sendbar').classList.add('show');
+}
+document.addEventListener('input', e => { if (e.target.id === 'otherTitle' && selected && selected.other) updateBar(); });
+document.getElementById('sendBtn').addEventListener('click', async () => {
+  if (!selected) return;
+  const btn = document.getElementById('sendBtn'), st = document.getElementById('sendStatus');
+  const title = selected.other ? document.getElementById('otherTitle').value.trim() : selected.name;
+  btn.disabled = true; st.textContent = 'Sending…';
+  try {
+    const r = await fetch('/api/event', { method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ type:'submit', topic:'reference', choice: selected.id, name: title, note: document.getElementById('note').value.trim(), ua: navigator.userAgent }) });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    st.textContent = 'Sent ✓  Claude will gather the reference stills and prepare the rubric page.';
+  } catch (e) { st.textContent = 'Could not send (' + e.message + '). Is the dev server running?'; }
+  btn.disabled = false;
+});
+</script>
+</body>
+</html>
