@@ -641,6 +641,36 @@ test('stamina: slipping off the last hold starts a fall', () => {
   assert.ok(types(s).includes('fall'));
 });
 
+test('createClimber: unlimitedStamina defaults to false (B54)', () => {
+  const s = createClimber(mkRoute());
+  assert.equal(s.unlimitedStamina, false);
+});
+
+test('unlimitedStamina: a one-arm hang on a crimp for 60 s keeps stamina at 1 and never slips (B54)', () => {
+  const s = climber();
+  s.route.holds[1].grip = 'crimp';           // the hand R is already gripping it
+  releaseHand(s, 'L', { x: -1, y: 0.2 });    // one-arm hang: R alone on the crimp, DRAIN_ONE x 1.85
+  s.unlimitedStamina = true;
+  drainEvents(s);
+  run(s, 60, inp());
+  assert.equal(s.hands.R.gripping, true, 'never released');
+  assert.equal(s.hands.R.holdId, 1);
+  assert.equal(s.hands.R.stamina, 1, 'pinned full for the whole 60 s');
+  assert.ok(!drainEvents(s).some((e) => e.type === 'slip'), 'no slip event, ever');
+});
+
+test('unlimitedStamina: a hang on a sloper past its slip time never releases (B54)', () => {
+  const s = climber();
+  s.route.holds[1].grip = 'sloper';          // slip: 9.0 s — normally drops you however fresh you are
+  s.unlimitedStamina = true;
+  drainEvents(s);
+  run(s, CFG.HOLD_KINDS.sloper.slip + 3, inp());   // well past the 9 s hang timer
+  assert.equal(s.hands.R.gripping, true, 'the sloper never let go on its own');
+  assert.equal(s.hands.R.holdId, 1);
+  assert.equal(s.hands.R.stamina, 1);
+  assert.ok(!drainEvents(s).some((e) => e.type === 'slip'), 'the per-kind hang timer never fired');
+});
+
 test('fall: nothing catches you — the plunge runs to the ground and ends the climb', () => {
   const s = climber([], 10);
   const from = s.body.y;
