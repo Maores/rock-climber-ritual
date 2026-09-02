@@ -16,34 +16,48 @@ import {
 const RUNE = new THREE.Color(0x7fe0ff);
 const WALL = { width: 13, height: 51.5, segX: 104, segY: 515, yCenter: 17.75, flank: 4.5, tile: 3.0, maxZ: 0.35 };   // y ∈ [-8, 43.5]
 // Holds are squashed toward the wall (zScale), sit almost flush in it (sink) and have a flat front
-// face at `front` × zScale where the fingers grip — holdZ() is exact, not an estimate.
+// face at `front` × zScale where the fingers grip. holdZ() is exact rather than an estimate
+// because every prototype's front is normalised to `front` (B52) — it used to be the ceiling of a
+// per-hold noise draw, which left a palm floating up to 8 mm above the rock it was gripping.
 const HOLD = { zScale: 0.42, sink: 0.05, front: 0.925 };
 // B52 — instanced holds. Plain holds are no longer one deformed icosahedron each, merged into a
 // single mesh; they are a small set of unit-scale prototype blobs drawn through InstancedMesh, so
 // the cost of the rock stops growing with the number of holds. A field route (B46) is ~1900 holds
 // where the old line was 125, and the merged build cost 39 MB of buffers and 3.6 s of boot for it.
 const PROTO = {
-  variants: 3,        // blob shapes per grip family; 4 families × 3 = 12 prototypes
+  variants: 3,        // blob shapes per grip family and size tier
   back: 1.06,         // the back of a prototype is stretched to this many unit radii, so a SHARED
                       // blob is never shallower in the rock than a per-hold one happened to be
-  sink: 0.03,         // and it is seated this much deeper again, in hold radii (3–6 mm): a
-                      // prototype cannot be conformed to this hold's own noise, so it pays a margin
+                      // (the back is inside the wall; only its depth matters)
+  bigSize: 0.15,      // the merged build gave a hold this size or over the finer icosahedron, so
+                      // the prototypes carry both tiers and a hold picks by the same rule
   tilt: 0.55,         // how much of the wall's local slope an instance leans with (0 = dead front)
-  tiltMax: 0.22,      // radians: ~12.6°, past which a hold starts to read as falling off the rock
-  jitter: 0.10,       // per-instance non-uniform scale in x and y, so 12 shapes are not 12 copies
-  shadowBand: 4.2,    // metres above the body still worth drawing into the shadow map (the shadow
-                      // camera is a 6.4 m box around the body, so anything higher cannot cast into it)
+  tiltMax: 0.22,      // radians: 12.6°, past which a hold starts to read as falling off the rock.
+                      // Clamped on the LEAN VECTOR, not per axis, or a diagonal seat leans 1.41× it
+  jitter: 0.10,       // per-instance non-uniform scale in x and y, so a dozen shapes are not copies
+  shadowBand: 12,     // metres above the body still drawn into the shadow map. NOT "the 6.4 m box"
+                      // — that box is 3.2/cos(elevation) tall in world y AND 17 m deep toward a
+                      // light that climbs 0.34–0.48 per metre, so it reaches 10.4 m (sun) to
+                      // 11.8 m (moon) of wall above the climber. 12 covers both, and was checked:
+                      // 0 differing pixels in every view, where 8.5 loses 411 and 4.2 loses 5,093
   eps: 0.10,          // finite-difference step for the wall normal — half a hold, so an instance
                       // leans with the seat it sits on and not with the grit
+  above: 24,          // main-pass window: metres of wall above the body that stay drawn …
+  below: 24,          // … and below it, which on this 24 m route drops nothing at all. Measured,
+                      // not chosen: a 20/16 window is pixel-identical at every normal framing but
+                      // loses 962 px looking down from 20 m and 8,795 px from the summit at the
+                      // 1.49 m pull-back, because LOOK cranes 62° up and 85° down and the wall
+                      // then recedes to a vanishing line that is made of distant holds. The window
+                      // is what keeps the drawn set bounded on a wall taller than this one
 };
 // Blob shaping per grip kind. Every range here is a slice of the one range the merged build drew
 // from (sx 1.15–1.55, sy 0.62–0.90, chalk 0.35–0.85), so no hold looks unlike something the old
 // wall could have produced; a jug is simply drawn from the fat end of it and a crimp from the flat.
 const FAMILIES = [
-  { grip: 'jug',    detail: 5, sx: [1.15, 1.35], sy: [0.78, 0.90], chalk: [0.50, 0.85] },
-  { grip: 'edge',   detail: 4, sx: [1.25, 1.55], sy: [0.66, 0.80], chalk: [0.40, 0.80] },
-  { grip: 'crimp',  detail: 4, sx: [1.30, 1.55], sy: [0.62, 0.72], chalk: [0.35, 0.70] },
-  { grip: 'sloper', detail: 4, sx: [1.15, 1.40], sy: [0.70, 0.88], chalk: [0.35, 0.60] },
+  { grip: 'jug',    sx: [1.15, 1.35], sy: [0.78, 0.90], chalk: [0.50, 0.85] },
+  { grip: 'edge',   sx: [1.25, 1.55], sy: [0.66, 0.80], chalk: [0.40, 0.80] },
+  { grip: 'crimp',  sx: [1.30, 1.55], sy: [0.62, 0.72], chalk: [0.35, 0.70] },
+  { grip: 'sloper', sx: [1.15, 1.40], sy: [0.70, 0.88], chalk: [0.35, 0.60] },
 ];
 const FAMILY_OF = { jug: 0, edge: 1, crimp: 2, sloper: 3 };
 const SHADE_MEAN = 0.92;                            // baked into the prototype; per-instance colour
@@ -193,25 +207,21 @@ export async function createWorld({ renderer, scene, route, tier }) {
 
   const footprint = new Map();   // hold id → { sx, sy, rot } of its blob, for the contact shadow on the wall
 
-  // Runes, the summit and nothing else still get a blob of their own, baked at their world
-  // position with their own noise: there are three or four of them and they carry a sigil.
-  function holdBlob(hold) {
-    let g = new THREE.IcosahedronGeometry(1, hold.size < 0.15 ? 4 : 5);
-    g.deleteAttribute('uv');
-    g.deleteAttribute('normal');
-    g = mergeVertices(g, 1e-4);
+  // The one blob shaping in this file. A noise-deformed icosahedron with a flat top lip, a flat
+  // front face where the fingers grip, chalk patched along the lip and a seat darkened toward the
+  // wall. `holdBlob` bakes one at a hold's own position for the runes and the summit; `holdProto`
+  // bakes a handful at unit scale for every other hold on the wall. Only the parameters differ.
+  //   seat: stretch the back out to this many unit radii (a shared prototype is never shallower
+  //         in the rock than a per-hold blob happened to be)
+  //   nose: scale the front so its furthest point lands exactly here (so holdZ is the truth)
+  function shapeBlob(g, { key, sx, sy, chalkAmt, tint, seat = 0, nose = 0 }) {
     const p = g.attributes.position;
     const n = p.count;
     const uv = new Float32Array(n * 2);
     const col = new Float32Array(n * 3);
-    const s = hold.id * 3.17 + 0.5;
-    const shade = 0.82 + rnd() * 0.2;
-    const tr = HOLD_TINT[0] * shade * (0.96 + rnd() * 0.08);
-    const tg = HOLD_TINT[1] * shade * (0.96 + rnd() * 0.08);
-    const tb = HOLD_TINT[2] * shade * (0.96 + rnd() * 0.08);
-    const sx = 1.15 + rnd() * 0.4;          // edges are wider than tall
-    const sy = 0.62 + rnd() * 0.28;
-    const chalkAmt = 0.35 + rnd() * 0.5;    // some holds are well used, some barely
+    const s = key * 3.17 + 0.5;
+    const [tr, tg, tb] = tint;
+    let back = 0, front = 0;
     for (let i = 0; i < n; i++) {
       let x = p.getX(i), y = p.getY(i), z = p.getZ(i);
       const ny = y, nz = z;                 // unit-sphere direction, before deformation
@@ -221,27 +231,60 @@ export async function createWorld({ renderer, scene, route, tier }) {
       x *= r; y *= r; z *= r;
       if (y > 0) y *= 0.72;                                 // flat top lip
       if (z > 0.78) z = 0.78 + (z - 0.78) * 0.25;           // flat front face (fingers grip here)
+      if (z < back) back = z;
+      if (z > front) front = z;
       const len = Math.hypot(x, y, z) || 1;
       // chalk: patchy along the top lip, a little on the front where fingers smear it
       const patch = smoothstep(0.05, 0.55, noise.noise3d(x * 3.1 + s, y * 3.1 + 7, z * 3.1));
       const lip = smoothstep(0.55, 0.95, ny) * (0.3 + 0.7 * patch);
-      const front = 0.15 * smoothstep(0.75, 1.0, nz) * patch;
-      const chalk = clamp01((lip + front) * chalkAmt);
+      const face = 0.15 * smoothstep(0.75, 1.0, nz) * patch;
+      const chalk = clamp01((lip + face) * chalkAmt);
       // contact: darker toward the wall plane so the hold reads as growing out of the rock
-      const seat = 1 - 0.45 * (1 - smoothstep(-0.1, 0.45, nz));
+      const seatShade = 1 - 0.45 * (1 - smoothstep(-0.1, 0.45, nz));
       // chalk is white powder: the map's mid-grey has to be pushed well past 1 to read as white
-      col[i * 3] = lerp(tr * seat, 1.9, chalk);
-      col[i * 3 + 1] = lerp(tg * seat, 1.88, chalk);
-      col[i * 3 + 2] = lerp(tb * seat, 1.85, chalk);
+      col[i * 3] = lerp(tr * seatShade, 1.9, chalk);
+      col[i * 3 + 1] = lerp(tg * seatShade, 1.88, chalk);
+      col[i * 3 + 2] = lerp(tb * seatShade, 1.85, chalk);
       // spherical uv with the seam at the back (inside the wall)
       uv[i * 2] = (Math.atan2(x, z) / (Math.PI * 2) + 0.5) * 2;
       uv[i * 2 + 1] = Math.asin(Math.max(-1, Math.min(1, y / len))) / Math.PI + 0.5;
-      p.setXYZ(i, x * sx, y * sy, z * HOLD.zScale);
+      p.setXYZ(i, x * sx, y * sy, z);
     }
+    // A shared shape has to be honest about its own depth in both directions: the back is what
+    // keeps it out of the air and the front is what holdZ promises a palm. Neither touches x or y.
+    const deeper = seat && back < -1e-3 ? seat / -back : 1;
+    const prouder = nose && front > 1e-3 ? nose / front : 1;
+    if (deeper !== 1 || prouder !== 1) {
+      for (let i = 0; i < n; i++) {
+        const z = p.getZ(i);
+        p.setZ(i, z < 0 ? z * deeper : z * prouder);
+      }
+    }
+    for (let i = 0; i < n; i++) p.setZ(i, p.getZ(i) * HOLD.zScale);
     g.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
     g.setAttribute('uv1', new THREE.BufferAttribute(uv.slice(), 2));
     g.setAttribute('color', new THREE.BufferAttribute(col, 3));
     g.computeVertexNormals();
+    return g;
+  }
+
+  // Runes, the summit and nothing else still get a blob of their own, baked at their world
+  // position with their own noise: there are three or four of them and they carry a sigil.
+  function holdBlob(hold) {
+    let g = new THREE.IcosahedronGeometry(1, hold.size < PROTO.bigSize ? 4 : 5);
+    g.deleteAttribute('uv');
+    g.deleteAttribute('normal');
+    g = mergeVertices(g, 1e-4);
+    const shade = 0.82 + rnd() * 0.2;
+    const tint = [
+      HOLD_TINT[0] * shade * (0.96 + rnd() * 0.08),
+      HOLD_TINT[1] * shade * (0.96 + rnd() * 0.08),
+      HOLD_TINT[2] * shade * (0.96 + rnd() * 0.08),
+    ];
+    const sx = 1.15 + rnd() * 0.4;          // edges are wider than tall
+    const sy = 0.62 + rnd() * 0.28;
+    const chalkAmt = 0.35 + rnd() * 0.5;    // some holds are well used, some barely
+    shapeBlob(g, { key: hold.id, sx, sy, chalkAmt, tint });
     // keep the long axis roughly horizontal: ±20° of lean, not a random spin
     const rot = (((hold.angle || 0) % (Math.PI / 2)) - Math.PI / 4) * 0.45;
     footprint.set(hold.id, { sx, sy, rot });
@@ -269,85 +312,68 @@ export async function createWorld({ renderer, scene, route, tier }) {
   }
 
   // ---------------------------------------------------------------------------------------
-  // Prototype blobs (B52). The same shaping as holdBlob, at unit scale, with no hold's position
-  // or size baked in — twelve of them stand in for every plain hold on the wall. The noise is
-  // sampled once per prototype instead of once per hold, which is the whole boot cost of a field.
-  function holdProto(fam, key) {
-    let g = new THREE.IcosahedronGeometry(1, fam.detail);
+  // Prototype blobs (B52). The same shaping as holdBlob, at unit scale, with no hold's position or
+  // size baked in — a dozen of them stand in for every plain hold on the wall. The noise is
+  // sampled once per prototype instead of once per hold, which was the whole boot cost of a field.
+  // A prototype is a (grip family, size tier, variant): the size tier keeps the merged build's own
+  // rule that a hold of PROTO.bigSize or over gets the finer icosahedron, so the triangle bill per
+  // hold is what it always was. Only the combinations a route actually uses are ever built.
+  const TIERS = 2;
+  // first key of a (family, size tier) — the variant is added by the caller
+  const protoKey = (fam, size) => (fam * TIERS + (size >= PROTO.bigSize ? 1 : 0)) * PROTO.variants;
+  function holdProto(key) {
+    const fam = FAMILIES[Math.floor(key / (TIERS * PROTO.variants))];
+    const big = Math.floor(key / PROTO.variants) % TIERS === 1;
+    // seeded off the key, so a prototype is the same shape whatever else the route happens to need
+    const r = mulberry32((Math.imul(key + 1, 40503) ^ (seed * 7919 + 977)) >>> 0);
+    let g = new THREE.IcosahedronGeometry(1, big ? 5 : 4);
     g.deleteAttribute('uv');
     g.deleteAttribute('normal');
     g = mergeVertices(g, 1e-4);
-    const p = g.attributes.position;
-    const n = p.count;
-    const uv = new Float32Array(n * 2);
-    const col = new Float32Array(n * 3);
-    const s = key * 3.17 + 0.5;
-    const tr = HOLD_TINT[0] * SHADE_MEAN, tg = HOLD_TINT[1] * SHADE_MEAN, tb = HOLD_TINT[2] * SHADE_MEAN;
-    const sx = lerp(fam.sx[0], fam.sx[1], rnd());          // edges are wider than tall
-    const sy = lerp(fam.sy[0], fam.sy[1], rnd());
-    const chalkAmt = lerp(fam.chalk[0], fam.chalk[1], rnd());   // some holds are well used, some barely
-    let back = 0;
-    for (let i = 0; i < n; i++) {
-      let x = p.getX(i), y = p.getY(i), z = p.getZ(i);
-      const ny = y, nz = z;                 // unit-sphere direction, before deformation
-      const n1 = noise.noise3d(x * 0.9 + s, y * 0.9, z * 0.9 + s * 0.5);
-      const n2 = noise.noise3d(x * 2.4 + 41, y * 2.4 + s, z * 2.4);
-      const r = 1 + 0.22 * n1 + 0.07 * n2;
-      x *= r; y *= r; z *= r;
-      if (y > 0) y *= 0.72;                                 // flat top lip
-      if (z > 0.78) z = 0.78 + (z - 0.78) * 0.25;           // flat front face (fingers grip here)
-      if (z < back) back = z;
-      const len = Math.hypot(x, y, z) || 1;
-      // chalk: patchy along the top lip, a little on the front where fingers smear it
-      const patch = smoothstep(0.05, 0.55, noise.noise3d(x * 3.1 + s, y * 3.1 + 7, z * 3.1));
-      const lip = smoothstep(0.55, 0.95, ny) * (0.3 + 0.7 * patch);
-      const front = 0.15 * smoothstep(0.75, 1.0, nz) * patch;
-      const chalk = clamp01((lip + front) * chalkAmt);
-      // contact: darker toward the wall plane so the hold reads as growing out of the rock
-      const seat = 1 - 0.45 * (1 - smoothstep(-0.1, 0.45, nz));
-      // chalk is white powder: the map's mid-grey has to be pushed well past 1 to read as white
-      col[i * 3] = lerp(tr * seat, 1.9, chalk);
-      col[i * 3 + 1] = lerp(tg * seat, 1.88, chalk);
-      col[i * 3 + 2] = lerp(tb * seat, 1.85, chalk);
-      // spherical uv with the seam at the back (inside the wall)
-      uv[i * 2] = (Math.atan2(x, z) / (Math.PI * 2) + 0.5) * 2;
-      uv[i * 2 + 1] = Math.asin(Math.max(-1, Math.min(1, y / len))) / Math.PI + 0.5;
-      p.setXYZ(i, x * sx, y * sy, z);
-    }
-    // Seat the shared shape: stretch whatever back this prototype happens to have out to PROTO.back
-    // radii, so a reused blob can never sit shallower in the rock than a per-hold one did. The
-    // back is inside the wall and is never seen; only its depth matters.
-    const grow = back < -1e-3 ? PROTO.back / -back : 1;
-    if (grow > 1) for (let i = 0; i < n; i++) { const z = p.getZ(i); if (z < 0) p.setZ(i, z * grow); }
-    for (let i = 0; i < n; i++) p.setZ(i, p.getZ(i) * HOLD.zScale);
-    g.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
-    g.setAttribute('uv1', new THREE.BufferAttribute(uv.slice(), 2));
-    g.setAttribute('color', new THREE.BufferAttribute(col, 3));
-    g.computeVertexNormals();
+    const sx = lerp(fam.sx[0], fam.sx[1], r());          // edges are wider than tall
+    const sy = lerp(fam.sy[0], fam.sy[1], r());
+    const chalkAmt = lerp(fam.chalk[0], fam.chalk[1], r());   // some are well used, some barely
+    shapeBlob(g, {
+      key, sx, sy, chalkAmt,
+      tint: [HOLD_TINT[0] * SHADE_MEAN, HOLD_TINT[1] * SHADE_MEAN, HOLD_TINT[2] * SHADE_MEAN],
+      seat: PROTO.back, nose: HOLD.front,
+    });
     g.computeBoundingSphere();
-    return { geo: g, sx, sy, grip: fam.grip };
+    return { geo: g, sx, sy, grip: fam.grip, big };
   }
-  const protos = [];
-  for (let f = 0; f < FAMILIES.length; f++) {
-    for (let v = 0; v < PROTO.variants; v++) protos.push(holdProto(FAMILIES[f], f * PROTO.variants + v));
-  }
+
+  // A hold's prototype: its own grip family, its own size tier, one of PROTO.variants shapes.
   const protoOf = (hold) => {
     const f = FAMILY_OF[hold.grip] !== undefined ? FAMILY_OF[hold.grip] : 1;   // no grip → edge
-    return f * PROTO.variants + (hold.id % PROTO.variants);
+    return protoKey(f, hold.size) + (hold.id % PROTO.variants);
   };
+  // A decoy carries no grip at all — the sim never asks one for a stamina cost — so it would
+  // otherwise always be an edge, and a shape you could learn to spot. Draw its family from the
+  // real holds of its own size, which is exactly the mix the player has been grabbing (B10).
+  const plainHolds = holds.filter((h) => h.kind !== 'rune' && h.kind !== 'summit');
+  function fakeProtoOf(fake, r) {
+    let pool = plainHolds.filter((h) => Math.abs(h.size - fake.size) <= 0.02);
+    if (!pool.length) pool = plainHolds;
+    const like = pool.length ? pool[Math.floor(r() * pool.length)] : null;
+    const f = like && FAMILY_OF[like.grip] !== undefined ? FAMILY_OF[like.grip] : 1;
+    return protoKey(f, fake.size) + Math.floor(r() * PROTO.variants);
+  }
 
-  // Where one instance sits. `holdZ` is untouched by all of this: the placement uses the same
-  // single wallZ sample the merged build used, minus PROTO.sink, and the instance leans with the
-  // wall's local slope (four more wallZ samples — five per hold, against 250 per hold of noise
-  // before). Writes the matrix into `m` and returns the footprint the contact shadow needs.
+  // Where one instance sits. `holdZ` is untouched by all of this — same single wallZ sample the
+  // merged build used, and the prototype's front is normalised to HOLD.front so the drawn surface
+  // is where holdZ says it is. The instance also leans with the wall's local slope: four more
+  // wallZ samples, five per hold, against ~250 noise samples per hold before.
   const _ip = new THREE.Vector3(), _iq = new THREE.Quaternion(), _is = new THREE.Vector3();
   const _iz = new THREE.Vector3(0, 0, 1), _in = new THREE.Vector3(), _ilean = new THREE.Quaternion();
-  const clampAbs = (v, lim) => (v > lim ? lim : v < -lim ? -lim : v);
   function instanceMatrix(hold, proto, r, m) {
     const e = PROTO.eps, T = Math.tan(PROTO.tiltMax);
     const gx = (wallZ(hold.x + e, hold.y) - wallZ(hold.x - e, hold.y)) / (2 * e);
     const gy = (wallZ(hold.x, hold.y + e) - wallZ(hold.x, hold.y - e)) / (2 * e);
-    _in.set(clampAbs(-gx * PROTO.tilt, T), clampAbs(-gy * PROTO.tilt, T), 1).normalize();
+    // clamp the LEAN, not each axis of it: a seat that falls away diagonally leans in both
+    let tx = -gx * PROTO.tilt, ty = -gy * PROTO.tilt;
+    const lean = Math.hypot(tx, ty);
+    if (lean > T) { const k = T / lean; tx *= k; ty *= k; }
+    _in.set(tx, ty, 1).normalize();
     _iq.setFromUnitVectors(_iz, _in);
     // keep the long axis roughly horizontal: ±20° of lean, not a random spin
     const rot = (((hold.angle || 0) % (Math.PI / 2)) - Math.PI / 4) * 0.45;
@@ -355,7 +381,7 @@ export async function createWorld({ renderer, scene, route, tier }) {
     _iq.multiply(_ilean);
     const jx = 1 + (r() - 0.5) * 2 * PROTO.jitter;
     const jy = 1 + (r() - 0.5) * 2 * PROTO.jitter;
-    _ip.set(hold.x, hold.y, wallZ(hold.x, hold.y) + hold.size * (HOLD.sink - PROTO.sink));
+    _ip.set(hold.x, hold.y, wallZ(hold.x, hold.y) + hold.size * HOLD.sink);
     _is.set(hold.size * jx, hold.size * jy, hold.size);     // never in z: holdZ depends on it
     m.compose(_ip, _iq, _is);
     return { sx: proto.sx * jx, sy: proto.sy * jy, rot };
@@ -368,7 +394,12 @@ export async function createWorld({ renderer, scene, route, tier }) {
   const skirtTex = makeSkirtTexture();
   const chalkGeos = [], skirtGeos = [];
   const runes = [];            // { hold, blob, mat, sigilMat, k, flash, wasLit, pos }
-  const buckets = protos.map(() => []);        // plain holds, per prototype
+  const buckets = new Map();   // prototype key → plain holds that wear it
+  const bucket = (key) => {
+    let b = buckets.get(key);
+    if (!b) { b = []; buckets.set(key, b); }
+    return b;
+  };
   for (const hold of holds) {
     if (hold.kind === 'rune' || hold.kind === 'summit') {
       const mat = holdMat.clone();
@@ -390,13 +421,27 @@ export async function createWorld({ renderer, scene, route, tier }) {
       root.add(sigil);
       runes.push({ hold, blob, mat, sigilMat, k: 0.2, flash: 0, wasLit: !!hold.lit, pos: new THREE.Vector3(hold.x, hold.y, holdZ(hold)) });
     } else {
-      buckets[protoOf(hold)].push(hold);
+      bucket(protoOf(hold)).push(hold);
     }
+  }
+  // Decoys are rock like any other until you weigh it, so they pick a prototype the same way and
+  // their family comes from the real holds their size (B10). They are not instanced: each one has
+  // to fall and spin on its own.
+  const fakePicks = new Map();                 // fake id → { key, r }
+  for (const f of fakes) {
+    const r = holdRnd(f);
+    fakePicks.set(f.id, { key: fakeProtoOf(f, r), r });
   }
 
   // --- the instanced wall of rock ---------------------------------------------------------
-  // One InstancedMesh per prototype, its instances sorted up the wall so the shadow pass can stop
-  // at the top of the shadow camera's box instead of re-drawing the whole cliff into a 6.4 m frame.
+  // One InstancedMesh per prototype, only for the prototypes this route asks for, its instances
+  // sorted up the wall so both the height window and the shadow band are a count and a memmove.
+  const protos = new Map();
+  const protoFor = (key) => {
+    let p = protos.get(key);
+    if (!p) { p = holdProto(key); protos.set(key, p); }
+    return p;
+  };
   const holdsGroup = new THREE.Group();
   holdsGroup.name = 'holds';
   holdsGroup.userData.holdBucket = 'holds';
@@ -405,74 +450,95 @@ export async function createWorld({ renderer, scene, route, tier }) {
   {
     const m = new THREE.Matrix4();
     const c = new THREE.Color();
-    for (let i = 0; i < protos.length; i++) {
-      const list = buckets[i];
+    for (const key of [...buckets.keys()].sort((a, b) => a - b)) {
+      const list = buckets.get(key);
       if (!list.length) continue;
       list.sort((a, b) => a.y - b.y);
-      const mesh = new THREE.InstancedMesh(protos[i].geo, holdMat, list.length);
-      mesh.name = `holds-${protos[i].grip}-${i % PROTO.variants}`;
+      const proto = protoFor(key);
+      const n = list.length;
+      const mesh = new THREE.InstancedMesh(proto.geo, holdMat, n);
+      mesh.name = `holds-${proto.grip}-${proto.big ? 'big' : 'small'}-${key % PROTO.variants}`;
       mesh.castShadow = true; mesh.receiveShadow = true;
       mesh.userData.holdBucket = 'holds';
-      const ys = new Float32Array(list.length);
-      for (let k = 0; k < list.length; k++) {
+      // The masters stay whole; the mesh's own buffers hold whatever window is drawn right now.
+      const mats = new Float32Array(n * 16);
+      const cols = new Float32Array(n * 3);
+      const ys = new Float32Array(n);
+      for (let k = 0; k < n; k++) {
         const hold = list[k];
         const r = holdRnd(hold);
-        footprint.set(hold.id, instanceMatrix(hold, protos[i], r, m));
-        mesh.setMatrixAt(k, m);
+        footprint.set(hold.id, instanceMatrix(hold, proto, r, m));
+        m.toArray(mats, k * 16);
         // per-hold shade, as the merged build had it — now a multiplier on the prototype's colours
         const shade = (0.82 + r() * 0.2) / SHADE_MEAN;
         c.setRGB(shade * (0.96 + r() * 0.08), shade * (0.96 + r() * 0.08), shade * (0.96 + r() * 0.08));
-        mesh.setColorAt(k, c);
+        c.toArray(cols, k * 3);
         ys[k] = hold.y;
       }
+      mesh.instanceMatrix.array.set(mats);
       mesh.instanceMatrix.needsUpdate = true;
-      if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
-      mesh.computeBoundingSphere();
+      mesh.setColorAt(0, c);                       // allocates instanceColor
+      mesh.instanceColor.array.set(cols);
+      mesh.instanceColor.needsUpdate = true;
+      mesh.computeBoundingSphere();                // over every instance: the window never re-culls
       mesh.userData.ys = ys;
-      mesh.userData.full = list.length;
-      mesh.userData.shadowCount = list.length;
+      mesh.userData.mats = mats;
+      mesh.userData.cols = cols;
+      mesh.userData.full = n;
+      mesh.userData.lo = 0;
+      mesh.userData.drawn = n;
+      mesh.userData.shadowCount = n;
       mesh.onBeforeShadow = onBeforeHoldShadow;
       mesh.onAfterShadow = onAfterHoldShadow;
       holdsGroup.add(mesh);
       holdMeshes.push(mesh);
     }
   }
-  // Only the band around the climber can land in the shadow camera's 6.4 m box; the rest of the
-  // cliff is drawn into the depth map for nothing. Instances are sorted by height, so the cut is
-  // one count — and it cannot change a pixel, because what it drops could not have cast anything.
+  // The height window (main pass) and the shadow band (depth pass). Instances are sorted by
+  // height, so both are a binary search: the window is the rows within PROTO.below/above of the
+  // body, memmoved to the front of the instance buffers, and the band is a prefix of that window.
+  // Neither is a guess about what is visible — both were measured by rendering the 1895-hold field
+  // with and without them and diffing the pixels (see the B52 row).
+  const lowerBound = (ys, v) => {              // first index with ys[i] >= v
+    let lo = 0, hi = ys.length;
+    while (lo < hi) { const mid = (lo + hi) >> 1; if (ys[mid] < v) lo = mid + 1; else hi = mid; }
+    return lo;
+  };
   function onBeforeHoldShadow() { this.count = this.userData.shadowCount; }
-  function onAfterHoldShadow() { this.count = this.userData.full; }
-  function updateShadowCounts(bodyY) {
-    const lim = bodyY + PROTO.shadowBand;
+  function onAfterHoldShadow() { this.count = this.userData.drawn; }
+  function updateHoldWindow(bodyY) {
+    const top = bodyY + PROTO.above, bottom = bodyY - PROTO.below, band = bodyY + PROTO.shadowBand;
     for (const mesh of holdMeshes) {
-      const ys = mesh.userData.ys;
-      let lo = 0, hi = ys.length;
-      while (lo < hi) { const mid = (lo + hi) >> 1; if (ys[mid] <= lim) lo = mid + 1; else hi = mid; }
-      mesh.userData.shadowCount = lo;
+      const d = mesh.userData;
+      const lo = lowerBound(d.ys, bottom);
+      const hi = lowerBound(d.ys, top);
+      const n = hi - lo;
+      if (lo !== d.lo || n !== d.drawn) {
+        if (n > 0) {
+          mesh.instanceMatrix.array.set(d.mats.subarray(lo * 16, hi * 16));
+          mesh.instanceColor.array.set(d.cols.subarray(lo * 3, hi * 3));
+          mesh.instanceMatrix.needsUpdate = true;
+          mesh.instanceColor.needsUpdate = true;
+        }
+        d.lo = lo;
+        d.drawn = n;
+        mesh.count = n;
+      }
+      d.shadowCount = Math.max(0, Math.min(n, lowerBound(d.ys, band) - lo));
     }
   }
 
-  // Chalk and contact shadows, one patch each per hold, still merged into a single mesh apiece:
-  // a 5×5 and a 4×4 grid is 61 vertices a hold, so a whole field of them is ~5 MB and two draw
-  // calls — a fiftieth of what the blobs cost. They stay conformed to the rock, which is what
-  // makes a hold read as growing out of the wall at arm's length.
-  for (const hold of holds) {
-    // chalk splat on the wall around the hold, biased upward where the hand comes from
-    chalkGeos.push(conformedPatch(hold.x, hold.y + hold.size * 0.15, hold.size * 2.3, 5, (rnd() - 0.5) * 0.8, 0.012));
-    // contact shadow: a dark ellipse under the blob's footprint, so the hold grows out of the rock
-    const fp = footprint.get(hold.id) || { sx: 1.3, sy: 0.75, rot: 0 };
-    skirtGeos.push(conformedPatch(hold.x, hold.y - hold.size * 0.12, hold.size * 2.4 * fp.sy, 4, fp.rot, 0.008, fp.sx / fp.sy));
-  }
   // --- decoys: the same rock, but each one is its own mesh so it can fall away when it gives ---
-  // They are cut from the prototypes too, with the per-hold shade on a cloned material instead of
-  // an instance colour, so a decoy is still pixel-for-pixel a hold until you weigh it.
+  // Cut from the prototypes too, with the per-hold shade on a cloned material instead of an
+  // instance colour, so a decoy is still pixel-for-pixel a hold until you weigh it. Built before
+  // the patches below, because the patches want the footprint this leaves behind.
   const fakeParts = [];
   {
     const m = new THREE.Matrix4();
     for (const f of fakes) {
       const g = new THREE.Group();
-      const proto = protos[protoOf(f)];
-      const r = holdRnd(f);
+      const { key, r } = fakePicks.get(f.id);
+      const proto = protoFor(key);
       footprint.set(f.id, instanceMatrix(f, proto, r, m));
       const mat = holdMat.clone();
       const shade = (0.82 + r() * 0.2) / SHADE_MEAN;    // the prototype already carries SHADE_MEAN
@@ -485,6 +551,19 @@ export async function createWorld({ renderer, scene, route, tier }) {
       root.add(g);
       fakeParts.push({ fake: f, group: g, blob, fall: 0, vy: 0, spin: (rnd() - 0.5) * 4 });
     }
+  }
+
+  // Chalk and contact shadows, one patch each per hold AND per decoy, merged into a single mesh
+  // apiece: a 5×5 and a 4×4 grid is 61 vertices a hold, so a whole field of them is ~5 MB and two
+  // draw calls. They stay conformed to the rock, which is what makes a hold read as growing out of
+  // the wall at arm's length — and a decoy without them would be a decoy you could see coming.
+  // What a decoy leaves behind when it goes is exactly these two: the socket it came out of.
+  for (const hold of [...holds, ...fakes]) {
+    // chalk splat on the wall around the hold, biased upward where the hand comes from
+    chalkGeos.push(conformedPatch(hold.x, hold.y + hold.size * 0.15, hold.size * 2.3, 5, (rnd() - 0.5) * 0.8, 0.012));
+    // contact shadow: a dark ellipse under the blob's footprint, so the hold grows out of the rock
+    const fp = footprint.get(hold.id) || { sx: 1.3, sy: 0.75, rot: 0 };
+    skirtGeos.push(conformedPatch(hold.x, hold.y - hold.size * 0.12, hold.size * 2.4 * fp.sy, 4, fp.rot, 0.008, fp.sx / fp.sy));
   }
 
   if (skirtGeos.length) {
@@ -832,7 +911,10 @@ export async function createWorld({ renderer, scene, route, tier }) {
   // face is the weathered top and its stretched back is buried. One draw call for all twelve.
   let boulders = null;
   {
-    const proto = protos[FAMILY_OF.sloper * PROTO.variants];
+    // The sloper family's first small-tier variant: the same blob B53 laid on its back, asked
+    // for the way anything asks for one now that a prototype is a (family, size tier, variant)
+    // and is built the first time a route wants it.
+    const proto = protoFor(protoKey(FAMILY_OF.sloper, 0));
     const brnd = mulberry32(seed * 2654435761 + 991);
     const mesh = new THREE.InstancedMesh(proto.geo, holdMat, GROUND.boulders);
     mesh.name = 'ground-boulders';
@@ -872,19 +954,39 @@ export async function createWorld({ renderer, scene, route, tier }) {
   // Per-frame
   let t = 0;
   let routeRef = null;
-  let shadowY = Infinity;                 // body height the shadow-band counts were cut for
+  let windowY = Infinity;                 // body height the drawn window and shadow band were cut for
   const holdById = new Map();
   const _a = new THREE.Vector3(), _b = new THREE.Vector3();
   const _size = new THREE.Vector2();
   const runeByDist = [];
 
+  // The rock is baked at boot. A restart hands us a fresh route object built from the same seed,
+  // so the same holds come back in the same places and the geometry is still right — but nothing
+  // enforced that, and a route of a different shape would leave the wall showing the old one with
+  // no clue why. Check it once per route change and say so out loud.
+  let routeWarned = false;
   function syncRoute(state) {
     const r = (state && state.route) || route;
     if (r === routeRef) return;
     routeRef = r;
     holdById.clear();
     for (const h of (r && r.holds) || []) holdById.set(h.id, h);
+    const next = (r && r.holds) || [];
+    if (!routeWarned && (next.length !== holds.length || !sameGround(next))) {
+      routeWarned = true;
+      console.warn('[world] the route changed shape under a wall that was baked for the old one —',
+        `${holds.length} holds became ${next.length}. Rebuild the world instead of syncing it.`);
+    }
     syncFakes(r);
+  }
+  // Cheap identity: same ids in the same places at both ends and the middle of the route.
+  function sameGround(next) {
+    for (const i of [0, holds.length >> 1, holds.length - 1]) {
+      const a = holds[i], b = next[i];
+      if (!a || !b) return false;
+      if (a.id !== b.id || Math.abs(a.x - b.x) > 1e-4 || Math.abs(a.y - b.y) > 1e-4) return false;
+    }
+    return true;
   }
 
   // "Climb again" builds a fresh route from the same seed, so the sim's decoys are whole again --
@@ -921,11 +1023,11 @@ export async function createWorld({ renderer, scene, route, tier }) {
     embers.setHeightPx(_size.y);
     embers.setTime(t);
 
-    // The shadow band moves with the climber, a quarter metre at a time — a binary search per
-    // instanced mesh, not per hold, and only when the body has actually gone somewhere.
-    if (holdMeshes.length && Math.abs(body.y - shadowY) > 0.25) {
-      shadowY = body.y;
-      updateShadowCounts(body.y);
+    // The drawn window and the shadow band move with the climber, a quarter metre at a time — two
+    // binary searches per instanced mesh, not per hold, and only when the body has gone somewhere.
+    if (holdMeshes.length && Math.abs(body.y - windowY) > 0.25) {
+      windowY = body.y;
+      updateHoldWindow(body.y);
     }
 
     // --- runes -----------------------------------------------------------------------------
