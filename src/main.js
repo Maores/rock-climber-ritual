@@ -148,6 +148,7 @@ const perf = {
   frames: 0,            // frames rendered since boot
   frameMs: 0,           // last frame time
   minFps: Infinity,     // worst 2-second window since the climb started
+  steps: 0,             // watchdog step-downs this climb, counted at the fire (review of B27)
   history: [],          // one { t, fps, pixelRatio } per 2-second window, capped at 10 minutes
   pixelRatio: tier.pixelRatio,
   drawCalls: 0, triangles: 0,
@@ -173,6 +174,7 @@ function watchdog(dt) {
     if (fps < perf.minFps) perf.minFps = fps;
     if (fps < WATCHDOG_MIN_FPS && renderer.getPixelRatio() > MIN_PIXEL_RATIO + 1e-6) {
       const pr = Math.max(MIN_PIXEL_RATIO, renderer.getPixelRatio() - 0.25);
+      perf.steps++;                      // counted, not derived: a clamped last step rounded away to 'steps 0'
       renderer.setPixelRatio(pr);
       resize();
       console.warn(`[ritual] ${fps.toFixed(1)} fps: pixel ratio stepped down to ${pr}`);
@@ -344,7 +346,7 @@ function updateOverlay(dt) {
   const size = renderer.getDrawingBufferSize(new THREE.Vector2());
   const pr = renderer.getPixelRatio();
   // The watchdog only ever steps down, and only by 0.25, so the count is the distance travelled.
-  const steps = Math.max(0, Math.round((tier.pixelRatio - pr) / 0.25));
+  const steps = perf.steps;
   const min = isFinite(perf.minFps) ? perf.minFps.toFixed(1) : '--';
   const fps = perf.fps;
   overlayNum.textContent = `${fps.toFixed(1)} fps`;
@@ -393,6 +395,7 @@ function start() {
   startClimb(state);
   upT = 0;                      // the watchdog's warm-up restarts with the climb (title → HUD swap compiles shaders)
   perf.minFps = Infinity;
+  perf.steps = 0;
   if (query.has('auto')) debug.autopilot(true);
   state.web.unlocked = spiderUnlocked();       // the egg, if the code has been typed
   hud.refreshCustomBtn();
@@ -400,6 +403,7 @@ function start() {
 
 function restart() {
   state = createClimber(generateRoute(route.seed));   // fresh holds: nothing lit, nothing remembered
+  perf.minFps = Infinity; perf.steps = 0;    // the overlay's min and step count are per climb, like start()
   state.web.unlocked = spiderUnlocked();
   startClimb(state);
   rig = createCameraRig(camera);
