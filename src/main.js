@@ -200,7 +200,9 @@ if (window.visualViewport) window.visualViewport.addEventListener('resize', resi
 // Debug surface (window.__ritual.debug): autopilot through the Input interface, teleport,
 // pause/advance, fps overlay. Used by the test/evidence harness only.
 
-const zeroInput = () => ({ L: { x: 0, y: 0 }, R: { x: 0, y: 0 }, tapL: false, tapR: false, holdL: false, holdR: false });
+// `active` is the B45 flag: false here means "nobody is on this stick", so a free hand keeps its
+// parked target instead of reading a zero vector as a push toward the shoulder.
+const zeroInput = () => ({ L: { x: 0, y: 0, active: false }, R: { x: 0, y: 0, active: false }, tapL: false, tapR: false, holdL: false, holdR: false });
 const heldDebug = { L: false, R: false };   // debug.hold(side, on) — the evidence harness fires the web with this
 const OTHER = { L: 'R', R: 'L' };
 
@@ -215,6 +217,7 @@ function steerTo(st, side, hold) {
   const v = { x: (hold.x - sh.x) / CFG.REACH, y: (hold.y - sh.y) / CFG.REACH };
   const m = Math.hypot(v.x, v.y);
   if (m > 1) { v.x /= m; v.y /= m; }
+  v.active = true;             // the bot's thumb is on the stick for this frame
   return v;
 }
 
