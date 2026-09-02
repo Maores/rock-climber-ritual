@@ -420,7 +420,7 @@ function frame(now) {
   const lookIn = inp.look;
   if (auto.on && !debug.pause) {
     const ai = autoInput(state);
-    inp = { L: ai.L, R: ai.R, tapL: inp.tapL || ai.tapL, tapR: inp.tapR || ai.tapR, look: lookIn };
+    inp = { L: ai.L, R: ai.R, tapL: inp.tapL || ai.tapL, tapR: inp.tapR || ai.tapR, look: lookIn, web: inp.web };
     hud.setStick('L', ai.L.x, ai.L.y);
     hud.setStick('R', ai.R.x, ai.R.y);
   }
@@ -440,6 +440,9 @@ function frame(now) {
         tapL: pendingTap.L, tapR: pendingTap.R,
         // held grips drive the web-zip's aim; without these the shot can never charge
         holdL: inp.holdL || heldDebug.L, holdR: inp.holdR || heldDebug.R,
+        // the WEB pad's gesture (B50): this literal names its fields, and a field it does not name
+        // never reaches the sim -- which is exactly how the pad's aim went missing in B48
+        web: inp.web,
       }, SIM_DT);
       pendingTap.L = pendingTap.R = false;
       acc -= SIM_DT;
