@@ -306,18 +306,33 @@ function teleport(y) {
   return { hold: i, y: state.body.y };
 }
 
-let overlayEl = null;
+// `?fps=1` overlay. It is read on a phone held at arm's length, so B27: the headline number is
+// big enough to glance at (11px was under Apple's 11pt floor), the block clears the safe area on
+// every edge rather than only the top, and it answers the whole question on its own — the tier
+// that was picked, the pixel ratio *now*, the worst 2-second window since the climb started, and
+// how many times the watchdog stepped the pixel ratio down. Those last two are read out of
+// `perf` and out of the renderer; nothing new is tracked to draw them.
+let overlayEl = null, overlayNum = null, overlayRest = null;
 function overlay(on) {
   if (on && !overlayEl) {
     overlayEl = document.createElement('div');
     overlayEl.id = 'fps';
-    overlayEl.style.cssText = 'position:fixed;top:calc(56px + env(safe-area-inset-top,0px));right:12px;z-index:30;pointer-events:none;' +
-      'font:600 11px/1.45 ui-monospace,Menlo,monospace;color:#7fe0ff;text-align:right;text-shadow:0 1px 4px #000,0 0 10px rgba(0,0,0,.8);' +
-      'background:rgba(10,12,24,.55);padding:6px 8px;border-radius:8px;white-space:pre';
+    overlayEl.style.cssText = 'position:fixed;z-index:30;pointer-events:none;' +
+      // 74px clears the whole of #top (the fall count, the height meter and the rune row, 66px
+      // tall) whatever the rune count, so the block never lands on the HUD it is measuring.
+      'top:calc(74px + env(safe-area-inset-top,0px));right:calc(12px + env(safe-area-inset-right,0px));' +
+      'font:600 13px/1.5 ui-monospace,Menlo,monospace;color:#f1e6d8;text-align:right;' +
+      'text-shadow:0 1px 4px #000,0 0 10px rgba(0,0,0,.9);' +
+      'background:rgba(8,10,20,.74);border:1px solid rgba(127,224,255,.22);' +
+      'padding:7px 10px;border-radius:10px;white-space:pre';
+    overlayNum = document.createElement('div');
+    overlayNum.style.cssText = 'font:700 22px/1.15 ui-monospace,Menlo,monospace;letter-spacing:-.02em;margin-bottom:2px';
+    overlayRest = document.createElement('div');
+    overlayEl.append(overlayNum, overlayRest);
     document.body.appendChild(overlayEl);
   } else if (!on && overlayEl) {
     overlayEl.remove();
-    overlayEl = null;
+    overlayEl = overlayNum = overlayRest = null;
   }
 }
 let overlayT = 0;
@@ -327,11 +342,20 @@ function updateOverlay(dt) {
   if (overlayT < 0.25) return;
   overlayT = 0;
   const size = renderer.getDrawingBufferSize(new THREE.Vector2());
-  overlayEl.textContent =
-    `${perf.fps.toFixed(1)} fps  ${perf.frameMs.toFixed(1)} ms\n` +
-    `${tier.name} ×${renderer.getPixelRatio().toFixed(2)}  ${size.x}×${size.y}\n` +
+  const pr = renderer.getPixelRatio();
+  // The watchdog only ever steps down, and only by 0.25, so the count is the distance travelled.
+  const steps = Math.max(0, Math.round((tier.pixelRatio - pr) / 0.25));
+  const min = isFinite(perf.minFps) ? perf.minFps.toFixed(1) : '--';
+  const fps = perf.fps;
+  overlayNum.textContent = `${fps.toFixed(1)} fps`;
+  // Rune teal at or above the 30 fps target, HUD gold between there and the watchdog line, red under it.
+  overlayNum.style.color = fps <= 0 ? '#f1e6d8' : fps >= 30 ? '#7fe0ff' : fps >= WATCHDOG_MIN_FPS ? '#d99a5b' : '#e8695f';
+  overlayRest.textContent =
+    `min ${min}   steps ${steps}\n` +
+    `tier ${tier.name}  ×${pr.toFixed(2)}\n` +
+    `${size.x}×${size.y}  ${perf.frameMs.toFixed(1)} ms\n` +
     `${perf.drawCalls} calls  ${(perf.triangles / 1000).toFixed(0)}k tris\n` +
-    `${state.phase}  ${state.body.y.toFixed(1)} m  night ${state.night.toFixed(2)}`;
+    `${state.phase} ${state.body.y.toFixed(1)}m n${state.night.toFixed(2)}`;
 }
 
 const queuedEvents = [];

@@ -179,4 +179,9 @@ desktop = { 'desktop', min(dpr, 2), 2048, 1.0, '2k', true }
 - Portrait first; landscape must remain playable. Safe-area insets respected. No text selection, no tap highlight, no double-tap zoom, `touch-action: none` on the canvas and sticks.
 - Tests: `node --test test/` must pass for sim-input before the integrator merges. Rendering domains verify with the dev server: `python3 tools/devserver.py 8787` (already running in the session) → http://localhost:8787/.
 - Evidence capture for critics: screenshots at three heights (start, ~20 m, summit approach) in a 390×844 portrait viewport at 2× and one desktop 1440×900 frame, plus an fps read from `window.__ritual` over 10 s, plus console-error count. Prefer the chrome-devtools MCP (its own Chrome) or a background Browser-pane tab; never front or navigate the user's visible tab.
+  `?fps=1` draws the same figures on the screen for a reading taken by hand on a real device (B27): the 2-second
+  average as a large coloured headline (teal ≥ 30, amber ≥ 24, red below), then the min fps since the climb started,
+  the watchdog step-down count, the tier name, the pixel ratio now, the drawing-buffer size, draw calls, triangles,
+  phase and height. It sits below the HUD's top row and inside the safe area, and reads nothing that `perf` and the
+  renderer do not already hold — the step count is `(tier.pixelRatio − renderer.getPixelRatio()) / 0.25`.
 - Never touch files you do not own; report contract problems to the integrator instead of working around them.
