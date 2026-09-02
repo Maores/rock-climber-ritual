@@ -70,7 +70,7 @@ Input = { L:{x,y,active}, R:{x,y,active}, tapL:boolean, tapR:boolean,
   // recenter (Escape / a grip key, for one read). It is how the sim tells a stick nobody is touching from one reading
   // zero (B45); an Input without the flag is read the old way, where only a non-zero vector steers.
   // while the WEB pad is held it IS holdR, and `R` carries the pad's drag as the aim, overriding that stick and LOOK.
-  // The sim reads `R` for the aim AND for the free right hand, so aiming points the hand too, and it parks there (B47).
+  // The sim reads `R` for the aim AND for the free right hand, so aiming points the hand too, and it parks there (B48).
 ```
 Constants live in `sim.js` as `CFG`: REACH 0.72, SNAP 0.16, SHOULDER_DX 0.19, SHOULDER_DY 0.08, HANG_TWO 0.42, HANG_ONE 0.50,
 GRACE 0.25, FLOOR 0.75, FALL_TERMINAL 26, drain two-hand 0.05/s, one-hand 0.20/s, refill free 0.18/s, rune refill 0.50/s, forced release at 0.

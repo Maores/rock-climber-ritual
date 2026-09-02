@@ -266,7 +266,7 @@ test('input: active tells a stick nobody is touching from a stick reading zero (
   assert.equal(r.R.active, false, 'no key down: a held value is a parked hand, not a live steer');
 });
 
-test('input: the WEB pad is the right grip and its drag is the aim that reaches the sim (B47)', () => {
+test('input: the WEB pad is the right grip and its drag is the aim that reaches the sim (B48)', () => {
   const knob = { L: null, R: null };
   const hud = {
     sticks: { L: ring(20, 600), R: ring(250, 600) }, grips: {},
