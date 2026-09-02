@@ -46,7 +46,7 @@ const CREDITS = [
   },
   {
     what: 'Music',
-    text: '“Ritual” Kevin MacLeod (incompetech.com)',
+    text: '“Ritual” and “Ossuary 6 - Air” Kevin MacLeod (incompetech.com)',
     license: 'Licensed under Creative Commons: By Attribution 4.0',
     url: 'https://creativecommons.org/licenses/by/4.0/',
   },
