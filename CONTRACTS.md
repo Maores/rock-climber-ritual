@@ -124,7 +124,8 @@ Input = { L:{x,y,active}, R:{x,y,active},
 Constants live in `sim.js` as `CFG`: REACH 0.72, SNAP 0.16, SHOULDER_DX 0.19, SHOULDER_DY 0.08, HANG_TWO 0.42, HANG_ONE 0.50,
 GRACE 0.25, FLOOR 0.75, FALL_TERMINAL 26, drain per gripping hand 0.022/s with two hands on, 0.085/s with one, both times the hold's own multiplier (jug 0.65 to crimp 1.85), refill free 0.30/s, rune refill 0.50/s, forced release at 0,
 HOVER_GRAB_DWELL 0.12, HOVER_HYST 0.012, MISS_COOLDOWN 0.30, RELEASE_DEADZONE 0.35, RELEASE_CONFIRM 0.016, SLIP_REST 0.15,
-REGRIP_LOCK 0.14, SKIP_CLEAR 0.04 (those eight are B51's; the first five and SLIP_REST are feel, and the owner may retune them).
+CATCH_HOLD 0.5, CATCH_CONE 30, REGRIP_LOCK 0.14, SKIP_CLEAR 0.04 (those ten are B51's; all but REGRIP_LOCK and SKIP_CLEAR are
+feel constants, and the owner may retune them).
 
 Behavior (kinematic with physical feel): free hands spring-damp toward `shoulder + stick × REACH`, and letting go of the stick
 leaves the hand there — the target is kept as an offset from the shoulder, so a parked hand rides along when the body moves, and it
@@ -156,14 +157,19 @@ refills as above, rune holds are rest holds and checkpoints, grabbing the summit
   on it inside the window.
 - **The right hand does not grab while the web line is out** (`web.mode` other than `idle`): a hand that is aiming, or has
   just shot, must not snag a hold and cancel the shot.
-- **Mid-swing it takes a reach at THAT rock.** While `phase === 'swinging'` a hand only closes on a hold its own stick
-  is SENDING it to: the stick past `RELEASE_DEADZONE` and the resting place it picks (`shoulder + stick`, the same
-  target `updateHand` springs to) inside that hold's radius, for the whole dwell. Both hands are free on the line and
-  ride the body across the whole face, so on a wall with rock everywhere a parked hand is inside some hold within a few
-  frames and every swing died as it began. An ANGLE is not enough to tell a reach from a pump — a pump is a stick swept
-  through the ring and it sits inside any given 45° arc for 0.61 s of a 1.4 s cycle, five dwells — but where the stick
-  parks the hand is: a pump sends it to arm's length, past everything. Catching rock mid-swing still ends the swing; it
-  just has to be something you did.
+- **Mid-swing a catch is a HELD reach.** While `phase === 'swinging'` a hand closes on a hold only after its own stick
+  has stayed on that one hold for `CATCH_HOLD` (0.5 s), unbroken: past `RELEASE_DEADZONE`, sending the hand into that
+  hold (the resting place the stick picks — `shoulder + stick`, the same target `updateHand` springs to — is on the
+  rock) and within `CATCH_CONE` (±30°) of the hold's own direction from the shoulder. The hold changing, any condition
+  lapsing, or the stick reversing (the new direction more than 90° off the last) starts the clock again; the ordinary
+  `HOVER_GRAB_DWELL` still has to run on top, with the hand actually on the rock.
+  Both hands are free on the line and ride the body across the whole face, and on a field that is 59–67% covered there
+  is rock wherever the arm points, so anything weaker catches by accident and ends the swing. Measured on B46's field:
+  a pushed stick alone, or a stick merely pointing the right way, let a *pumped* swing end in a grab 24 times out of 24
+  (median 4.45 s) — a pump lingers ~0.3 s at each end of its stroke, which any short test reads as an aim — and a
+  constant-speed circle still caught 7 in 24. With the held reach: idle, pumped and circling all keep 24/24 for 12 s,
+  and a deliberate reach still catches. Catching rock mid-swing is still how you get off the line; it just has to be
+  something you did on purpose.
 - **A hand that slips takes nothing until it has rested.** `SLIP_REST` (0.15 stamina). Two holds whose radii overlap —
   every route has such a pair — otherwise gave a spent hand somewhere to go the instant it came off: slip off A, close
   on B, slip, close on A, for ever, on a hand that could never hold.

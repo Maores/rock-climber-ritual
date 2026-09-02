@@ -46,6 +46,12 @@ export const CFG = Object.freeze({
                             // (or a thumb reaching for the other stick) can never drop you.
   RELEASE_CONFIRM: 0.016,   // ...and it must stay past it this long (two 120 Hz steps) to count,
                             // so a thumb that clips the deadzone in passing does not drop you
+  CATCH_HOLD: 0.5,          // mid-swing, how long the stick must be held ON a hold before the hand
+                            // catches it. Longer than a pump lingers at the end of its stroke
+                            // (~0.3 s), short enough that a deliberate reach still works.
+  CATCH_CONE: 30,           // degrees. ...and it must stay within this of the hold's direction for
+                            // all of it, unbroken: a sweep leaves the cone, and a reversal of the
+                            // stick resets the clock outright.
   SLIP_REST: 0.15,          // a hand that has just slipped takes nothing until it has this much
                             // stamina back: a slip is the game telling you to shake out, and
                             // without it a spent hand grabbed, slipped and grabbed for ever
@@ -132,6 +138,8 @@ function makeHand(side, hold) {
     _skipId: null,                                  // the hold just let go of, until the hand leaves it
     _spent: false,                                  // slipped off: takes nothing until it has rested
     _missT: 0,                                      // cooldown on the miss event
+    _catchId: null, _catchT: 0,                     // mid-swing: the rock this stick is reaching at,
+    _catchDx: 0, _catchDy: 0,                       // for how long, and which way it was pointing
     _regripT: 0,                                    // brief beat after a release before rock can be taken
   };
 }
@@ -576,31 +584,58 @@ function stickTarget(state, hand, sx, sy) {
   return { x: sh.x + ox, y: sh.y + oy };
 }
 
-// Is this stick SENDING this hand onto this rock? Not merely pointing near it: the place the
-// stick parks the hand has to be on the hold. Used only while swinging, where a hand is carried
-// past rock it never reached for — and where an angle test is not enough, because a pump is a
-// stick sweeping through the ring and it lingers in any given 45-degree arc for 0.61 s of a 1.4 s
-// cycle, five times the dwell. A pump sends the hand to arm's length; a reach sends it to a hold.
-function reachingAt(state, hand, hold, stick) {
-  const sx = (stick && +stick.x) || 0, sy = (stick && +stick.y) || 0;
-  let m = Math.hypot(sx, sy);
-  if (m < 1e-6) return false;
+// MID-SWING, A CATCH IS A HELD REACH. Hanging on the line both hands are free and ride the body
+// across a face that is more rock than gap, so anything short of a deliberate, sustained reach
+// catches something by accident and ends the swing. Neither "the stick is pushed" nor "the stick
+// points that way" is enough: a pump is the stick swept through the ring, it lingers about 0.3 s
+// at each end of its stroke, and at 59-67% coverage there is rock wherever the arm points — a
+// pumped swing ended in a grab 24 times out of 24 (B46, median 4.45 s), and even a constant-speed
+// circle caught 7 times in 24.
+//
+// So the stick has to STAY on one piece of rock: past RELEASE_DEADZONE, sending the hand into that
+// hold (the resting place it picks is on the rock), and within CATCH_CONE of the hold's own
+// direction — unbroken, for CATCH_HOLD. Any of those lapsing, the hold changing, or the stick
+// reversing starts the clock again. A sweep cannot hold a cone it is sweeping through, and a
+// reversal is what a pump does at every stroke end.
+function catchAim(state, hand, sx, sy, m) {
   const t = stickTarget(state, hand, m > 1 ? sx / m : sx, m > 1 ? sy / m : sy);
-  return Math.hypot(t.x - hold.x, t.y - hold.y) <= grabRadius(hold);
+  const other = state.hands[OTHER[hand.side]];
+  const near = nearestHold(state, t.x, t.y, skipId(state, hand), other.gripping ? other.holdId : null);
+  const fk = nearestFake(state, t.x, t.y);          // a decoy is reached for exactly like rock (B10)
+  const pick = fk && (!near || fk.d < near.d) ? fk : near;
+  if (!pick || pick.d > grabRadius(pick.hold)) return null;
+  // ...and the push itself must point at it, not merely end up there.
+  const sh = shoulder(state, hand.side);
+  const hx = pick.hold.x - sh.x, hy = pick.hold.y - sh.y;
+  const hm = Math.hypot(hx, hy);
+  if (hm > 1e-6) {
+    const cos = (sx * hx + sy * hy) / (m * hm);
+    if (cos < Math.cos(CFG.CATCH_CONE * Math.PI / 180)) return null;
+  }
+  return pick.hold;
+}
+
+function updateSwingReach(state, hand, dt, stickIn, sx, sy, m) {
+  if (state.phase !== 'swinging' || m <= CFG.RELEASE_DEADZONE || (stickIn && stickIn.active === false)) {
+    hand._catchId = null; hand._catchT = 0; hand._catchDx = 0; hand._catchDy = 0;
+    return;
+  }
+  const nx = sx / m, ny = sy / m;
+  const reversed = (hand._catchDx || hand._catchDy) && nx * hand._catchDx + ny * hand._catchDy < 0;
+  hand._catchDx = nx; hand._catchDy = ny;
+  const hold = reversed ? null : catchAim(state, hand, sx, sy, m);
+  if (!hold) { hand._catchId = null; hand._catchT = 0; return; }
+  if (hold.id !== hand._catchId) { hand._catchId = hold.id; hand._catchT = 0; return; }
+  hand._catchT += dt;
 }
 
 // The grab, with no button (B51). A free hand that stays on a piece of rock for HOVER_GRAB_DWELL
 // closes on it. The dwell is the whole difference between reaching for a hold and sweeping past
 // one; leaving the rock before the fingers close is the 'miss' the HUD shakes on, and is the only
 // miss there is now that nothing is tapped. Decoys are taken exactly like real rock (B10).
-// MID-SWING IT TAKES A REACH AT THAT ROCK. Hanging on the line, both hands are free and ride the
-// body across the whole face, and on a wall with rock everywhere they are inside some hold's
-// radius within a few frames — which ended every swing almost as soon as it began. So while
-// `swinging` a hand only closes on rock it is being pushed INTO: its own stick past
-// RELEASE_DEADZONE and pointing within SWING_REACH_ARC of that hold, for the whole dwell. A pump
-// is a stick sweeping through the ring, so it passes through the arc and never dwells in it —
-// pumping past a hold used to grab it, cut the line and spend a fall on a 1.4 s cycle.
-function updateHoverGrab(state, hand, dt, cue, reaching, stick) {
+// Mid-swing there is one more gate on top of the dwell: the held reach the accumulator above
+// measures. See updateSwingReach — nothing gets caught off the line by accident.
+function updateHoverGrab(state, hand, dt, cue, reaching) {
   // Mid-fall the regrip beat is waived: the fingers have to be allowed to close on whatever they
   // are still touching, which is the whole of the grace window now that nothing is tapped.
   // And the right hand does not grab rock while the line is out — a hand that is aiming, or has
@@ -622,8 +657,9 @@ function updateHoverGrab(state, hand, dt, cue, reaching, stick) {
     const fk = nearestFake(state, hand.x, hand.y);
     if (fk && fk.d <= rOf(fk.hold) && (!near || fk.d < near.d)) { hold = fk.hold; fake = true; }
     else if (near && near.d <= rOf(near.hold)) hold = near.hold;
-    // ...and mid-swing the reach has to be AT this rock, not merely outward.
-    if (hold && state.phase === 'swinging' && !reachingAt(state, hand, hold, stick)) hold = null;
+    // ...and mid-swing only a reach that has been held on THIS rock for CATCH_HOLD may close.
+    if (hold && state.phase === 'swinging' &&
+        !(hand._catchId === hold.id && hand._catchT >= CFG.CATCH_HOLD)) hold = null;
   }
   const id = hold ? hold.id : null;
   if (id !== hand._hoverId) {
@@ -892,7 +928,8 @@ function updateHand(state, hand, stickIn, dt) {
     // that lets go of rock. `active === false` says the value is a parked one nobody is touching
     // (B45), and an Input without the flag is read the pre-B45 way, where a live vector is a steer.
     const reaching = m > CFG.RELEASE_DEADZONE && !(stickIn && stickIn.active === false);
-    updateHoverGrab(state, hand, dt, cue, reaching, stickIn);
+    updateSwingReach(state, hand, dt, stickIn, sx, sy, m);
+    updateHoverGrab(state, hand, dt, cue, reaching);
   }
 
   // Fingers curl onto a hold (a little anticipation when hovering); tremble grows as stamina fades.
