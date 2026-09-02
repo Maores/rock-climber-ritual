@@ -397,6 +397,11 @@ function toTitle() {
   auto.restUntil = 0;
   pendingTap.L = pendingTap.R = false;
   debug.pause = false;                  // the confirmation's freeze never outlives the climb
+  // The theme belongs to the climb, and start() is the only thing that ever asked for it, so a
+  // title reached this way would keep playing over a screen the boot title leaves silent.
+  // setMusic(null) pauses the element (and stops the decoded fallback); start()'s setMusic(MUSIC_URL)
+  // finds the same src already loaded and simply plays it again.
+  audio.setMusic(null);
   hud.showTitle({ touch, seeds: SEEDS, seed });
 }
 

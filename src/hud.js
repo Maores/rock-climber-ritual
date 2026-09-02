@@ -286,14 +286,22 @@ export function createHud(root) {
       location.reload();                             // not wired: a reload is the title screen
     }
   }
-  const onMenuClick = (e) => { e.preventDefault(); e.stopPropagation(); openConfirm(); };
+  const onMenuClick = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    // Falling, or on the ground: the climb is already lost, so "Leave the climb?" would be asking
+    // about something that has happened. Go straight out, and never freeze a fall to ask.
+    if (cache.phase === 'falling' || cache.phase === 'fallen') leaveClimb();
+    else openConfirm();
+  };
+  const onConfirmBackdrop = (e) => { if (e.target === confirmEl) closeConfirm(); };
+  const confirmStayEl = byId('confirmStay');
+  const confirmLeaveEl = byId('confirmLeave');
   if (menuBtn) menuBtn.addEventListener('click', onMenuClick);
   if (confirmEl) {
-    const stay = byId('confirmStay');
-    const leave = byId('confirmLeave');
-    if (stay) stay.addEventListener('click', closeConfirm);
-    if (leave) leave.addEventListener('click', leaveClimb);
-    confirmEl.addEventListener('pointerdown', (e) => { if (e.target === confirmEl) closeConfirm(); });
+    if (confirmStayEl) confirmStayEl.addEventListener('click', closeConfirm);
+    if (confirmLeaveEl) confirmLeaveEl.addEventListener('click', leaveClimb);
+    confirmEl.addEventListener('pointerdown', onConfirmBackdrop);
   }
   const onConfirmKey = (e) => {
     if (!confirmEl || confirmEl.hidden) return;
@@ -659,12 +667,17 @@ export function createHud(root) {
     }
     return true;                      // a letter never doubles as "press any key to begin"
   }
+  let customTimer = 0;
   function codeFlash(already) {
     const sig = titleEl && titleEl.querySelector('.sigil');
     if (sig) { sig.classList.remove('code-hit'); void sig.offsetWidth; sig.classList.add('code-hit'); }
     message(already ? 'The web answers again' : 'The web answers', 2600, 'rune');
     refreshCustomBtn();
-    setTimeout(openCustom, 900);        // the reward is a choice, not a surprise
+    // The reward is a choice, not a surprise — and only on the title. Typing the code and tapping
+    // to begin inside the 900 ms used to drop the panel over a live climb, so the handle is kept,
+    // cleared when the title goes, and the deferred open checks the title is still up.
+    clearTimeout(customTimer);
+    customTimer = setTimeout(() => { customTimer = 0; if (titleShown) openCustom(); }, 900);
   }
 
   function onTitleKey(e) {
@@ -686,6 +699,8 @@ export function createHud(root) {
     clearTimeout(endTimer);
     endTimer = 0;
     clearTimeout(msgTimer);
+    clearTimeout(customTimer);
+    customTimer = 0;
     msgEl.className = '';
     msgText = '';
     if (endShown) {
@@ -734,6 +749,8 @@ export function createHud(root) {
   }
   function hideTitle() {
     titleShown = false;
+    clearTimeout(customTimer);        // the code's deferred panel belongs to the title it was typed on
+    customTimer = 0;
     syncOverlayFlag();
     titleEl.removeEventListener('pointerdown', onTitlePointer);
     window.removeEventListener('keydown', onTitleKey, true);
@@ -882,6 +899,10 @@ export function createHud(root) {
     window.removeEventListener('keydown', onTitleKey, true);
     window.removeEventListener('keydown', onConfirmKey);
     if (menuBtn) menuBtn.removeEventListener('click', onMenuClick);
+    if (confirmStayEl) confirmStayEl.removeEventListener('click', closeConfirm);
+    if (confirmLeaveEl) confirmLeaveEl.removeEventListener('click', leaveClimb);
+    if (confirmEl) confirmEl.removeEventListener('pointerdown', onConfirmBackdrop);
+    clearTimeout(customTimer);
     titleEl.removeEventListener('pointerdown', onTitlePointer);
     muteBtn.removeEventListener('click', onMuteClick);
     muteBtn.removeEventListener('pointerdown', onMutePointer);

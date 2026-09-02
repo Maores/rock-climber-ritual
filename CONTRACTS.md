@@ -147,7 +147,9 @@ The one array of events from `drainEvents` is passed to every consumer in the sa
 find out what happened. Render at display rate.
 `window.__ritual = { state, world, arms, rig, post, hud, audio, input, renderer, scene, camera, tier, perf, errors, debug, seed, sim, ready }`
 for tests and evidence capture — `state`, `world`, `arms`, `rig` and `post` are getters, because a restart or a re-skin
-replaces them. `debug` offers `start() / restart() / teleport(y) / tap(side) / hold(side, bool) / fall() / autopilot(b)`,
+replaces them. `debug` offers `start() / restart() / teleport(y) / tap(side) / hold(side, bool) / fall() / autopilot(b)` and the
+`pause` flag — the one member of `debug` the game itself writes: `hud.onPause` raises it while the mid-climb
+confirmation is on screen, so a one-hand hang cannot drain away under the question,
 and the URL accepts `?seed= ?auto ?tier=phone ?fps=1`.
 
 ## Assets (already in the repo; paths are relative to project root)

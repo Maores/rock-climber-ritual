@@ -427,6 +427,7 @@ body.overlay-up #menuBtn { display: none; }
 #confirm[hidden] { display: none; }
 #confirm .panel {
   width: min(340px, 100%);
+  box-sizing: border-box;   /* 100% plus 40 px of padding overflowed a 360 px phone by 3 px a side */
   background: rgba(31, 24, 19, 0.96);
   border: 1px solid var(--line, #3a2c22);
   border-radius: 18px;
