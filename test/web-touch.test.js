@@ -206,6 +206,28 @@ test('touch: aiming never takes your right hand off the rock (B50)', () => {
   rg.input.dispose();
 });
 
+test('touch: pressing the pad costs you no hand (B50, B51)', () => {
+  // The pad used to write the right STICK, and under B51 a full stick deflection is what lets a
+  // hand go — so reaching for the web dropped the right hand, and with the left hand already off
+  // it would have dropped the climber. B50 gave the aim its own field; this is the guard on that.
+  const rg = phone(), s = climber();
+  frame(rg, s);
+  assert.ok(s.hands.L.gripping && s.hands.R.gripping);
+  padDown(rg);
+  padDrag(rg, 70, -40);                          // a committed aim, dragged hard
+  const r = frames(rg, s, 60);
+  assert.equal(s.web.mode, 'aiming');
+  assert.equal(s.hands.R.gripping, true, 'aiming must not let go of the right hand');
+  assert.equal(s.hands.L.gripping, true, 'nor the left');
+  assert.ok(!types(r.evs).includes('release'), `the pad released something: [${types(r.evs)}]`);
+  assert.equal(r.inp.R.x, 0);
+  assert.equal(r.inp.R.y, 0, 'the pad leaves the right stick alone, so nothing reads it as a push');
+  padUp(rg);
+  frames(rg, s, 40);
+  assert.equal(s.phase, 'swinging', 'and the shot still goes, and still bites');
+  rg.input.dispose();
+});
+
 test('touch: a brush of the pad does nothing at all (B50)', () => {
   // With the aim threshold gone, a one-frame brush fired an unaimed shot straight up. It always
   // bit, and a bite takes BOTH hands off the wall -- with no rope (B43) that is a death from a

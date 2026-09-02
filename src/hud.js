@@ -11,7 +11,8 @@
 //     without a double flash.
 //
 // Integration notes for main.js (everything beyond CONTRACTS.md is optional):
-//   • hud.update(state[, events]) — the event list is optional; misses are also detected from state.
+//   • hud.update(state[, events]) — the event list is optional, but a miss only arrives on it: the
+//     sim's `miss` event is the one signal for it now that nothing arms (B51).
 //   • hud.onMute(cb) wires the mute button to audio.setMuted; without it the button reaches
 //     window.__ritual.audio. hud.onRestart(cb) replaces the default location.reload() of "Climb again".
 //   • hud.onMenu(cb) is asked to put the game back on the title screen; without it Menu reloads the
@@ -522,7 +523,7 @@ export function createHud(root) {
       '<div class="hand"><b>Right hand</b><div class="keys"><kbd>Arrows</kbd><span class="sep">push to let go, and to reach</span></div></div>' +
       '<p class="hint"><em>Move the mouse</em> and the hand that is hanging free follows it. <em>Hold a hand over a rock</em> and it takes it by itself; push that hand\'s keys again to let go. <em>Shift-drag</em> to look around — the view stays where you leave it.</p>' +
       '</div>' +
-      '<p class="hint">Hanging drains a hand — rest on the <i>glowing runes</i>. <b>Nothing catches you</b>: one fall is the whole cliff. Not every rock holds. <kbd>M</kbd> mutes.</p>'
+      '<p class="hint">Hanging drains a hand — rest on the <i>glowing runes</i>. <b>Nothing catches you</b>: one fall is the whole cliff. Not every rock holds. <kbd>Esc</kbd> re-centres the sticks, <kbd>M</kbd> mutes.</p>'
     );
   }
   function footHtml() {

@@ -65,7 +65,9 @@ Web   = { mode: 'idle'|'aiming'|'flying'|'attached', ax, ay,   // anchor the lin
                                                                // holding the body off the circle this frame
 Event = { type, hand?: 'L'|'R', holdId?: number, ...extras }
   climbing: 'start' | 'grab' | 'release' | 'miss' | 'slip' | 'rune' | 'summit'
-            // no 'arm' since B51; 'miss' is now a hand that came off a hold before the fingers closed
+            // no 'arm' since B51; 'miss' is now a hand that came off a hold before the fingers closed, and its
+            // `holdId` is whatever the fingers were on — a decoy's id (>= 10000) as readily as a real hold's, so
+            // anything that looks the id up must tolerate a miss. One hand reports at most one every MISS_COOLDOWN
   the drop: 'fall' | 'impact' | 'fallen'      — no 'catch': nothing catches a fall (B43)
   the rock: 'crumble' (+holdId of the decoy)
   the zip:  'aim' | 'webshot' | 'webhit' (+yank) | 'webmiss' | 'webcut'
@@ -117,7 +119,8 @@ Input = { L:{x,y,active}, R:{x,y,active},
 ```
 Constants live in `sim.js` as `CFG`: REACH 0.72, SNAP 0.16, SHOULDER_DX 0.19, SHOULDER_DY 0.08, HANG_TWO 0.42, HANG_ONE 0.50,
 GRACE 0.25, FLOOR 0.75, FALL_TERMINAL 26, drain per gripping hand 0.022/s with two hands on, 0.085/s with one, both times the hold's own multiplier (jug 0.65 to crimp 1.85), refill free 0.30/s, rune refill 0.50/s, forced release at 0,
-HOVER_GRAB_DWELL 0.12, RELEASE_DEADZONE 0.35, REGRIP_LOCK 0.14, SKIP_CLEAR 0.04 (the last four are the B51 feel constants).
+HOVER_GRAB_DWELL 0.12, HOVER_HYST 0.012, MISS_COOLDOWN 0.30, RELEASE_DEADZONE 0.35, RELEASE_CONFIRM 0.016, SLIP_REST 0.15,
+REGRIP_LOCK 0.14, SKIP_CLEAR 0.04 (those eight are B51's; the first five and SLIP_REST are feel, and the owner may retune them).
 
 Behavior (kinematic with physical feel): free hands spring-damp toward `shoulder + stick × REACH`, and letting go of the stick
 leaves the hand there — the target is kept as an offset from the shoulder, so a parked hand rides along when the body moves, and it
@@ -131,25 +134,39 @@ refills as above, rune holds are rest holds and checkpoints, grabbing the summit
 
 **There are no GRIP buttons (B51).** The two sticks are the whole climb.
 - **Grabbing is automatic.** A free hand that stays within `grabRadius(hold)` of a piece of rock for `HOVER_GRAB_DWELL`
-  (0.12 s) closes on it — the dwell is what stops a hand sweeping across rock from snagging it. Decoys, runes and the
-  summit are taken the same way and keep their events. Coming off a hold before the fingers close is the `miss` event.
+  (0.12 s) closes on it — the dwell is what stops a hand sweeping across rock from snagging it. It leaves that hold by
+  `HOVER_HYST` (12 mm) more than it came in by, so a hand resting on a rim does not chatter in and out of it. Decoys,
+  runes and the summit are taken the same way and keep their events. Coming off a hold before the fingers close is the
+  `miss` event, and one hand reports at most one every `MISS_COOLDOWN` (0.30 s).
 - **Letting go is a stick push.** While a hand grips, pushing ITS OWN stick past `RELEASE_DEADZONE` (0.35 of full
   deflection) opens the hand, and the same push is already steering it. Under the deadzone a gripping hand does not move,
   so a resting thumb cannot drop you. It is the push and not the pushed stick: the stick must come back inside the
   deadzone before it can let go again, or the stick that steered a hand onto rock would drop it the frame after it closed.
-  One stick moves one hand, so no single thumb can ever let go of both.
+  And it has to mean it: the push must hold past the deadzone for `RELEASE_CONFIRM` (0.016 s, two 120 Hz steps), so a
+  thumb that clips the line on its way somewhere else keeps its hand. One stick moves one hand, so no single thumb can
+  ever let go of both.
 - **After a hand comes off rock** that hold is locked out of that hand (`_skipId`) until the hand is `SKIP_CLEAR` (4 cm)
   outside its grab radius — a distance, never a timer, so a parked hand can never be taken back by a hold with no input
-  at all — plus a `REGRIP_LOCK` (0.14 s) beat before any rock can be taken. Falling lifts both (the grace window's panic
-  re-grab), except on a hold that just spat the hand off in a `slip`: fingers that failed there do not re-close on it, or a
-  spent hand would grab and slip on the spot for ever.
+  at all — plus a `REGRIP_LOCK` (0.14 s) beat before any rock can be taken. The hold lock holds in EVERY phase, the
+  grace window included (see below); falling waives only the beat, so a hand that reaches other rock mid-fall can close
+  on it inside the window.
 - **The right hand does not grab while the web line is out** (`web.mode` other than `idle`): a hand that is aiming, or has
   just shot, must not snag a hold and cancel the shot.
-- **Mid-swing it takes a reach.** While `phase === 'swinging'` a hand only closes on rock its OWN stick is pushing it
-  into — active and past `RELEASE_DEADZONE` at the moment it is inside the radius; the dwell still applies on top. Both
-  hands are free on the line and ride the body across the whole face, so on a wall with rock everywhere a parked hand is
-  inside some hold within a few frames and every swing died as it began. Catching rock mid-swing still ends the swing —
-  it just has to be something you did.
+- **Mid-swing it takes a reach at THAT rock.** While `phase === 'swinging'` a hand only closes on a hold its own stick
+  is SENDING it to: the stick past `RELEASE_DEADZONE` and the resting place it picks (`shoulder + stick`, the same
+  target `updateHand` springs to) inside that hold's radius, for the whole dwell. Both hands are free on the line and
+  ride the body across the whole face, so on a wall with rock everywhere a parked hand is inside some hold within a few
+  frames and every swing died as it began. An ANGLE is not enough to tell a reach from a pump — a pump is a stick swept
+  through the ring and it sits inside any given 45° arc for 0.61 s of a 1.4 s cycle, five dwells — but where the stick
+  parks the hand is: a pump sends it to arm's length, past everything. Catching rock mid-swing still ends the swing; it
+  just has to be something you did.
+- **A hand that slips takes nothing until it has rested.** `SLIP_REST` (0.15 stamina). Two holds whose radii overlap —
+  every route has such a pair — otherwise gave a spent hand somewhere to go the instant it came off: slip off A, close
+  on B, slip, close on A, for ever, on a hand that could never hold.
+- **Why the lock survives the fall.** A push on both sticks from a two-hand hang is release, release, fall — and nothing
+  may weld the hands back onto the same two holds a tenth of a second later (B43: nothing stops a fall; and the hands
+  came back with the release latch down and the thumbs still buried, so you could not even let go again). `CFG.GRACE` is
+  unchanged and still saves you: it has to be a hold you had not just let go of, which is what reaching for one is.
 
 **The web-zip's gesture (B50).** One rule, and the same one on both devices: **hold to aim, let go to fire, tap to let go
 of the line.** Hold the WEB pad (or the right mouse button) and drag to aim — the reticle follows, and *you may do this with

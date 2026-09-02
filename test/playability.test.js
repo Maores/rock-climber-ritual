@@ -52,12 +52,13 @@ function steerToHold(state, side, hold) {
   if (m > 1) { v.x /= m; v.y /= m; }
   return v;
 }
-// A beat at the centre (a thumb lifting off does this by itself), then one frame of full
-// deflection toward `dir`: that push is the release, and it already aims the reach.
+// A beat at the centre (a thumb lifting off does this by itself), then full deflection toward
+// `dir` held past CFG.RELEASE_CONFIRM: that push is the release, and it already aims the reach.
 function releaseHand(state, side, dir = { x: 0, y: 1 }) {
   const m = Math.hypot(dir.x, dir.y) || 1;
+  const push = inp({ [side]: { x: dir.x / m, y: dir.y / m } });
   step(state, inp({ [side]: { x: 0, y: 0 } }), DT);
-  step(state, inp({ [side]: { x: dir.x / m, y: dir.y / m } }), DT);
+  for (let t = 0; t <= CFG.RELEASE_CONFIRM + 1e-9 && state.hands[side].gripping; t += DT) step(state, push, DT);
 }
 
 // The real check: a steady, human-paced bot has to get up the whole thing.
