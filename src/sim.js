@@ -63,7 +63,8 @@ export const CFG = Object.freeze({
   }),
 
   // --- the web-zip (the unlocked spider hand only) -------------------------------------
-  WEB_RANGE: 7.0,       // furthest a shot reaches
+  WEB_RANGE: 6.5,       // furthest a shot reaches (the camera turns to look at the anchor while
+                        // you aim, so range is not limited by what happens to be in frame)
   WEB_MIN: 1.1,         // nearest anchor worth taking
   WEB_SPEED: 26,        // m/s the shot travels out
   WEB_COOLDOWN: 3.0,    // seconds after letting go before the next shot
@@ -72,7 +73,9 @@ export const CFG = Object.freeze({
   SWING_PUMP: 5.5,      // how hard the free stick drives the swing
   SWING_REEL: 1.5,      // m/s the line shortens while you pull yourself up it
   SWING_MIN_LEN: 0.7,   // never reel closer than this to the anchor
-  SWING_RELEASE_BOOST: 1.06,
+  WEB_YANK: 3.4,        // m/s kick along the line the instant it goes taut
+  WEB_YANK_REEL: 0.35,  // ...and this much of the line taken up with it
+  SWING_RELEASE_BOOST: 1.22,   // letting go throws you: a timed release is the point
 });
 
 const ZERO_STICK = Object.freeze({ x: 0, y: 0 });
@@ -244,10 +247,18 @@ function updateWeb(state, inp, dt) {
     if (d <= stepLen) {
       w.tipX = w.ax; w.tipY = w.ay;
       w.mode = 'attached';
-      w.len = Math.hypot(state.body.x - w.ax, state.body.y - w.ay);
+      const b = state.body;
+      w.len = Math.hypot(b.x - w.ax, b.y - w.ay);
       state.phase = 'swinging';
       releaseBoth(state);
-      push(state, { type: 'webhit' });
+      // The yank: a line going taut does not politely take over, it pulls. A kick along the
+      // line, and the constraint immediately shortens it a little so you are drawn upward.
+      const dx = (w.ax - b.x) / Math.max(1e-4, w.len);
+      const dy = (w.ay - b.y) / Math.max(1e-4, w.len);
+      b.vx += dx * CFG.WEB_YANK;
+      b.vy += dy * CFG.WEB_YANK;
+      w.len = Math.max(CFG.SWING_MIN_LEN, w.len - CFG.WEB_YANK_REEL);
+      push(state, { type: 'webhit', yank: CFG.WEB_YANK });
     } else {
       w.tipX += (dx / d) * stepLen;
       w.tipY += (dy / d) * stepLen;
@@ -262,20 +273,27 @@ function updateWeb(state, inp, dt) {
   return false;
 }
 
-function fire(state) {
+// Where the shot would land from here. Exported so the reticle can show it while you aim,
+// which is the whole difference between committing blind and committing on purpose.
+export function aimPoint(state) {
   const w = state.web;
   const sh = shoulder(state, 'R');
   let m = Math.hypot(w.aimX, w.aimY);
-  if (m < 1e-4) { w.aimX = 0; w.aimY = 1; m = 1; }
-  const dx = w.aimX / m, dy = w.aimY / m;
-  const reach = CFG.WEB_RANGE;
-  w.ax = sh.x + dx * reach;
-  w.ay = sh.y + dy * reach;
-  // The cliff is the only thing up there to hit, so a shot always lands; it just cannot land
-  // below the climber's feet or off the face.
-  const R = state.route;
-  w.ax = Math.max(-4.2, Math.min(4.2, w.ax));
-  w.ay = Math.max(CFG.FLOOR + 0.4, Math.min(R.top + 1.4, w.ay));
+  const ax0 = m < 1e-4 ? 0 : w.aimX / m;
+  const ay0 = m < 1e-4 ? 1 : w.aimY / m;
+  return {
+    x: Math.max(-4.2, Math.min(4.2, sh.x + ax0 * CFG.WEB_RANGE)),
+    y: Math.max(CFG.FLOOR + 0.4, Math.min(state.route.top + 1.4, sh.y + ay0 * CFG.WEB_RANGE)),
+    from: sh,
+  };
+}
+
+function fire(state) {
+  const w = state.web;
+  const sh = shoulder(state, 'R');
+  const p = aimPoint(state);
+  w.ax = p.x;
+  w.ay = p.y;
   if (Math.hypot(w.ax - sh.x, w.ay - sh.y) < CFG.WEB_MIN) { w.mode = 'idle'; w.cd = 0.35; push(state, { type: 'webmiss' }); return true; }
   w.tipX = sh.x; w.tipY = sh.y;
   w.mode = 'flying';

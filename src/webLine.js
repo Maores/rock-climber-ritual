@@ -87,7 +87,7 @@ export function createWebLine({ variant = 'rope', segments = 26 } = {}) {
    * Point the web from `from` to `to`. `grow` in 0..1 animates the shot flying out; below 1 the
    * fan and splat stay hidden, so the web only bites when it arrives.
    */
-  function set(from, to, { grow = 1 } = {}) {
+  function set(from, to, { grow = 1, whip = 0, taut = 0 } = {}) {
     A.copy(from); B.copy(to);
     dir.subVectors(B, A);
     const len = dir.length();
@@ -114,7 +114,12 @@ export function createWebLine({ variant = 'rope', segments = 26 } = {}) {
         const ang = phase + t * v.twist * Math.PI;
         const r = v.radius * 1.9 * pinch * (strands.length > 1 ? 1 : 0);
         // plus a slow irregular sway so it never reads as a machined cable
-        const w = v.wobble * pinch * (hash(s * 13 + i) - 0.5) * 2;
+        let w = v.wobble * pinch * (hash(s * 13 + i) - 0.5) * 2;
+        // WHIP: while the shot is travelling the line lashes behind the tip, biggest near the
+        // hand and dying at the tip, so it reads as thrown rather than extruded. Once taut it
+        // straightens and hums instead.
+        if (whip > 0) w += Math.sin(t * 9.0 - whip * 14.0) * 0.16 * whip * (1 - t) * (1 - t);
+        if (taut > 0) w *= 1 - 0.75 * taut;
         tmp.copy(A)
           .addScaledVector(dir, along)
           .addScaledVector(side, Math.cos(ang) * r + w)

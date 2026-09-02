@@ -8,10 +8,11 @@
 // through the public Input interface — never through the sim's internals).
 
 import * as THREE from 'three';
-import { CFG, createClimber, startClimb, step, drainEvents, shoulder, hangTarget } from './sim.js';
+import { CFG, createClimber, startClimb, step, drainEvents, shoulder, hangTarget, aimPoint } from './sim.js';
 import { generateRoute, intendedHand } from './route.js';
 import { createInput } from './input.js';
 import { createWebLine } from './webLine.js';
+import { createWebFx } from './webFx.js';
 import { spiderUnlocked } from './spiderHand.js';
 import { createWorld } from './world.js';
 import { createPost } from './post.js';
@@ -99,24 +100,40 @@ let arms = null;
 // --- the web-zip's line ------------------------------------------------------------------
 // One line, built once and pointed each frame. It only exists once the egg is unlocked.
 let webLine = null;
-function updateWebLine() {
+let webFx = null;
+let tautT = 0;                      // seconds since the line went taut, for the settle
+function updateWebLine(dt) {
   const w = state.web;
   if (!w || !w.unlocked || !world) return;
   if (!webLine) { webLine = createWebLine({ variant: 'rope' }); scene.add(webLine.group); }
+  if (!webFx) webFx = createWebFx({ scene });
+
   if (w.mode === 'flying' || w.mode === 'attached') {
     const hand = state.hands.R;
     const hz = world.wallZ(hand.x, hand.y) + 0.05;
     const az = world.wallZ(w.ax, w.ay) + 0.02;
-    const grow = w.mode === 'attached' ? 1
-      : Math.min(0.999, Math.hypot(w.tipX - hand.x, w.tipY - hand.y) / Math.max(1e-3, Math.hypot(w.ax - hand.x, w.ay - hand.y)));
+    const flying = w.mode === 'flying';
+    const grow = flying
+      ? Math.min(0.999, Math.hypot(w.tipX - hand.x, w.tipY - hand.y) / Math.max(1e-3, Math.hypot(w.ax - hand.x, w.ay - hand.y)))
+      : 1;
+    tautT = flying ? 0 : tautT + dt;
     webLine.set(
       new THREE.Vector3(hand.x, hand.y, hz),
       new THREE.Vector3(w.ax, w.ay, az),
-      { grow },
+      {
+        grow,
+        // the lash while it travels, dying as it arrives
+        whip: flying ? (1 - grow) * 0.9 + 0.1 : 0,
+        // and once it bites, it snaps straight over about a third of a second
+        taut: flying ? 0 : Math.min(1, tautT * 3),
+      },
     );
   } else {
     webLine.visible = false;
+    tautT = 0;
   }
+
+  webFx.update(dt, state, camera, world.wallZ, w.mode === 'aiming' ? aimPoint(state) : null);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -428,8 +445,9 @@ function frame(now) {
   renderer.info.reset();
   world.update(dt, state, camera);
   arms.update(dt, state, world.wallZ, camera);
-  updateWebLine();
-  rig.update(dt, state, world.wallZ, events, lookIn);
+  updateWebLine(dt);
+  rig.update(dt, state, world.wallZ, events, lookIn,
+    state.web && state.web.unlocked && state.web.mode === 'aiming' ? aimPoint(state) : null);
   hud.update(state, events);
   audio.handle(events, state, dt);
   post.setNight(state.night);

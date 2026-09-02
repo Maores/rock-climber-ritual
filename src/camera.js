@@ -96,6 +96,8 @@ export function createCameraRig(camera) {
   let doom = 0;                             // 0..1 how far into a doomed plunge we are
   let tumble = 0;                           // spin accumulated while plunging
   let impact = 0;                           // jolt envelope when the ground arrives
+  let yank = 0;                             // jolt envelope when the web goes taut
+  let aimPull = 0;                          // 0..1 how far the view has drawn back to aim
   let titleBias = 1;                        // look higher on the title screen
   let t = 0;
   let initialised = false;
@@ -146,7 +148,7 @@ export function createCameraRig(camera) {
     return out;
   }
 
-  function update(dt, state, wallZ, events, lookIn) {
+  function update(dt, state, wallZ, events, lookIn, aim) {
     if (!state || !state.body) return;
     dt = Math.min(Math.max(dt || 0, 0), 1 / 20);
     t += dt;
@@ -247,6 +249,18 @@ export function createCameraRig(camera) {
       summitT = -1;
     }
 
+    // Look where you are shooting. Without this the anchor sits outside the frustum and you are
+    // aiming blind: the eye is barely half a metre off a wall, so anything up the face is behind
+    // the top edge of the screen. This has to happen while lookX/lookY are still live, before
+    // they are committed below.
+    const wantAim = state.web && state.web.unlocked && state.web.mode === 'aiming' ? 1 : 0;
+    aimPull = approach(aimPull, wantAim, wantAim ? 4.5 : 3, dt);
+    if (aimPull > 0.001 && aim) {
+      const k = aimPull * 0.9;
+      lookX = THREE.MathUtils.lerp(lookX, aim.x, k);
+      lookY = THREE.MathUtils.lerp(lookY, aim.y, k);
+    }
+
     _look.set(lookX, lookY, wz(lookX, lookY));
     if (state.phase === 'summit') _look.z += 0.25;      // the altar stone stands proud of the shelf
     if (!initialised) look.copy(_look);
@@ -281,9 +295,10 @@ export function createCameraRig(camera) {
 
     // --- compose -------------------------------------------------------------------------
     camera.position.copy(eye);
+    camera.position.z += 0.55 * aimPull;      // step back off the wall to see the shot
     camera.position.y += breath * breathAmp + bounce.x;
     camera.position.x += sway * 0.006;
-    const totalShake = Math.max(shake, doom * 0.8, impact);
+    const totalShake = Math.max(shake, doom * 0.8, impact, yank * 0.55);
     if (totalShake > 0.001) {
       const s = totalShake * totalShake * 0.055;
       camera.position.x += s * noise(t, 2.0);
@@ -322,6 +337,12 @@ export function createCameraRig(camera) {
     }
 
     if (state.phase === 'fallen' && impact < 0.001 && doom > 0.2) impact = 1;
+    // the web biting: a short sharp jolt, distinct from the ground's
+    for (const e of (events || [])) if (e && e.type === 'webhit') { yank = 1; }
+    yank = approach(yank, 0, 5.5, dt);
+    // Aiming pulls the view back and opens the lens, so the reticle 7 m away is actually in
+    // frame. It also reads as winding up, which is what the hold is.
+
     impact = approach(impact, 0, 2.2, dt);
     const rollNow = roll.x + THREE.MathUtils.degToRad(2.5) * shake * noise(t, 11.0) + breath * 0.004
       + Math.sin(tumble * 0.9) * 0.5 * doom                       // the world turns over
@@ -329,7 +350,7 @@ export function createCameraRig(camera) {
     camera.up.set(Math.sin(rollNow), Math.cos(rollNow), 0);
     camera.lookAt(look);
 
-    let fov = fov0 + fovKick.x + 6 * fallBlend + LOOK.vertigoFov * vertigo + 22 * doom - 10 * impact;
+    let fov = fov0 + fovKick.x + 6 * fallBlend + LOOK.vertigoFov * vertigo + 22 * doom - 10 * impact - 7 * yank + 14 * aimPull;
     if (summitT >= 0) fov -= 8 * (1 - Math.exp(-summitT / SUMMIT_TAU));
     fov = THREE.MathUtils.clamp(fov, 40, 110);
     if (Math.abs(fov - lastFov) > 1e-3) {

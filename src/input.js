@@ -253,6 +253,35 @@ export function createInput({ hud = null, keyboard = true, win, now = defaultNow
     on(b, 'lostpointercapture', endPad);
   }
 
+  // The web pad: the same one-thumb drag as LOOK. Holding it IS the held right grip the sim
+  // waits on, and the drag is the aim, so releasing fires. Without this the only way to aim on
+  // a phone would be to hold the GRIP pill and aim with the same thumb, which is the mistake
+  // the LOOK button already made once.
+  const webVec = { x: 0, y: 1 };
+  let webActive = false, webId = null, webCx = 0, webCy = 0;
+  if (hud && hud.webButton) {
+    const b = hud.webButton;
+    on(b, 'pointerdown', (e) => {
+      prevent(e);
+      const r = b.getBoundingClientRect();
+      webCx = r.left + r.width / 2; webCy = r.top + r.height / 2;
+      webActive = true; webId = e.pointerId;
+      webVec.x = 0; webVec.y = 1;
+      b.classList.add('on');
+      if (b.setPointerCapture) { try { b.setPointerCapture(e.pointerId); } catch (err) {} }
+    });
+    on(b, 'pointermove', (e) => {
+      if (!webActive || e.pointerId !== webId) return;
+      const dx = (e.clientX - webCx) / PAD_RADIUS;
+      const dy = -(e.clientY - webCy) / PAD_RADIUS;
+      if (Math.hypot(dx, dy) > 0.12) { webVec.x = dx; webVec.y = dy; clampDisc(webVec); }
+    });
+    const endWeb = () => { webActive = false; webId = null; b.classList.remove('on'); };
+    on(b, 'pointerup', endWeb);
+    on(b, 'pointercancel', endWeb);
+    on(b, 'lostpointercapture', endWeb);
+  }
+
   function read() {
     const t = now();
     const dt = Math.min(0.1, Math.max(0, (t - lastT) / 1000));
@@ -269,7 +298,10 @@ export function createInput({ hud = null, keyboard = true, win, now = defaultNow
       look.x = src.x; look.y = src.y;
     } else { look.x = 0; look.y = 0; }
     out.look = look;
-    out.holdL = holds.L; out.holdR = holds.R;
+    // while the web pad is held, it IS the right grip, and its drag is the aim
+    out.holdL = holds.L;
+    out.holdR = holds.R || webActive;
+    if (webActive) { out.R.x = webVec.x; out.R.y = webVec.y; }
     for (const side of ['L', 'R']) {
       if (lookHeld) { out[side].x = 0; out[side].y = 0; if (hud && typeof hud.setStick === 'function') hud.setStick(side, 0, 0); continue; }
       // touch stick wins, then the cursor for the hand it is driving, then the keyboard

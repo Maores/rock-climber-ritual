@@ -217,6 +217,56 @@ button:focus-visible { outline: 2px solid var(--rune); outline-offset: 2px; }
 }
 #look[hidden] { display: none; }
 
+/* The web pad: same one-thumb drag as LOOK, sitting beside it. Only once unlocked. */
+#web {
+  position: fixed;
+  left: 50%;
+  transform: translateX(calc(-50% + 82px));
+  bottom: calc(18px + var(--sab));
+  z-index: 40;
+  padding: 9px 18px;
+  border-radius: 999px;
+  border: 1px solid rgba(127, 224, 255, 0.45);
+  background: rgba(20, 14, 11, 0.52);
+  color: var(--rune, #7fe0ff);
+  font: 600 11px/1 'Inter', system-ui, sans-serif;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  cursor: pointer;
+  touch-action: none;
+  -webkit-user-select: none; user-select: none;
+  -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
+  -webkit-appearance: none; appearance: none;
+  transition: color .18s, background .18s, opacity .25s;
+  opacity: .5;
+}
+#web.can { opacity: 1; }
+#web.on { color: #06222b; background: var(--rune, #7fe0ff); }
+#web.cool { opacity: .35; }
+#web[hidden] { display: none; }
+/* LOOK shifts left so the two pads sit either side of centre */
+#look { transform: translateX(calc(-50% - 82px)); }
+
+/* The web-zip, on the right grip pill. Without these the ability is invisible. */
+.grip.web-ready { box-shadow: 0 0 0 1px rgba(127, 224, 255, 0.55), 0 0 16px rgba(127, 224, 255, 0.22); }
+.grip.web-aim {
+  color: #06222b;
+  background: var(--rune);
+  border-color: var(--rune);
+  animation: webAim 0.7s ease-in-out infinite;
+}
+@keyframes webAim { 0%, 100% { box-shadow: 0 0 0 0 rgba(127,224,255,.55); } 50% { box-shadow: 0 0 0 7px rgba(127,224,255,0); } }
+.grip.web-out { color: #06222b; background: #cfeeff; border-color: #cfeeff; }
+/* the cooldown drains left to right across the pill */
+.grip.web-cool { position: relative; overflow: hidden; color: var(--muted); }
+.grip.web-cool::before {
+  content: ''; position: absolute; inset: 0; transform-origin: left center;
+  transform: scaleX(var(--cd, 0));
+  background: rgba(127, 224, 255, 0.16);
+  transition: transform 0.12s linear;
+  pointer-events: none;
+}
+
 /* The ground. A red bloom over the whole screen that fades to a dark hold. */
 @keyframes deadFlash {
   0%   { opacity: 0; }
@@ -901,6 +951,7 @@ kbd {
     <button class="close" type="button" id="customClose">Climb</button>
   </div>
 </div>
+<button id="web" type="button" aria-label="Aim the web" title="Hold and drag to aim, release to fire" hidden>Web</button>
 <button id="look" type="button" aria-label="Look around" title="Hold to look around (Shift)">Look</button>
 <button id="mute" type="button" aria-label="Toggle sound" title="Sound (M)">
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">

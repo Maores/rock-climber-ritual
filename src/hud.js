@@ -389,6 +389,7 @@ export function createHud(root) {
   function update(state, events) {
     if (!state) return;
     updateLookBtn(state);
+    updateWeb(state);
     if (state.phase !== 'title' && !cache.hudOn && !endShown) showHud();
 
     const hands = state.hands || {};
@@ -706,7 +707,9 @@ export function createHud(root) {
 
   // LOOK: input.js binds hold-to-look to this button; it only lights up when a hand is free.
   const lookBtn = doc.getElementById('look');
+  const webBtn = doc.getElementById('web');
   let canLookNow = null;
+  let webBtnState = '';
   function updateLookBtn(state) {
     if (!lookBtn) return;
     const L = state.hands && state.hands.L, R = state.hands && state.hands.R;
@@ -749,10 +752,47 @@ export function createHud(root) {
   });
   refreshCustomBtn();
 
+  // ---- the web-zip's state, on the right-hand pill --------------------------------------
+  // Without this the ability is invisible: no cooldown, no aim state, no sign it exists.
+  let webCache = '';
+  function updateWeb(state) {
+    const w = state.web;
+    const el = grips.R;
+    if (!el || !w) return;
+    let mark = '';
+    if (w.unlocked) {
+      if (w.mode === 'aiming') mark = 'aim';
+      else if (w.mode === 'flying' || w.mode === 'attached') mark = 'web';
+      else if (w.cd > 0) mark = 'cool';
+      else if (!state.hands.R.gripping) mark = 'ready';
+    }
+    const cd = w.unlocked && w.cd > 0 ? Math.min(1, w.cd / 3) : 0;
+    const key = mark + '|' + Math.round(cd * 20);
+    if (key === webCache) return;
+    webCache = key;
+    el.classList.toggle('web-aim', mark === 'aim');
+    el.classList.toggle('web-out', mark === 'web');
+    el.classList.toggle('web-cool', mark === 'cool');
+    el.classList.toggle('web-ready', mark === 'ready');
+    el.style.setProperty('--cd', cd.toFixed(3));
+
+    // the touch pad only exists once unlocked, and dims while the shot is cooling
+    if (webBtn) {
+      const st = !w.unlocked ? 'off' : mark === 'cool' ? 'cool' : (mark === 'ready' || mark === 'aim' || mark === 'web') ? 'can' : 'idle';
+      if (st !== webBtnState) {
+        webBtnState = st;
+        webBtn.hidden = st === 'off';
+        webBtn.classList.toggle('can', st === 'can');
+        webBtn.classList.toggle('cool', st === 'cool');
+      }
+    }
+  }
+
   const hud = {
     sticks,
     grips,
     lookButton: lookBtn,
+    webButton: webBtn,
     openCustom, closeCustom, refreshCustomBtn,
     onSkinChange(cb) { if (typeof cb === 'function') skinCbs.push(cb); },
     root: hudEl,

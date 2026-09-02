@@ -1,6 +1,6 @@
 {
   "name": "rock-climber-ritual",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Rock Climber: The Ritual — a first-person two-stick climbing game in the browser",
   "main": "index.js",
   "directories": {
