@@ -702,10 +702,11 @@ export function createAudio() {
     const playing = () => { tr.wanted = true; liftBus(); };
     if (p && p.then) p.then(playing, () => armRetry()); else playing();
   }
-  // the bus opens (or re-opens) over 1.6 s once anything is playing
+  // the bus opens (or re-opens) over 1.6 s once anything is playing. A play() promise can land after
+  // dispose(), so the context is checked here rather than trusted.
   function liftBus() {
     duckSent = -1;
-    if (musicGain) musicGain.gain.setTargetAtTime(MUSIC_GAIN * (1 - DUCK_DEPTH * duck), now(), 1.6);
+    if (ctx && musicGain) musicGain.gain.setTargetAtTime(MUSIC_GAIN * (1 - DUCK_DEPTH * duck), now(), 1.6);
   }
   function anyWanted() { return tracks.day.wanted || tracks.night.wanted; }
   function trackPlaying(tr) {

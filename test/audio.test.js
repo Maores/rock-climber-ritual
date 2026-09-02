@@ -341,7 +341,8 @@ test('audio: a night track that stops after the fade, with no error, hands the t
   run(audio, st, 1);
   assert.equal(audio.debug().xfade, 1, 'held under the mute');
   audio.setMuted(false);
-  audio.dispose();
+  audio.dispose();               // before the resumed play() promises land: liftBus must cope with no context
+  await flush();
 });
 
 test('audio: setMusic after dispose is a no-op, not a throw (B61 fix pass)', async () => {
